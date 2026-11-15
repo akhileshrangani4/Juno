@@ -10,12 +10,12 @@ import { useVoiceAgent } from '@/agent/useVoiceAgent';
 import { haptic } from '@/feedback/haptics';
 import { useFeed } from '@/feed/useFeed';
 import type { CircleDirection } from '@/gestures/circle';
-import { GestureSurface } from '@/gestures/GestureSurface';
 import { createRateLimiter } from '@/gestures/rateLimit';
 import { messages } from '@/narration/buildNarration';
 import { useNarrationPreferences, usePostNarrator } from '@/narration/postNarration';
 import { applyNarrationAction, isNarrationAction, narrationActions } from '@/narration/requests';
 import { useNarrator } from '@/narration/useNarrator';
+import { DiscoverySurface as GestureSurface } from '@/onboarding/DiscoverySurface';
 import { useSession } from '@/session/SessionContext';
 import { colors, type } from '@/theme';
 
@@ -167,6 +167,7 @@ export function MainScreen() {
     <SafeAreaView style={styles.screen}>
       <GestureSurface
         style={styles.surface}
+        discoveryMode={mode}
         tapsEnabled
         onTapTop={onTapTop}
         onTapBottom={onTapBottom}
