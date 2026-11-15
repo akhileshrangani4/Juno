@@ -1,0 +1,60 @@
+import { useRef, type ReactNode } from 'react';
+import { View, type ViewProps } from 'react-native';
+import { GestureDetector, useCompetingGestures, usePanGesture, useTapGesture } from 'react-native-gesture-handler';
+
+import { recognizeCircle, type CircleDirection, type Point } from './circle';
+
+type Props = ViewProps & {
+  tapsEnabled: boolean;
+  onTapTop(): void;
+  onTapBottom(): void;
+  onCircle(direction: CircleDirection): void;
+  children: ReactNode;
+};
+
+export function GestureSurface({ tapsEnabled, onTapTop, onTapBottom, onCircle, children, ...viewProps }: Props) {
+  const stroke = useRef<Point[]>([]);
+  const height = useRef(0);
+
+  const pan = usePanGesture({
+    runOnJS: true,
+    disableReanimated: true,
+    minDistance: 12,
+    maxPointers: 1,
+    onBegin: (event) => {
+      stroke.current = [{ x: event.x, y: event.y }];
+    },
+    onUpdate: (event) => {
+      stroke.current.push({ x: event.x, y: event.y });
+    },
+    onDeactivate: (event) => {
+      const direction = event.canceled ? null : recognizeCircle(stroke.current);
+      if (direction) onCircle(direction);
+    },
+  });
+
+  const tap = useTapGesture({
+    runOnJS: true,
+    disableReanimated: true,
+    enabled: tapsEnabled,
+    maxDistance: 12,
+    maxDuration: 800,
+    onActivate: (event) => {
+      if (event.y < height.current / 2) onTapTop();
+      else onTapBottom();
+    },
+  });
+
+  return (
+    <GestureDetector gesture={useCompetingGestures(pan, tap)}>
+      <View
+        {...viewProps}
+        collapsable={false}
+        onLayout={(event) => {
+          height.current = event.nativeEvent.layout.height;
+        }}>
+        {children}
+      </View>
+    </GestureDetector>
+  );
+}
