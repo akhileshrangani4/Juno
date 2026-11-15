@@ -38,6 +38,11 @@ export function likeFailure(whose: string, wasLiked: boolean, reason: LikeFailur
   return `${wasLiked ? `Couldn't remove your like on ${whose}.` : `Couldn't like ${whose}.`} ${reason === 'offline' ? "Bluesky can't be reached. Check your connection." : 'Nothing changed.'}`;
 }
 
+// Bluesky never answered a like or unlike, so whether it happened is unknown until the post loads again.
+export function likeGaveUp(whose: string, wasLiked: boolean): string {
+  return `Bluesky never answered, so I can't tell whether ${wasLiked ? `your like on ${whose} was removed` : `${whose} was liked`}. It will show correctly the next time the post loads.`;
+}
+
 // Bluesky hasn't answered a like or unlike yet. It may still land, and then it counts like any other.
 export function likeUnconfirmed(whose: string, wasLiked: boolean): string {
   return `Bluesky hasn't answered, so ${wasLiked ? `removing your like on ${whose}` : `the like on ${whose}`} isn't confirmed yet.`;

@@ -70,7 +70,7 @@ const definitions: { name: string; description: string; parameters: Schema }[] =
     description: 'Publish a draft the app read back, only when the reply right after the read-back was a plain yes. The app waits five seconds so they can say undo.',
     parameters: { type: 'object', properties: { draftId: { type: 'string', description: 'The draft id from the draft result.' } }, required: ['draftId'] },
   },
-  { name: 'undo', description: 'Undo the last action: stop a post still in its five seconds, or remove the last like, repost, post or reply.', parameters: none },
+  { name: 'undo', description: "Undo the user's most recent action: stop a post still in its five seconds or remove one being sent, throw away a draft, or reverse a like, unlike or repost. It never deletes a post or reply that already went out: for those the app reads back what would be deleted and asks for a yes, so never say anything was deleted unless the result says so.", parameters: none },
   {
     name: 'change_narration',
     description: 'Change how the app reads posts, now and while scrolling. Pass only what changes.',

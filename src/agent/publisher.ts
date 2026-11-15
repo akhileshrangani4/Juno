@@ -148,7 +148,7 @@ export function readBackOf(draft: Draft, now = new Date()): string {
     case 'repost':
       return `Reposting ${postName(target)} to your followers. ${question}`;
     case 'delete':
-      return `Deleting your post from ${target ? formatAge(target.createdAt, now) : 'earlier'}: ${asSentence(target?.text || 'a post with no text')} A deleted post can't be brought back. ${question}`;
+      return `Deleting your ${target?.replyTo?.authorName && !target.replyTo.isSelf ? `reply to ${target.replyTo.authorName}` : 'post'} from ${target ? formatAge(target.createdAt, now) : 'earlier'}: ${asSentence(target?.text || 'a post with no text')} A deleted post can't be brought back. ${question}`;
   }
 }
 

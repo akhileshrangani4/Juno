@@ -2,13 +2,14 @@ import { useSyncExternalStore } from 'react';
 
 import type { ActionHistory, UndoEntry } from '@/actions/history';
 import { authorName } from '@/narration/buildNarration';
-import { likeFailure } from '@/narration/comments';
+import { likeFailure, likeGaveUp } from '@/narration/comments';
 import { OfflineError, type Post, type SocialProvider } from '@/social/types';
 
 type Likes = Pick<SocialProvider, 'like' | 'unlike'>;
 
 const known = new Map<string, string | null>();
 const sending = new Set<string>();
+const timers = new Set<ReturnType<typeof setTimeout>>();
 const listeners = new Set<() => void>();
 let version = 0;
 let viewer = 0;
@@ -32,6 +33,8 @@ export function likeUriOf(post: Pick<Post, 'uri' | 'likeUri'>): string | null {
 export function forgetLikes(): void {
   known.clear();
   sending.clear();
+  timers.forEach(clearTimeout);
+  timers.clear();
   viewer += 1;
   changed();
 }
@@ -54,6 +57,21 @@ export function whose(post: Post): string {
 // How long a like or unlike waits for Bluesky before the user is told it isn't confirmed. Only what the user hears
 // changes: the request, its undo entry and the post's in-flight guard all stay until Bluesky really answers.
 export const LIKE_TIMEOUT_MS = 10_000;
+// A request still unanswered after this long is given up on: the post can be liked again, the user hears that it
+// couldn't be confirmed, and the post shows whatever Bluesky says the next time it loads.
+export const LIKE_GIVE_UP_MS = 60_000;
+
+const after = (ms: number, run: () => void) => {
+  const timer = setTimeout(() => {
+    timers.delete(timer);
+    run();
+  }, ms);
+  timers.add(timer);
+  return () => {
+    clearTimeout(timer);
+    timers.delete(timer);
+  };
+};
 
 export type LikeFailure = 'offline' | 'other';
 
@@ -85,6 +103,10 @@ type Send<T> = {
   pending: string;
   // What the user hears if that deferred reversal fails.
   reverseFailed: (error: unknown) => string;
+  // Said if undo stops something older and leaves this action in place.
+  remains: string;
+  // What the user hears when Bluesky never answers.
+  gaveUp: string;
 };
 
 // Sends one like or unlike. Its undo entry goes on the history before the request and the post is guarded until the
@@ -96,9 +118,11 @@ async function send<T>(post: Post, history: ActionHistory, label: string, steps:
   sending.add(post.uri);
   const session = viewer;
   let undoAsked = false;
+  let abandoned = false;
   let state: Settled<T> | null = null;
   const entry: UndoEntry = {
     label,
+    remains: steps.remains,
     undo: async () => {
       undoAsked = true;
       if (state?.ok) return steps.reverse(state.value);
@@ -106,23 +130,41 @@ async function send<T>(post: Post, history: ActionHistory, label: string, steps:
     },
   };
   history.push(entry);
+  const release = () => {
+    if (session === viewer) sending.delete(post.uri);
+  };
+  const giveUp = after(LIKE_GIVE_UP_MS, () => {
+    abandoned = true;
+    release();
+    history.remove(entry);
+    known.delete(post.uri);
+    changed();
+    history.tell(steps.gaveUp);
+  });
   const settled = steps.call().then(
     (value): Settled<T> => ({ ok: true, value, changed: session === viewer && steps.settle(value) }),
     (error: unknown): Settled<T> => ({ ok: false, error }),
   );
-  void settled.then((result) => {
+  void settled.then(async (result) => {
+    giveUp();
     state = result;
-    if (session === viewer) sending.delete(post.uri);
-    if (!result.ok || !result.changed) return history.remove(entry);
-    if (!undoAsked) return;
-    steps.reverse(result.value).catch((error: unknown) => {
-      history.push(entry);
-      history.tell(steps.reverseFailed(error));
-    });
+    if (!result.ok || !result.changed) {
+      history.remove(entry);
+      return release();
+    }
+    if (undoAsked) {
+      try {
+        await steps.reverse(result.value);
+      } catch (error) {
+        if (!abandoned) history.push(entry);
+        history.tell(steps.reverseFailed(error));
+      }
+    }
+    if (!abandoned) release();
   });
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  const first = await Promise.race([settled, new Promise<'timeout'>((resolve) => (timer = setTimeout(() => resolve('timeout'), LIKE_TIMEOUT_MS)))]);
-  clearTimeout(timer);
+  let stopWaiting = () => undefined as void;
+  const first = await Promise.race([settled, new Promise<'timeout'>((resolve) => (stopWaiting = after(LIKE_TIMEOUT_MS, () => resolve('timeout'))))]);
+  stopWaiting();
   if (undoAsked) return 'undone';
   if (first === 'timeout') return 'unconfirmed';
   if (!first.ok) throw first.error;
@@ -146,6 +188,8 @@ export async function likePost(provider: Likes, post: Post, history: ActionHisto
     },
     pending: `UNDO_PENDING: Bluesky hasn't answered the like on ${whose(post)} yet. The app removes the like as soon as Bluesky answers.`,
     reverseFailed: (error) => likeFailure(whose(post), true, failure(error)),
+    remains: `Your like on ${whose(post)} is still there; say undo again to remove it.`,
+    gaveUp: likeGaveUp(whose(post), false),
   });
   return sent === 'done' ? 'liked' : sent;
 }
@@ -168,6 +212,8 @@ export async function unlikePost(provider: Likes, post: Post, history: ActionHis
     },
     pending: `UNDO_PENDING: Bluesky hasn't answered yet about removing the like on ${whose(post)}. The app puts the like back as soon as Bluesky answers.`,
     reverseFailed: (error) => likeFailure(whose(post), false, failure(error)),
+    remains: `Your like on ${whose(post)} is still removed; say undo again to put it back.`,
+    gaveUp: likeGaveUp(whose(post), true),
   });
   if (sent !== 'done') return sent;
   return removed ? 'unliked' : 'notLiked';

@@ -157,7 +157,7 @@ describe('agent tools', () => {
     await scheduler.advance(UNDO_WINDOW_MS);
     expect(provider.repost).toHaveBeenCalledWith(maya);
     expect(notify).toHaveBeenCalledWith(expect.stringMatching(/SENT\. Reposted Maya's post/));
-    expect((await handlers.run('undo', {})).result).toMatch(/^UNDONE: Removed the repost/);
+    expect((await handlers.run('undo', {})).result).toMatch(/^UNDONE: Removed your repost of Maya's post/);
     expect(provider.unrepost).toHaveBeenCalledWith(maya, { uri: 'at://me/repost/1' });
   });
 
@@ -429,12 +429,43 @@ describe('agent tools', () => {
       expect(ctx.handlers.publisher.currentDraft).not.toBeNull();
     }
 
+    it('undoes a like made during the countdown before the reply it followed, whether the like landed or is still pending', async () => {
+      for (const pending of [false, true]) {
+        forgetLikes();
+        const ctx = setup({ history: new ActionHistory() });
+        ctx.say("reply, that's beautiful, where was this?");
+        const draft = await ctx.handlers.run('draft_reply', { text: "That's beautiful, where was this?" });
+        ctx.say('Yes.');
+        await ctx.handlers.run('publish_draft', { draftId: draftIdOf(draft.result) });
+        ctx.handlers.publisher.startCountdown();
+        let land = () => undefined as void;
+        if (pending) ctx.provider.like.mockImplementationOnce(() => new Promise((resolve) => (land = () => resolve({ uri: 'at://me/like/1' }))));
+        const liking = toggleLike(ctx.provider, nextPost, ctx.history);
+        await ctx.scheduler.advance(UNDO_WINDOW_MS);
+        await flush();
+        expect(ctx.provider.reply).toHaveBeenCalledTimes(1);
+        ctx.say('undo');
+        const undone = await ctx.handlers.run('undo', {});
+        expect(undone.result).toMatch(pending ? /^UNDO_PENDING/ : /^UNDONE: Removed your like on Alice Chen's post/);
+        land();
+        await liking;
+        await flush();
+        expect(ctx.provider.unlike).toHaveBeenCalledTimes(1);
+        expect(ctx.provider.deletePost).not.toHaveBeenCalled();
+        ctx.say('undo');
+        expect((await ctx.handlers.run('undo', {})).result).toMatch(/^UNDO_NEEDS_A_YES/);
+        expect(ctx.provider.deletePost).not.toHaveBeenCalled();
+      }
+    });
+
     it('undoes a like made after a draft was read back, and keeps the draft', async () => {
       const ctx = setup();
       recordLike(maya.uri, null);
       await draftThenRead(ctx);
       expect(await toggleLike(ctx.provider, maya, ctx.history)).toEqual({ outcome: 'liked' });
-      expect((await ctx.handlers.run('undo', {})).result).toBe("UNDONE: Removed your like on Maya's post. Confirm in a few words.");
+      expect((await ctx.handlers.run('undo', {})).result).toBe(
+        "UNDONE: Removed your like on Maya's post. Confirm in a few words. Also tell them their reply to Maya is still waiting: they can say post it, or cancel.",
+      );
       expect(ctx.handlers.publisher.currentDraft).not.toBeNull();
     });
 
@@ -492,7 +523,7 @@ describe('agent tools', () => {
     expect(provider.createPost).not.toHaveBeenCalled();
   });
 
-  it('undoes a sent post by deleting it, and a heard undo is not repeated by the model', async () => {
+  it('reads back a sent post before deleting it on undo, and a heard undo is not repeated by the model', async () => {
     const { handlers, say, provider, scheduler } = setup();
     say('post hello from my new app');
     const draft = await handlers.run('draft_post', { text: 'Hello from my new app.' });
@@ -501,8 +532,16 @@ describe('agent tools', () => {
     handlers.publisher.startCountdown();
     await scheduler.advance(UNDO_WINDOW_MS);
     expect(provider.createPost).toHaveBeenCalledWith({ text: 'Hello from my new app.' });
-    expect((await handlers.run('undo', {})).result).toMatch(/^UNDONE: Deleted the post/);
-    expect(provider.deletePost).toHaveBeenCalledWith({ uri: 'at://me/post/1', cid: 'cid-1' });
+    say('undo');
+    const offer = await handlers.run('undo', {});
+    expect(offer).toMatchObject({ respond: false, speak: expect.stringMatching(/^Deleting your post from .*Hello from my new app\. A deleted post can't be brought back\. Shall I delete it\?$/) });
+    expect(offer.result).toMatch(/^UNDO_NEEDS_A_YES: Nothing was deleted\./);
+    expect(provider.deletePost).not.toHaveBeenCalled();
+    say('yes, delete it');
+    await handlers.run('publish_draft', { draftId: draftIdOf(offer.result) });
+    handlers.publisher.startCountdown();
+    await scheduler.advance(UNDO_WINDOW_MS);
+    expect(provider.deletePost).toHaveBeenCalledWith(expect.objectContaining({ uri: 'at://me/post/1', cid: 'cid-1' }));
 
     say('post second try');
     const again = await handlers.run('draft_post', { text: 'Second try.' });
@@ -534,7 +573,7 @@ describe('agent tools', () => {
     expect(provider.createPost).not.toHaveBeenCalled();
   });
 
-  it('removes the confirmed post when undo comes while it is being sent, and leaves the earlier like alone', async () => {
+  it('removes the confirmed post when undo comes while it is being sent, and leaves the earlier like for the next undo', async () => {
     let finishSend: () => void = () => undefined;
     const provider = makeProvider({
       createPost: jest.fn(() => new Promise((resolve) => (finishSend = () => resolve({ uri: 'at://me/post/1', cid: 'cid-1' })))),
@@ -555,11 +594,12 @@ describe('agent tools', () => {
     await scheduler.advance(0);
     expect(provider.deletePost).toHaveBeenCalledWith({ uri: 'at://me/post/1', cid: 'cid-1' });
     expect(notify).toHaveBeenLastCalledWith(expect.stringMatching(/^Result of undo: It had gone out, so I deleted it\./), 'It had gone out, so I deleted it.');
-    expect((await handlers.run('undo', {})).result).toMatch(/^NOTHING_TO_UNDO: The last action was already stopped or removed/);
     expect(provider.unlike).not.toHaveBeenCalled();
+    say('undo');
+    expect((await handlers.run('undo', {})).result).toMatch(/^UNDONE: Removed your like on Maya's post/);
   });
 
-  it('undoes the post, not the earlier like, when the send returns before the undo', async () => {
+  it('reads back the sent post, not the earlier like, when the send returns before the undo, and deletes nothing yet', async () => {
     const { handlers, say, provider, scheduler } = setup();
     say('like this');
     await handlers.run('like_post', {});
@@ -570,12 +610,15 @@ describe('agent tools', () => {
     handlers.publisher.startCountdown();
     await scheduler.advance(UNDO_WINDOW_MS);
     say('undo');
-    expect((await handlers.run('undo', {})).result).toMatch(/^UNDONE: Deleted the post/);
-    expect(provider.deletePost).toHaveBeenCalledWith({ uri: 'at://me/post/1', cid: 'cid-1' });
+    expect((await handlers.run('undo', {})).result).toMatch(/^UNDO_NEEDS_A_YES/);
+    expect(provider.deletePost).not.toHaveBeenCalled();
     expect(provider.unlike).not.toHaveBeenCalled();
+    say('no');
+    expect((await handlers.run('discard_draft', {})).result).toMatch(/^DISCARDED/);
+    expect(provider.deletePost).not.toHaveBeenCalled();
   });
 
-  it('stops a thread before it goes out when undo comes before the first part is sent, and never undoes an earlier action after a failed send', async () => {
+  it('after a failed send, undo moves on to the action before it', async () => {
     const failing = makeProvider({ createPost: jest.fn(async () => Promise.reject(new Error('offline'))) });
     const { handlers, say, scheduler, notify } = setup({ provider: failing });
     say('like this');
@@ -588,8 +631,8 @@ describe('agent tools', () => {
     await scheduler.advance(UNDO_WINDOW_MS);
     expect(notify).toHaveBeenLastCalledWith(expect.stringMatching(/^Result of publish_draft: FAILED/));
     say('undo');
-    expect((await handlers.run('undo', {})).result).toMatch(/^NOTHING_TO_UNDO: The last post didn't go out/);
-    expect(failing.unlike).not.toHaveBeenCalled();
+    expect((await handlers.run('undo', {})).result).toMatch(/^UNDONE: Removed your like on Maya's post/);
+    expect(failing.deletePost).not.toHaveBeenCalled();
   });
 
   it('confirms only with a verb that fits the draft, and reads it back again otherwise', async () => {
@@ -681,8 +724,9 @@ describe('agent tools', () => {
     await scheduler.advance(0);
     expect(provider.deletePost).toHaveBeenCalledTimes(2);
     expect(notify).toHaveBeenLastCalledWith(expect.stringMatching(/^Result of undo: REMOVE_FAILED\. It is public\./), "It went out, and I couldn't remove it. Say delete my last post to remove it.");
-    provider.deletePost.mockResolvedValueOnce(undefined);
-    expect((await handlers.run('undo', {})).result).toMatch(/^UNDONE: Deleted the post/);
+    say('undo');
+    expect((await handlers.run('undo', {})).result).toMatch(/^UNDO_NEEDS_A_YES/);
+    expect(provider.deletePost).toHaveBeenCalledTimes(2);
   });
 
   it('catches drafts over 300 characters and publishes a split thread only after a new read-back', async () => {
