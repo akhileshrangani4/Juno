@@ -70,6 +70,11 @@ The voice agent follows the same rule. `read_post` and `go_to_post` answer at on
 - Prompt caching is explicit and limited to the shared instructions, so per-post images are never billed at the cache-write rate.
 - Video: the model sees the thumbnail (usually the opening frame), alt text and, when the record has captions, the start of the WebVTT captions fetched from the author's PDS. Descriptions start with "Opens on" and never claim the video was watched.
 
+## Known limits
+
+- Descriptions are keyed by post URI, not by the post's content (its CID). Bluesky's app never edits a post, but any client can rewrite a record in place at the same URI. A post rewritten that way keeps the description of its earlier images until `PROMPT_VERSION` is bumped or the row is deleted. We accept that staleness: in-place rewrites are rare, and keying by CID would mean trusting a CID sent by the client or fetching the post on every cache hit.
+- Using up the deployment's hourly spend or fetch allowance turns new descriptions off for every listener until the hour ends (see above). Cached descriptions are still served.
+
 ## Earcons
 
 A short, quiet sound plays before a post's narration: `image` one high bell note (160 ms), `video` two rising notes (220 ms), `repost` two low blips (185 ms), `reply` one falling glide (220 ms). One per post, most informative first: video, image, reply, repost. Speech starts as the sound ends. The sounds are synthesized by `scripts/generate-earcons.py` and committed in `assets/sounds`. The audio session is set to play in silent mode and mix with other audio.
