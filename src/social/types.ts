@@ -46,6 +46,12 @@ export type SignInResult =
   | { status: 'cancelled' }
   | { status: 'failed'; reason: 'network' | 'server' };
 
+export type RestoreResult =
+  | { status: 'restored'; account: SocialAccount }
+  | { status: 'none' }
+  | { status: 'invalid'; account: SocialAccount | null }
+  | { status: 'unreachable' };
+
 export type UploadedImage = { alt: string; handle: unknown };
 
 export type NewPost = { text: string; images?: UploadedImage[] };
@@ -58,7 +64,7 @@ export interface SocialProvider {
   readonly id: string;
   readonly name: string;
   hasStoredSession(): Promise<boolean>;
-  restoreSession(): Promise<SocialAccount | null>;
+  restoreSession(): Promise<RestoreResult>;
   findAccount(handle: string): Promise<boolean>;
   signIn(handle: string): Promise<SignInResult>;
   createAccount(): Promise<SignInResult>;

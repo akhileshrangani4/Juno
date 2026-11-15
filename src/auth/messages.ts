@@ -7,6 +7,9 @@ const act = (screenReader: boolean) => (screenReader ? 'Double tap' : 'Tap');
 export const authMessages = {
   choices: 'Welcome to Juno. You can sign in with your Bluesky handle, create a new Bluesky account, or listen to a public feed without signing in.',
   expired: 'Your Bluesky sign-in has ended. Sign in again to pick up where you left off.',
+  unreachable:
+    "Bluesky couldn't be reached, so your timeline can't load yet. You're still signed in. Check your connection, then choose Retry, or listen to a public feed without signing in.",
+  retrying: 'Trying Bluesky again.',
   signedOut: 'Signed out. Your Bluesky sign-in was removed from this device.',
   signOutFailed: 'Sign out did not finish. Try again.',
   handlePrompt: (screenReader: boolean) => `Type or dictate your Bluesky handle, then ${act(screenReader).toLowerCase()} Continue.`,

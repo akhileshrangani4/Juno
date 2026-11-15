@@ -1,5 +1,6 @@
 import { fireEvent, render, screen } from '@testing-library/react-native';
 
+import { authMessages } from '@/auth/messages';
 import type { SocialAccount } from '@/social/types';
 
 import SignInScreen from '../sign-in';
@@ -70,6 +71,14 @@ describe('every sign-in and sign-up control has a label, a role and a hint', () 
     const appPassword = controls();
     expect(appPassword.length).toBeGreaterThan(1);
     expectLabeled(appPassword.map((control) => control.label));
+  });
+
+  it('explains an ended session and keeps the handle', async () => {
+    mockSession.expiredAccount = { id: 'did:plc:me', handle: 'maya.bsky.social' };
+    await render(<SignInScreen />);
+    expect(screen.getByText(new RegExp(authMessages.expired))).toBeTruthy();
+    await fireEvent.press(screen.getByRole('button', { name: 'Sign in' }));
+    expect(screen.getByDisplayValue('maya.bsky.social')).toBeTruthy();
   });
 
   it('on the account and sign-out confirmation screens', async () => {

@@ -88,10 +88,19 @@ Every screen has one status line at the top that says what is happening. With Vo
 | App password | Explains what an app password is and where to make one. Refuses anything that is not in the app-password format, so a main password typed by mistake is never sent. | Handle, App password, Sign in, Back |
 | Account (from the agent screen) | "Signed in as Maya." | Back to the feed, Sign out |
 | Sign out? | "Sign out of Bluesky on this device? You'll need to sign in again to read your timeline." | Sign out, Cancel |
+| Can't reach Bluesky (at launch) | "Bluesky couldn't be reached, so your timeline can't load yet. You're still signed in. Check your connection, then choose Retry, or listen to a public feed without signing in." Retry says "Trying Bluesky again." | Retry, Listen without signing in |
 
 The handle field accepts typing and keyboard dictation. Entries are trimmed, lower-cased, a leading @ is dropped, a spoken "dot" between words becomes a period, dictated "Maya. Bsky. Social." becomes maya.bsky.social, and a name with no domain becomes name.bsky.social. Read-back spells dots as "dot" and hyphens as "dash". The wording is unit tested (`src/auth`).
 
 If the session can no longer be refreshed (the user revoked it, or it expired after Bluesky's session lifetime), the feed stays where it was and the first screen opens on top of it, says the sign-in has ended, and keeps the handle for the next sign in. Signing in again as the same account returns to the same post. A refresh that fails only because the network is down signs nobody out.
+
+At launch with a stored session, restoring has three outcomes, for both OAuth and app-password sessions (`RestoreResult` in `src/social/types.ts`):
+
+- **Restored:** the feed opens.
+- **Invalid:** Bluesky refused the token or the refresh. The stored session is removed, and the first screen says the sign-in has ended, with the handle kept.
+- **Unreachable:** a network error or timeout. The stored session is left untouched, and the "Can't reach Bluesky" screen above appears. Listen without signing in plays the public feed for this launch only, so the next launch tries the timeline again.
+
+The loading screen changes to "Still connecting to Bluesky" after 4 seconds. Waiting is capped at 20 seconds, after which the "Can't reach Bluesky" screen appears and is announced. Unit tests cover all three outcomes for both session kinds (`src/social/bluesky/__tests__`), and the cap and the screens (`src/session/__tests__/slowRestore.test.tsx`).
 
 Sign out is reachable from the agent screen's Account settings, asks for confirmation, revokes the session at Bluesky when it can, and always deletes the tokens, the DPoP key and the stored account from the keychain. The voice agent can call `useSession().signOut()` after its own spoken confirmation.
 

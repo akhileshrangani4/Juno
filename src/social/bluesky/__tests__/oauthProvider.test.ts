@@ -142,28 +142,39 @@ describe('BlueskyProvider with OAuth', () => {
     expect(client.authorize).toHaveBeenCalledWith('https://bsky.social', { prompt: 'create', display: 'touch' });
   });
 
-  it('restores after a relaunch without the network, then resumes the session on first use', async () => {
+  it('restores after a relaunch by resuming the session once', async () => {
     const first = setup();
     await first.provider.signIn('maya.bsky.social');
     const relaunch = setup(first.store);
-    expect(await relaunch.provider.restoreSession()).toEqual({ id: DID, handle: 'maya.bsky.social', displayName: 'Maya' });
-    expect(relaunch.client.restore).not.toHaveBeenCalled();
+    expect(await relaunch.provider.hasStoredSession()).toBe(true);
+    expect(await relaunch.provider.restoreSession()).toEqual({ status: 'restored', account: { id: DID, handle: 'maya.bsky.social', displayName: 'Maya' } });
     await relaunch.provider.getTimeline();
     await relaunch.provider.getTimeline();
     expect(relaunch.client.restore).toHaveBeenCalledTimes(1);
     expect(relaunch.client.restore).toHaveBeenCalledWith(DID);
   });
 
-  it('retries the session on the next call when resuming failed for a passing reason', async () => {
+  it('reports an unreachable server without touching the stored session, and restores on retry', async () => {
     const first = setup();
     await first.provider.signIn('maya.bsky.social');
     const relaunch = setup(first.store);
-    expect(await relaunch.provider.hasStoredSession()).toBe(true);
-    await relaunch.provider.restoreSession();
-    relaunch.client.restore.mockRejectedValueOnce(new Error('offline'));
-    await expect(relaunch.provider.getTimeline()).rejects.toThrow();
-    expect((await relaunch.provider.getTimeline()).posts).toHaveLength(2);
-    expect(relaunch.store.keys()).toContain('bluesky.oauth.account');
+    relaunch.client.restore.mockRejectedValueOnce(new Error('Failed to fetch server metadata', { cause: new NetworkError('down') }));
+    expect(await relaunch.provider.restoreSession()).toEqual({ status: 'unreachable' });
+    expect(relaunch.store.keys()).toEqual(['bluesky.oauth.account']);
+    expect(await relaunch.provider.restoreSession()).toMatchObject({ status: 'restored', account: { id: DID } });
+  });
+
+  it('reports a session the server refused as invalid, names the account and forgets it', async () => {
+    const first = setup();
+    await first.provider.signIn('maya.bsky.social');
+    await first.store.set('bluesky.oauth.session', '{"sub":"did","dpopJwk":{},"tokenSet":{}}');
+    const relaunch = setup(first.store);
+    const expired = jest.fn();
+    relaunch.provider.onSessionExpired(expired);
+    relaunch.client.restore.mockRejectedValueOnce(new TokenRefreshError(DID, 'The session was revoked'));
+    expect(await relaunch.provider.restoreSession()).toEqual({ status: 'invalid', account: { id: DID, handle: 'maya.bsky.social', displayName: 'Maya' } });
+    expect(relaunch.store.keys()).toEqual([]);
+    expect(expired).not.toHaveBeenCalled();
   });
 
   it('announces an unrecoverable session once, forgets it, and stops serving the timeline', async () => {
@@ -173,7 +184,7 @@ describe('BlueskyProvider with OAuth', () => {
     await relaunch.provider.restoreSession();
     const expired = jest.fn();
     relaunch.provider.onSessionExpired(expired);
-    relaunch.client.restore.mockImplementationOnce(async () => {
+    relaunch.session.fetchHandler.mockImplementationOnce(async () => {
       relaunch.deleteSession(DID);
       throw new TokenRefreshError(DID, 'The session was revoked');
     });
@@ -208,6 +219,6 @@ describe('BlueskyProvider with OAuth', () => {
     await provider.signOut();
     expect(client.revoke).toHaveBeenCalledWith(DID);
     expect(store.keys()).toEqual([]);
-    expect(await provider.restoreSession()).toBeNull();
+    expect(await provider.restoreSession()).toEqual({ status: 'none' });
   });
 });

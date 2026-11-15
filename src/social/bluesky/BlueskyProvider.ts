@@ -1,9 +1,9 @@
 import { Agent, AtpAgent, RichText, type AtpSessionData, type BlobRef } from '@atproto/api';
-import { OAuthCallbackError, type OAuthSession } from '@atproto/oauth-client';
+import { OAuthCallbackError, isExpectedSessionError, type OAuthSession } from '@atproto/oauth-client';
 
 import type { KeyValueStore } from '@/storage/keyValueStore';
 
-import type { NewPost, Post, PostRef, RecordRef, ReplyParent, SignInResult, SocialAccount, SocialProvider, TimelinePage, UploadedImage } from '../types';
+import type { NewPost, Post, PostRef, RecordRef, ReplyParent, RestoreResult, SignInResult, SocialAccount, SocialProvider, TimelinePage, UploadedImage } from '../types';
 import { mapFeedItem } from './mapPost';
 import { withMentionNames } from './mentionNames';
 import { isHiddenByModeration } from './moderation';
@@ -47,6 +47,7 @@ export class BlueskyProvider implements SocialProvider {
   private signed: Signed | null = null;
   private expired = false;
   private authorizing = false;
+  private lastPersistEvent: string | null = null;
 
   constructor({ store, service, demoFeed, oauthOrigin, oauth }: Options) {
     this.store = store;
@@ -55,7 +56,8 @@ export class BlueskyProvider implements SocialProvider {
     this.createOAuth = oauth ?? createBlueskyOAuth(oauthOrigin || DEFAULT_OAUTH_ORIGIN);
     this.atpAgent = new AtpAgent({
       service: this.service,
-      persistSession: (_event, session) => {
+      persistSession: (event, session) => {
+        this.lastPersistEvent = event;
         void (session ? store.set(SESSION_KEY, JSON.stringify(session)) : store.remove(SESSION_KEY));
       },
     });
@@ -66,17 +68,31 @@ export class BlueskyProvider implements SocialProvider {
     return oauthAccount !== null || saved !== null;
   }
 
-  async restoreSession(): Promise<SocialAccount | null> {
+  async restoreSession(): Promise<RestoreResult> {
     const oauthAccount = await this.store.get(OAUTH_ACCOUNT_KEY);
-    if (oauthAccount) return this.useOAuth(JSON.parse(oauthAccount) as SocialAccount);
-    const saved = await this.store.get(SESSION_KEY);
-    if (!saved) return null;
-    try {
-      await this.atpAgent.resumeSession(JSON.parse(saved) as AtpSessionData);
-    } catch {
-      return null;
+    if (oauthAccount) {
+      const account = JSON.parse(oauthAccount) as SocialAccount;
+      try {
+        const session = await this.oauth().client.restore(account.id);
+        return { status: 'restored', account: this.useOAuth(account, session) };
+      } catch (error) {
+        if (!isExpectedSessionError(error)) return { status: 'unreachable' };
+        await this.forgetOAuth();
+        return { status: 'invalid', account };
+      }
     }
-    return this.usePassword();
+    const saved = await this.store.get(SESSION_KEY);
+    if (!saved) return { status: 'none' };
+    const session = JSON.parse(saved) as AtpSessionData;
+    this.lastPersistEvent = null;
+    try {
+      await this.atpAgent.resumeSession(session);
+    } catch {
+      if (this.lastPersistEvent !== 'expired') return { status: 'unreachable' };
+      return { status: 'invalid', account: { id: session.did, handle: session.handle } };
+    }
+    const account = this.usePassword();
+    return account ? { status: 'restored', account } : { status: 'invalid', account: { id: session.did, handle: session.handle } };
   }
 
   async findAccount(handle: string): Promise<boolean> {
