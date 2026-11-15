@@ -308,7 +308,10 @@ function keyOf(text: string | null, did: string): SigningKey | null {
 }
 
 // The cached key first. A fetch only when the DID wasn't fetched in the last ten minutes, after the caller's
-// and the deployment's fetch windows, and its outcome is cached either way (REFETCH_AFTER_MS).
+// and the deployment's fetch windows, and its outcome is cached either way (REFETCH_AFTER_MS). A fetch that fails
+// or finds no key never discards a key verified before: anyone can force a refetch with a badly signed proof, so
+// while the directory is failing that would lock the owner out. The old key stays in use until a fetch returns
+// another one.
 async function proofVerified(proof: ParsedProof, did: string, deps: AuthDeps): Promise<boolean> {
   const cached = await deps.cachedKey(did);
   const age = cached ? deps.now() - cached.fetchedAt : Infinity;
@@ -317,7 +320,7 @@ async function proofVerified(proof: ParsedProof, did: string, deps: AuthDeps): P
   const source = didSource(did);
   if (!source) return false;
   if (!(await deps.take(didFetchChecks(deps.addressHash)))) throw memoryError('tooMany');
-  const key = keyOf(await deps.fetchDocument(source).catch(() => null), did);
+  const key = keyOf(await deps.fetchDocument(source).catch(() => null), did) ?? cached?.key ?? null;
   await deps.storeKey(did, key);
   return key !== null && signatureValid(proof, key);
 }
