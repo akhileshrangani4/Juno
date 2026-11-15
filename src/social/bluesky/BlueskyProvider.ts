@@ -1,15 +1,16 @@
-import { Agent, AtpAgent, RichText, type AtpSessionData, type BlobRef } from '@atproto/api';
+import { Agent, AtpAgent, RichText, XRPCError, type AtpSessionData, type BlobRef } from '@atproto/api';
 import { OAuthCallbackError, isExpectedSessionError, type OAuthSession } from '@atproto/oauth-client';
 
 import type { KeyValueStore } from '@/storage/keyValueStore';
 
-import { PermissionMissingError, type NewPost, type Post, type PostRef, type RecordRef, type ReplyParent, type RestoreResult, type SignInResult, type SocialAccount, type SocialProvider, type TimelinePage, type UploadedImage } from '../types';
+import { OfflineError, PermissionMissingError, type NewPost, type Post, type PostRef, type RecordRef, type ReplyParent, type Reply, type RestoreResult, type SignInResult, type SocialAccount, type SocialProvider, type TimelinePage, type UploadedImage } from '../types';
 import { mapFeedItem } from './mapPost';
 import { withMentionNames } from './mentionNames';
 import { isHiddenByModeration } from './moderation';
 import { NetworkError } from './oauth/createOAuthClient';
 import { createBlueskyOAuth, type BlueskyOAuth, type BlueskyOAuthFactory } from './oauth';
 import { OAUTH_SESSION_KEY } from './oauth/stores';
+import { flattenReplies } from './replies';
 
 const SESSION_KEY = 'bluesky.session';
 const OAUTH_ACCOUNT_KEY = 'bluesky.oauth.account';
@@ -18,6 +19,8 @@ const PUBLIC_APPVIEW = 'https://public.api.bsky.app';
 export const DEFAULT_OAUTH_ORIGIN = 'https://dependable-goshawk-583.convex.site';
 const MAX_FILTERED_PAGES = 10;
 const REVOKE_TIMEOUT_MS = 5000;
+const REPLY_DEPTH = 10;
+const NO_RESPONSE = 1;
 const DEFAULT_DEMO_FEED = 'at://did:plc:z72i7hdynmk6r22z27h6tvur/app.bsky.feed.generator/whats-hot';
 
 type Options = { store: KeyValueStore; service?: string; demoFeed?: string; oauthOrigin?: string; oauth?: BlueskyOAuthFactory };
@@ -31,6 +34,21 @@ function isNetworkError(error: unknown): boolean {
     if (current instanceof NetworkError) return true;
   }
   return false;
+}
+
+// A request that never got an HTTP answer: OAuth sessions fail with NetworkError, app-password sessions with an
+// XRPCError whose status is ResponseType.Unknown.
+function isUnreachable(error: unknown): boolean {
+  return isNetworkError(error) || (error instanceof XRPCError && error.status === NO_RESPONSE);
+}
+
+async function reach<T>(call: () => Promise<T>): Promise<T> {
+  try {
+    return await call();
+  } catch (error) {
+    if (isUnreachable(error)) throw new OfflineError("Bluesky couldn't be reached. Check the connection and try again", { cause: error });
+    throw error;
+  }
 }
 
 export class BlueskyProvider implements SocialProvider {
@@ -172,15 +190,17 @@ export class BlueskyProvider implements SocialProvider {
   }
 
   async like(post: PostRef): Promise<RecordRef> {
-    const { uri } = await this.agent().like(post.uri, post.cid);
+    const { uri } = await reach(() => this.agent().like(post.uri, post.cid));
     return { uri };
   }
 
   async unlike(post: PostRef, like?: RecordRef): Promise<boolean> {
-    const uri = like?.uri ?? (await this.viewerOf(post))?.like;
-    if (!uri) return false;
-    await this.agent().deleteLike(uri);
-    return true;
+    return reach(async () => {
+      const uri = like?.uri ?? (await this.viewerOf(post))?.like;
+      if (!uri) return false;
+      await this.agent().deleteLike(uri);
+      return true;
+    });
   }
 
   async unrepost(post: PostRef, repost?: RecordRef): Promise<boolean> {
@@ -215,6 +235,14 @@ export class BlueskyProvider implements SocialProvider {
       }
       throw error;
     }
+  }
+
+  async getReplies(postUri: string): Promise<Reply[]> {
+    const params = { uri: postUri, depth: REPLY_DEPTH, parentHeight: 0 };
+    if (this.expired) throw new SessionExpiredError('The Bluesky session has ended');
+    const agent = this.signed?.agent;
+    const { data } = await reach(() => (agent ? agent.getPostThread(params) : this.publicAgent.app.bsky.feed.getPostThread(params)));
+    return flattenReplies(data.thread, agent?.did);
   }
 
   async uploadImage(image: { uri: string; mimeType: string }, alt: string): Promise<UploadedImage> {

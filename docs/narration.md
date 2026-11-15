@@ -24,7 +24,9 @@ A listener cannot check a paraphrase against the original, so no model ever rewr
 | A repost | "Reposted by Bob." first |
 | Line breaks | a pause (a full stop, or a comma when the next line continues the sentence); no words change |
 
-Order: who and what first, then media and quoted posts, then tags, then links.
+Order: who and what first, then media and quoted posts, then tags, then links. In `full` and `brief`, a post with replies ends with the count: "12 replies." or "1 reply.".
+
+In the comments view each reply goes through the same `buildPostScript` with a `reply` position, so it opens with "Reply 2 of 12, from Maya." (plus ", replying to Sam" for a nested reply) instead of the author line, and gets the same rules, modes, descriptions, and earcons as a post. `src/narration/comments.ts` builds the entry line ("12 replies. Swipe down to go back.") and the per-reply scripts; `replyScripts` in `requests.ts` is what the voice agent reads for "read the comments".
 
 ## Modes
 
@@ -92,4 +94,4 @@ The voice agent follows the same rule. `read_post` and `go_to_post` answer at on
 
 ## Earcons
 
-A short, quiet sound plays before a post's narration: `image` one high bell note (160 ms), `video` two rising notes (220 ms), `repost` two low blips (185 ms), `reply` one falling glide (220 ms). One per post, most informative first: video, image, reply, repost. Speech starts as the sound ends. The sounds are synthesized by `scripts/generate-earcons.py` and committed in `assets/sounds`. The audio session is set to play in silent mode and mix with other audio.
+A short, quiet sound plays before a post's narration: `image` one high bell note (160 ms), `video` two rising notes (220 ms), `repost` two low blips (185 ms), `reply` one falling glide (220 ms). One per post, most informative first: video, image, reply, repost. Speech starts as the sound ends. A two-finger hold to like plays `like`, three quick rising notes (170 ms), or `unlike`, the same notes falling, at once and over any narration, whatever the post sounds setting, because it confirms the user's own action. The sounds are synthesized by `scripts/generate-earcons.py` and committed in `assets/sounds`. The audio session is set to play in silent mode and mix with other audio.

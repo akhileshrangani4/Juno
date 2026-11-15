@@ -11,6 +11,7 @@ export function makePost(overrides: Partial<Post> = {}): Post {
     repostedBy: null,
     replyRoot: null,
     counts: { likes: 0, reposts: 0, replies: 0 },
+    likeUri: null,
     ...overrides,
   };
 }

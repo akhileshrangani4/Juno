@@ -1,23 +1,33 @@
-import { surfaceActions } from '../surfaceActions';
+import { surfaceActions, type SurfaceView } from '../surfaceActions';
 
-const labels = (mode: 'scroll' | 'agent', platform: string) => surfaceActions(mode, platform).map((action) => action.label);
+const labels = (view: SurfaceView, liked = false, platform = 'ios') => surfaceActions(view, platform, liked).map((action) => action.label);
 
 describe('surfaceActions', () => {
   it('gives the VoiceOver rotor only human labels, each once', () => {
-    for (const mode of ['scroll', 'agent'] as const) {
-      const actions = surfaceActions(mode, 'ios');
-      expect(actions.every((action) => action.label)).toBe(true);
-      expect(new Set(labels(mode, 'ios')).size).toBe(actions.length);
-      expect(actions.map((action) => action.name)).not.toEqual(expect.arrayContaining(['increment', 'decrement', 'magicTap', 'escape', 'activate']));
+    for (const view of ['feed', 'comments', 'agent'] as const) {
+      for (const liked of [false, true]) {
+        const actions = surfaceActions(view, 'ios', liked);
+        expect(actions.every((action) => action.label)).toBe(true);
+        expect(new Set(labels(view, liked)).size).toBe(actions.length);
+        expect(actions.map((action) => action.name)).not.toEqual(expect.arrayContaining(['increment', 'decrement', 'magicTap', 'escape', 'activate']));
+      }
     }
   });
 
-  it('lists the scroll actions and the agent actions', () => {
-    expect(labels('scroll', 'ios')).toEqual(['Next post', 'Previous post', 'Read this post again', 'Read exactly', 'Wake the agent']);
-    expect(labels('agent', 'ios')).toEqual(['Back to scrolling', 'Hear the instructions', 'Account settings']);
+  it('lists the feed, comments and agent actions', () => {
+    expect(labels('feed')).toEqual(['Next post', 'Previous post', 'Like', 'Open comments', 'Read this post again', 'Read exactly', 'Wake the agent']);
+    expect(labels('comments')).toEqual(['Next reply', 'Previous reply', 'Like', 'Back to posts', 'Read this reply again']);
+    expect(labels('agent')).toEqual(['Back to scrolling', 'Like', 'Hear the instructions', 'Account settings']);
+  });
+
+  it('names the like action after the like state', () => {
+    expect(labels('feed', true)).toContain('Remove like');
+    expect(labels('feed', true)).not.toContain('Like');
+    expect(labels('comments', true)).toContain('Remove like');
   });
 
   it('adds the standard adjustable actions on Android only', () => {
-    expect(surfaceActions('scroll', 'android').map((action) => action.name)).toEqual(expect.arrayContaining(['increment', 'decrement']));
+    expect(surfaceActions('feed', 'android', false).map((action) => action.name)).toEqual(expect.arrayContaining(['increment', 'decrement']));
+    expect(surfaceActions('comments', 'android', false).map((action) => action.name)).toEqual(expect.arrayContaining(['increment', 'decrement']));
   });
 });

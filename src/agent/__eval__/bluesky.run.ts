@@ -1,9 +1,11 @@
 import { writeFileSync } from 'node:fs';
 
+import { ActionHistory } from '@/actions/history';
 import { ConversationLog } from '@/agent/AgentSession';
 import { settingsStore } from '@/agent/settings';
 import { PreferencesStore } from '@/narration/preferences';
 import { createToolHandlers, type ToolOutcome } from '@/agent/toolHandlers';
+import { buildReplyScript } from '@/narration/comments';
 import { BlueskyProvider } from '@/social/bluesky/BlueskyProvider';
 import type { Post } from '@/social/types';
 import { createMemoryStore } from '@/storage/keyValueStore';
@@ -36,6 +38,12 @@ async function main() {
     move: () => ({ outcome: 'atEnd', post: null }),
     description: async () => null,
     cachedDescription: () => null,
+    loadedReplies: () => null,
+    replies: async (post) => {
+      const replies = await provider.getReplies(post.uri);
+      return replies.map((reply, index) => buildReplyScript(reply, index, replies.length));
+    },
+    history: new ActionHistory(),
     mayNeedTranslation: () => false,
     translationState: () => null,
     settings: settingsStore(new PreferencesStore(createMemoryStore())),
