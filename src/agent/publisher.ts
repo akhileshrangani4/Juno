@@ -1,6 +1,6 @@
 import { countGraphemes } from 'unicode-segmenter/grapheme';
 
-import { analyzeText, authorName, formatAge } from '@/narration/buildNarration';
+import { analyzeText, authorName, formatAge, tagList } from '@/narration/buildNarration';
 import type { Post } from '@/social/types';
 
 // Publishing by voice, enforced here rather than in the prompt:
@@ -114,11 +114,15 @@ export function splitIntoParts(text: string, limit = POST_LIMIT): string[] {
   return pack(units, limit, ' ');
 }
 
+// What follows "Sam's post" in a read-back: its first words, its tags when it has only tags, or nothing.
 export function snippetOf(post: Post, words = 12): string {
-  const spoken = analyzeText(post).body.split(/\s+/).filter(Boolean);
-  if (!spoken.length) return post.media.length ? 'their post with no text' : 'their post';
-  return `that starts "${spoken.slice(0, words).join(' ')}${spoken.length > words ? '…' : ''}"`;
+  const { body, allTags } = analyzeText(post);
+  const spoken = body.split(/\s+/).filter(Boolean);
+  if (spoken.length) return `that starts "${spoken.slice(0, words).join(' ')}${spoken.length > words ? '…' : ''}"`;
+  return allTags.length ? `tagged ${tagList(allTags)}` : '';
 }
+
+const postName = (target: Post | null) => (target ? [`${authorName(target)}'s post`, snippetOf(target)].filter(Boolean).join(' ') : 'this post');
 
 const VERBS: Record<DraftKind, { doing: string; question: string }> = {
   post: { doing: 'Posting', question: 'Shall I post it?' },
@@ -140,9 +144,9 @@ export function readBackOf(draft: Draft, now = new Date()): string {
     case 'post':
       return `Posting to your followers: ${body} ${question}`;
     case 'reply':
-      return `Replying to ${target ? authorName(target) : 'the post'}'s post ${target ? snippetOf(target) : ''}: ${body} ${question}`;
+      return `Replying to ${postName(target)}: ${body} ${question}`;
     case 'repost':
-      return `Reposting ${target ? authorName(target) : 'this'}'s post ${target ? snippetOf(target) : ''} to your followers. ${question}`;
+      return `Reposting ${postName(target)} to your followers. ${question}`;
     case 'delete':
       return `Deleting your post from ${target ? formatAge(target.createdAt, now) : 'earlier'}: ${asSentence(target?.text || 'a post with no text')} A deleted post can't be brought back. ${question}`;
   }

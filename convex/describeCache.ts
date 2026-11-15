@@ -15,6 +15,29 @@ export type Usage = { inputTokens: number; cachedTokens: number; cacheWriteToken
 // listener until the hour ends, which is the price of a hard bound; the per-device limit stops one honest
 // client from getting there. A brisk listener needs about 180 described posts an hour (6 posts a minute,
 // half with media), at about $0.0005 each, so $2 covers roughly 4,000 described posts an hour.
+// Fetches from Bluesky are limited before they happen, separately from model spend, because a caller can
+// send endless well-formed URIs with invented record keys and each one would otherwise cost a getPosts call
+// and an action. A cache hit, a post being described right now, and a URI that recently failed to resolve
+// never reach these counters. Numbers per clock hour:
+// - per device (hashed id): 600. A brisk listener moves through about 360 posts an hour, and each post is
+//   fetched at most once per detail level.
+// - per caller address (the request's IP from Convex, never from the client, stored only as a hash): 1,200,
+//   so inventing device ids from one place doesn't get around the device limit, while a few phones behind
+//   one network still fit.
+// - for the whole deployment: 6,000, about 100 a minute, far below what Bluesky's public AppView allows one
+//   address (3,000 requests per 5 minutes), so the deployment can't get itself rate-limited by Bluesky.
+// Known limit, as with spend: whoever uses up the deployment's fetches turns new descriptions off for
+// everyone until the hour ends; cached descriptions are still served.
+export const FETCH_LIMITS = { perDevice: 600, perAddress: 1200, deployment: 6000 };
+
+export function fetchChecks(deviceHash: string, addressHash: string | null): { key: string; limit: number }[] {
+  return [
+    { key: 'fetch:deployment', limit: FETCH_LIMITS.deployment },
+    ...(addressHash ? [{ key: `fetch:address:${addressHash}`, limit: FETCH_LIMITS.perAddress }] : []),
+    { key: `fetch:device:${deviceHash}`, limit: FETCH_LIMITS.perDevice },
+  ];
+}
+
 export const LIMITS = {
   windowMs: 60 * 60 * 1000,
   perDevice: 240,
@@ -22,6 +45,9 @@ export const LIMITS = {
   reserveUsd: 0.01,
   pruneBatch: 20,
   pendingStaleMs: 45 * 1000,
+  // A claim whose action never reports back (killed by Convex, say) gives its reservation back after this.
+  expireMs: 90 * 1000,
+  pruneAfterMs: 60 * 60 * 1000,
   failureRetryMs: 10 * 60 * 1000,
   sharedWaitMs: 30 * 1000,
   sharedPollMs: 400,
@@ -51,10 +77,16 @@ export const withinLimits = (device: UsageWindow | null, global: UsageWindow | n
 
 // The raw device id never reaches the database: only this digest keys the hourly counter, and counter rows
 // are deleted once their hour has passed.
-export async function hashDevice(deviceId: string): Promise<string> {
-  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(`describe-device:${deviceId}`));
-  return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, '0')).join('');
+async function digest(label: string, value: string): Promise<string> {
+  const bytes = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(`${label}:${value}`));
+  return Array.from(new Uint8Array(bytes), (byte) => byte.toString(16).padStart(2, '0')).join('');
 }
+
+export const hashDevice = (deviceId: string) => digest('describe-device', deviceId);
+export const hashAddress = (ip: string) => digest('describe-address', ip);
+
+// The counter value once a reservation is given back, or swapped for what the call really cost.
+export const settleReservation = (counterUsd: number, reservedUsd: number, actualUsd: number | null) => Math.max(0, counterUsd - reservedUsd + (actualUsd ?? 0));
 
 export function needsModel(post: PostInput): boolean {
   return post.images.length > 0 || post.video !== null || post.hashtags.length > TOPIC_THRESHOLD;

@@ -1,11 +1,12 @@
-import { messages, type DetailLevel } from '@/narration/buildNarration';
+import { messages, type DescriptionParts, type DetailLevel } from '@/narration/buildNarration';
 import type { Post } from '@/social/types';
 import { makeMemory, makeProvider, maya, nextPost, setup } from '@/testing/agent';
 import { makePost } from '@/testing/fixtures';
 
+import { agentMessages } from '../agentMessages';
 import { UNDO_WINDOW_MS } from '../publisher';
 import { toolNames } from '../tools';
-import { usesOwnWords } from '../toolHandlers';
+import { PICTURE_WAIT_MS, TOOL_CEILING_MS, usesOwnWords } from '../toolHandlers';
 
 const draftIdOf = (result: string) => result.match(/draftId="([^"]+)"/)?.[1] ?? '';
 
@@ -396,6 +397,13 @@ describe('agent tools', () => {
     expect(settings.get()).toEqual({ rate: 3, mode: 'brief', skipHashtags: true, pictureDetail: 'long' });
   });
 
+  it('says which step a speed between steps was set to', async () => {
+    const { handlers, settings } = setup();
+    expect((await handlers.run('change_narration', { speed: 1.3 })).result).toMatch(/^SETTINGS_CHANGED: Now speed 1.25 times normal.* Speeds go in steps of 0.25, so 1.3 was set to 1.25, the nearest step/);
+    expect(settings.get().rate).toBe(1.25);
+    expect((await handlers.run('change_narration', { speed: 2 })).result).not.toMatch(/steps|limited/);
+  });
+
   it('repeats the gesture help word for word', async () => {
     const { handlers } = setup();
     expect(await handlers.run('gesture_help', {})).toMatchObject({ speak: messages.gestures, respond: false });
@@ -431,6 +439,122 @@ describe('agent tools', () => {
     expect((await handlers.run('like_post', {})).result).toMatch(/^FAILED: Network down\. Nothing changed/);
   });
 });
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((done) => (resolve = done));
+  return { promise, resolve };
+}
+
+const hang = () => new Promise<never>(() => undefined);
+const collar = { images: [{ description: 'A golden puppy on a red blanket.', beyondAlt: 'Biscuit wears a blue collar.' }], video: null, hashtagTopic: null };
+
+describe('agent reads without waiting on the network', () => {
+  it('reads at once without a description it does not have, and says it if it lands while the post is in focus', async () => {
+    const { handlers, deps, notify } = setup();
+    const description = deferred<DescriptionParts | null>();
+    deps.description = jest.fn(() => description.promise);
+    const read = await handlers.run('read_post', { mode: 'full' });
+    expect(read.speak).toBe('Maya, 2 hours ago. Meet our new puppy Biscuit! One image: A golden puppy asleep on a red blanket. Its paws twitch. Tagged puppy and dogsofbluesky.');
+    expect(notify).not.toHaveBeenCalled();
+    description.resolve(collar);
+    await flush();
+    expect(notify).toHaveBeenCalledWith(expect.stringMatching(/^DESCRIBED: /), 'About the image: Biscuit wears a blue collar.');
+  });
+
+  it('only caches a description that lands after focus moved on', async () => {
+    const { handlers, deps, notify } = setup();
+    const description = deferred<DescriptionParts | null>();
+    deps.description = jest.fn(() => description.promise);
+    await handlers.run('read_post', { mode: 'full' });
+    await handlers.run('go_to_post', { direction: 'next' });
+    description.resolve(collar);
+    await flush();
+    expect(notify).not.toHaveBeenCalled();
+  });
+
+  it('reads a cached description without asking again', async () => {
+    const { handlers, deps } = setup();
+    deps.description = jest.fn(hang);
+    deps.cachedDescription = () => collar;
+    expect((await handlers.run('read_post', { mode: 'full' })).speak).toContain('Biscuit wears a blue collar.');
+    expect(deps.description).not.toHaveBeenCalled();
+  });
+
+  it('waits a little for an asked-for picture description', async () => {
+    const { handlers, deps, scheduler } = setup();
+    const description = deferred<DescriptionParts | null>();
+    deps.description = jest.fn(() => description.promise);
+    const read = handlers.run('read_post', { mode: 'picture' });
+    await scheduler.advance(PICTURE_WAIT_MS - 500);
+    description.resolve(collar);
+    expect((await read).speak).toBe('Maya. One image: A golden puppy asleep on a red blanket. Its paws twitch. Biscuit wears a blue collar.');
+  });
+
+  it('says a slow picture description is on its way, then says it, or that there is nothing more', async () => {
+    const { handlers, deps, scheduler, notify } = setup();
+    const description = deferred<DescriptionParts | null>();
+    deps.description = jest.fn(() => description.promise);
+    const read = handlers.run('read_post', { mode: 'picture' });
+    await scheduler.advance(PICTURE_WAIT_MS);
+    expect((await read).speak).toBe(`Maya. One image: A golden puppy asleep on a red blanket. Its paws twitch. ${agentMessages.descriptionOnItsWay}`);
+    description.resolve(collar);
+    await flush();
+    expect(notify).toHaveBeenCalledWith(expect.stringMatching(/^DESCRIBED: /), 'About the image: Biscuit wears a blue collar.');
+
+    const never = deferred<DescriptionParts | null>();
+    deps.description = jest.fn(() => never.promise);
+    notify.mockClear();
+    const again = handlers.run('read_post', { mode: 'picture' });
+    await scheduler.advance(PICTURE_WAIT_MS);
+    await again;
+    never.resolve(null);
+    await flush();
+    expect(notify).toHaveBeenCalledWith(expect.stringMatching(/^DESCRIPTION_UNAVAILABLE: /));
+  });
+
+  it(`answers every tool within ${TOOL_CEILING_MS} ms even when the network never answers`, async () => {
+    const args: Record<string, Record<string, unknown>> = {
+      read_post: { mode: 'picture' },
+      go_to_post: { direction: 'next' },
+      draft_post: { text: 'hello there' },
+      draft_reply: { text: 'hello there' },
+      edit_draft: { find: 'hello', replace: 'hello' },
+      change_narration: { speed: 1.5 },
+      remember: { fact: 'I like tea' },
+      forget_memory: { ids: ['fact_1'] },
+    };
+    for (const name of toolNames) {
+      const provider = makeProvider(Object.fromEntries(['like', 'unlike', 'repost', 'unrepost', 'createPost', 'reply', 'deletePost', 'getMyLatestPost'].map((method) => [method, jest.fn(hang)])));
+      const memory = makeMemory();
+      for (const method of ['list', 'remember', 'forget'] as const) memory[method].mockImplementation(hang);
+      const { handlers, deps, scheduler, say } = setup({ provider, memory });
+      deps.description = jest.fn(hang);
+      say('hello there');
+      let answered = false;
+      void handlers.run(name, args[name] ?? {}).then(() => (answered = true));
+      await scheduler.advance(TOOL_CEILING_MS);
+      if (!answered) throw new Error(`${name} did not answer within ${TOOL_CEILING_MS} ms`);
+    }
+  });
+
+  it('tells the model a slow call is still working, holds history tools until it lands, then reports it', async () => {
+    const like = deferred<{ uri: string }>();
+    const provider = makeProvider({ like: jest.fn(() => like.promise) });
+    const { handlers, scheduler, notify } = setup({ provider });
+    const liking = handlers.run('like_post', {});
+    await scheduler.advance(TOOL_CEILING_MS);
+    expect((await liking).result).toMatch(/^STILL_WORKING: like_post/);
+    expect((await handlers.run('undo', {})).result).toMatch(/^BUSY: The app is still finishing like_post/);
+    expect((await handlers.run('read_post', { mode: 'brief' })).speak).toMatch(/^Maya/);
+    like.resolve({ uri: 'at://me/like/1' });
+    await flush();
+    expect(notify).toHaveBeenCalledWith("Result of like_post: LIKED: Liked Maya's post. Confirm in a word or two.", undefined);
+    expect((await handlers.run('undo', {})).result).toMatch(/^UNDONE: Removed the like/);
+  });
+});
+
+const flush = () => new Promise<void>((resolve) => setImmediate(resolve));
 
 describe('usesOwnWords', () => {
   it('accepts punctuation and capitalization fixes only', () => {

@@ -130,6 +130,7 @@ export function MainScreen() {
   const onUnrecognizedStroke = () =>
     playUnrecognizedCue({
       narrator,
+      speaking: () => postNarrator.speaking(),
       allowSpeech: () => mode === 'scroll' && allowStrokeCue(),
       showHint: () => {
         setStrokeCue(true);

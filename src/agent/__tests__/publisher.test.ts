@@ -105,6 +105,21 @@ describe('Publisher', () => {
     expect(sent).toEqual([split.draft.parts]);
   });
 
+  it('names a post that is only hashtags by its tags, and a post with no words just once', () => {
+    const { publisher } = setup();
+    const sam = { id: 'did:plc:sam', handle: 'sam.bsky.social', displayName: 'Sam', avatarUrl: null };
+    const tagsOnly = makePost({ author: sam, text: '#sunset #beach #nofilter' });
+    const repost = publisher.draftAction('repost', tagsOnly, 1);
+    expect(repost.ok && repost.readBack).toBe("Reposting Sam's post tagged sunset, beach, and nofilter to your followers. Shall I repost it?");
+    publisher.discard();
+    const reply = publisher.draftText('reply', 'Gorgeous', tagsOnly, 1);
+    expect(reply.ok && reply.readBack).toBe("Replying to Sam's post tagged sunset, beach, and nofilter: Gorgeous. Shall I send the reply?");
+    publisher.discard();
+    const photo = makePost({ author: sam, text: '', media: [{ kind: 'images', images: [{ url: 'https://img/2.jpg', alt: '' }] }] });
+    const bare = publisher.draftAction('repost', photo, 1);
+    expect(bare.ok && bare.readBack).toBe("Reposting Sam's post to your followers. Shall I repost it?");
+  });
+
   it('splits by words, then by graphemes, when a sentence is too long', () => {
     expect(splitIntoParts('a'.repeat(650))).toEqual(['a'.repeat(300), 'a'.repeat(300), 'a'.repeat(50)]);
     const words = 'word '.repeat(100).trim();

@@ -37,10 +37,14 @@ export default defineSchema({
         costUsd: v.union(v.number(), v.null()),
       }),
     ),
+    // What a pending claim holds on that hour's spend counter, until the call completes, fails or expires.
+    reservation: v.optional(v.object({ windowStart: v.number(), usd: v.number() })),
   })
-    .index('by_post', ['postUri', 'promptVersion', 'detail']),
-  // Hourly counters for describe:describePost: one row per hour for the whole deployment ("global") and one
-  // per hashed device id. Rows from past hours are deleted as new claims arrive.
+    .index('by_post', ['postUri', 'promptVersion', 'detail'])
+    .index('by_status_updated', ['status', 'updatedAt']),
+  // Hourly counters for describe:describePost: model spend for the whole deployment ("global") and model calls
+  // per hashed device id, plus Bluesky fetches ("fetch:…") per deployment, hashed address and hashed device.
+  // Rows from past hours are deleted as new requests arrive.
   describeUsage: defineTable({
     key: v.string(),
     windowStart: v.number(),

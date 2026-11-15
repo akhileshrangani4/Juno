@@ -297,11 +297,15 @@ function mediaSentences(post: Post, parts: DescriptionParts | null, includeQuote
   });
 }
 
-function tagSentence(tags: string[], topic: string | null): string | null {
-  if (!tags.length) return null;
+export function tagList(tags: string[]): string {
   const named = tags.slice(0, TAGS_NAMED).map(splitTag);
   const more = tags.length - named.length;
-  const list = more ? `${named.join(', ')}, and ${numberWord(more)} more` : listOf(named);
+  return more ? `${named.join(', ')}, and ${numberWord(more)} more` : listOf(named);
+}
+
+function tagSentence(tags: string[], topic: string | null): string | null {
+  if (!tags.length) return null;
+  const list = tagList(tags);
   const about = cleanModelText(topic).replace(/[.!?]+$/, '');
   return sentence(`Tagged ${list}${about ? `, about ${about[0].toLowerCase()}${about.slice(1)}` : ''}`);
 }

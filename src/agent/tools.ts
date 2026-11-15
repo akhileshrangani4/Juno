@@ -1,7 +1,7 @@
 // Tool schemas sent to Vapi with the assistant. None has a server URL, so Vapi sends every call to the
 // phone as a tool-calls message and the app runs it there (src/agent/toolHandlers.ts).
 
-import { MAX_RATE, MIN_RATE } from './settings';
+import { MAX_RATE, MIN_RATE, RATE_STEP } from './settings';
 
 type Schema = { type: 'object'; properties: Record<string, unknown>; required?: string[] };
 
@@ -77,7 +77,7 @@ const definitions: { name: string; description: string; parameters: Schema }[] =
     parameters: {
       type: 'object',
       properties: {
-        speed: { type: 'number', description: `Speech speed from ${MIN_RATE} to ${MAX_RATE}, where 1 is normal.` },
+        speed: { type: 'number', description: `Speech speed from ${MIN_RATE} to ${MAX_RATE} in steps of ${RATE_STEP}, where 1 is normal.` },
         speedChange: { type: 'string', enum: ['faster', 'slower'] },
         mode: { type: 'string', enum: ['full', 'brief'], description: 'How posts are read while scrolling.' },
         skipHashtags: { type: 'boolean' },

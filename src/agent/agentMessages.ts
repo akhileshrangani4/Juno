@@ -23,4 +23,5 @@ export const agentMessages = {
   postStuck: "It went out, and I couldn't remove it. Say delete my last post to remove it.",
   repostStuck: "It went out, and I couldn't remove the repost. Say undo to try again.",
   held: 'I stopped it, nothing was sent.',
+  descriptionOnItsWay: 'A fuller description of the picture is still on its way.',
 };
