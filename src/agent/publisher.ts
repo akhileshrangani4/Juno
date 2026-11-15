@@ -34,7 +34,7 @@ export type DraftOutcome =
 export type ConfirmOutcome =
   | { ok: true; draft: Draft; announcement: string }
   | { ok: false; reason: 'noDraft' | 'staleDraft' | 'notReadBack' | 'sameTurn' | 'notAffirmative' | 'alreadyPending' }
-  | { ok: false; reason: 'expired'; readBack: string };
+  | { ok: false; reason: 'expired' | 'wrongVerb'; readBack: string };
 
 // stopped: cancelled inside the five seconds, nothing sent. sending: the send is in flight and removes what it sent.
 export type UndoOutcome = { state: 'stopped' | 'sending'; draft: Draft } | null;
@@ -51,19 +51,34 @@ export const graphemeLength = (text: string) => countGraphemes(text);
 
 // A confirmation is an utterance made only of assent: "yes", "yes please", "yeah post it", "go ahead and send it".
 // Anything more ("sure, but change…", "okay let me think"), a question, or a hedge is not a yes.
-const ASSENT =
-  "(?:yes|yeah|yep|yup|yea|sure|ok|okay|absolutely|definitely|correct|confirm|please|go ahead|do it|that'?s right|sounds good|(?:post|send|share|repost|delete|publish)(?: (?:it|that|this|the (?:post|reply)))?)";
+const VERB = '(?:post|send|share|publish|reply|repost|delete|remove)';
+const ASSENT = `(?:yes|yeah|yep|yup|yea|sure|ok|okay|absolutely|definitely|correct|confirm|please|go ahead|do it|that'?s right|sounds good|${VERB}(?: (?:it|that|this|the (?:post|reply)))?)`;
 const CONFIRMATION = new RegExp(`^${ASSENT}(?: (?:and )?${ASSENT})*$`);
 
-export function isAffirmative(utterance: string): boolean {
-  if (utterance.includes('?')) return false;
+// A bare assent confirms whatever was read back; a verb has to fit it, so "yes, delete it" never sends a post.
+const FITTING_VERBS: Record<DraftKind, string[]> = {
+  post: ['post', 'send', 'share', 'publish'],
+  reply: ['post', 'send', 'share', 'publish', 'reply'],
+  repost: ['post', 'send', 'share', 'publish', 'repost'],
+  delete: ['delete', 'remove'],
+};
+
+// The verbs in an utterance made only of assent, or null when it is anything more than assent.
+function assentVerbs(utterance: string): string[] | null {
+  if (utterance.includes('?')) return null;
   const said = utterance
     .toLowerCase()
     .replace(/[’]/g, "'")
     .replace(/[^a-z' ]+/g, ' ')
     .replace(/\s+/g, ' ')
     .trim();
-  return CONFIRMATION.test(said) && !/^(?:please ?)+$/.test(said);
+  if (!CONFIRMATION.test(said) || /^(?:please ?)+$/.test(said)) return null;
+  return said.match(new RegExp(`\\b${VERB}\\b`, 'g')) ?? [];
+}
+
+export function isAffirmative(utterance: string, kind?: DraftKind): boolean {
+  const verbs = assentVerbs(utterance);
+  return verbs !== null && (!kind || verbs.every((verb) => FITTING_VERBS[kind].includes(verb)));
 }
 
 function pack(units: string[], limit: number, joiner: string): string[] {
@@ -152,6 +167,10 @@ export class Publisher {
     return this.pending?.draft ?? null;
   }
 
+  get sendingDraft(): Draft | null {
+    return this.sending?.draft ?? null;
+  }
+
   // Confirmed and not finished: counting down or being sent.
   get busy(): boolean {
     return this.pending !== null || this.sending !== null;
@@ -195,6 +214,21 @@ export class Publisher {
     if (this.draft?.readBackTurn != null) this.draft.voided = true;
   }
 
+  // The assistant said something of its own after the read-back and before the user answered, so the user's next
+  // yes may be answering that instead.
+  assistantSpoke(turn: number): void {
+    if (this.draft?.readBackTurn === turn) this.draft.voided = true;
+  }
+
+  // The user said something other than yes or undo while the send was counting down (for example the second half
+  // of "Yes, … but change it"), so it goes back to being a draft and is read back again.
+  hold(turn: number): { draft: Draft; readBack: string } | null {
+    const draft = this.cancelPending();
+    if (!draft) return null;
+    this.draft = draft;
+    return { draft, readBack: this.readBackAgain(draft, turn) };
+  }
+
   confirm(draftId: string, turn: number, utterance: string): ConfirmOutcome {
     if (this.busy) return { ok: false, reason: 'alreadyPending' };
     const draft = this.draft;
@@ -202,12 +236,9 @@ export class Publisher {
     if (draft.id !== draftId) return { ok: false, reason: 'staleDraft' };
     if (draft.readBackTurn === null) return { ok: false, reason: 'notReadBack' };
     if (turn <= draft.readBackTurn) return { ok: false, reason: 'sameTurn' };
-    if (draft.voided || turn > draft.readBackTurn + 1) {
-      draft.voided = false;
-      draft.readBackTurn = turn;
-      return { ok: false, reason: 'expired', readBack: readBackOf(draft, this.deps.now?.() ?? new Date()) };
-    }
+    if (draft.voided || turn > draft.readBackTurn + 1) return { ok: false, reason: 'expired', readBack: this.readBackAgain(draft, turn) };
     if (!isAffirmative(utterance)) return { ok: false, reason: 'notAffirmative' };
+    if (!isAffirmative(utterance, draft.kind)) return { ok: false, reason: 'wrongVerb', readBack: this.readBackAgain(draft, turn) };
     this.draft = null;
     this.pending = { draft, cancel: null };
     return { ok: true, draft, announcement: announcementOf(draft) };
@@ -246,6 +277,12 @@ export class Publisher {
     pending.cancel?.();
     this.pending = null;
     return pending.draft;
+  }
+
+  private readBackAgain(draft: Draft, turn: number): string {
+    draft.voided = false;
+    draft.readBackTurn = turn;
+    return readBackOf(draft, this.deps.now?.() ?? new Date());
   }
 
   private check(draft: Draft, turn: number): DraftOutcome {

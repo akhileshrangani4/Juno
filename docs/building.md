@@ -87,7 +87,7 @@ npx convex env set SUPERMEMORY_API_KEY "$SUPERMEMORY_API_KEY"   # convex/memory.
 
 None of these is ever set in the app or in `.env.local`. The voice agent's Convex code reads only `SUPERMEMORY_API_KEY`; nothing deployed forwards prompts to a model.
 
-The memory actions are rate limited per device (30 calls per 10 minutes), per caller address (60 per 10 minutes, stored as a hash) and for the whole deployment (600 per hour), and a person can keep at most 50 facts. The numbers live in `src/agent/memoryRateLimits.ts`.
+The memory actions are rate limited per device (30 calls per 10 minutes), per caller address (60 per 10 minutes, stored as a hash) and for the whole deployment (600 per hour), and a person can keep at most 50 facts. The numbers live in `src/agent/memoryRateLimits.ts`. The device limit is taken only after the device's secret checks out, so knowing someone's public DID doesn't let a stranger use up their allowance. Known limit: whoever uses up the whole-deployment allowance turns memory off for everyone until the hour is over. The voice agent still works then, without memory.
 
 Several branches deploy to this one deployment, and a deploy from one branch replaces the functions of another. Deploy right before you verify, and after a merge deploy from main.
 

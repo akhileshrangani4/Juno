@@ -12,7 +12,6 @@ export type AgentStatus = 'starting' | 'connecting' | 'listening' | 'ended';
 export const CONNECT_TIMEOUT_MS = 20_000;
 export const COUNTDOWN_FALLBACK_MS = 6_000;
 
-const UNDO_WORDS = /\b(undo|stop|cancel|wait|don'?t|no)\b/i;
 
 export type SessionDeps = {
   call: VoiceCall | null;
@@ -75,6 +74,7 @@ export class AgentSession {
   private announcementStarted = false;
   private focusUri: string | null = null;
   private queue: Promise<void> = Promise.resolve();
+  private appSaid: string[] = [];
 
   constructor(private readonly deps: SessionDeps) {}
 
@@ -125,14 +125,14 @@ export class AgentSession {
   // model only hears about it; otherwise the model is asked to tell the user.
   notify(text: string, speak?: string): void {
     if (!this.live) return;
-    if (speak) this.deps.call?.say(speak);
+    if (speak) this.speak(speak);
     this.deps.call?.addMessage(text, !speak);
   }
 
   // While the call is live it owns the audio, so the app's own messages (gesture help) are spoken by the agent.
   say(text: string): boolean {
     if (!this.live) return false;
-    this.deps.call?.say(text);
+    this.speak(text);
     this.deps.call?.addMessage(`The app just said this to the user: "${text}". Don't repeat it.`, false);
     return true;
   }
@@ -152,7 +152,9 @@ export class AgentSession {
   private onMessage(message: VapiMessage) {
     switch (message.type) {
       case 'transcript':
-        if (message.role === 'user' && message.transcriptType === 'final' && typeof message.transcript === 'string') this.onUserSaid(message.transcript);
+        if (message.transcriptType !== 'final' || typeof message.transcript !== 'string') return;
+        if (message.role === 'user') this.onUserSaid(message.transcript);
+        if (message.role === 'assistant') this.onAssistantSaid(message.transcript);
         return;
       case 'tool-calls':
         for (const call of (message.toolCallList as ToolCall[] | undefined) ?? []) this.queue = this.queue.then(() => this.runTool(call));
@@ -173,19 +175,25 @@ export class AgentSession {
 
   private onUserSaid(transcript: string) {
     this.deps.conversation.add(transcript);
-    if (!this.deps.handlers.publisher.busy || !UNDO_WORDS.test(transcript)) return;
-    const undone = this.deps.handlers.undoFromTranscript();
-    if (!undone) return;
+    const heard = this.deps.handlers.heard(transcript);
+    if (!heard) return;
     this.countdownArmed?.();
     this.countdownArmed = null;
-    this.deps.log('undone from transcript', { state: undone.state });
-    if (undone.state === 'stopped') {
-      this.deps.call?.say(agentMessages.undone);
-      this.deps.call?.addMessage('The user said undo during the five seconds. The app stopped it, nothing was sent, and it told them. Say nothing.', false);
-    } else {
-      this.deps.call?.say(agentMessages.undoWhileSending);
-      this.deps.call?.addMessage('The user said undo while it was being sent. The app removes it when the send finishes and tells them what happened. Say nothing.', false);
-    }
+    this.deps.log(heard.kind === 'held' ? 'held from transcript' : 'undone from transcript');
+    this.speak(heard.speak);
+    this.deps.call?.addMessage(heard.message, false);
+  }
+
+  // The assistant's own words (not the app's, which go through speak) void a read-back the user hasn't answered.
+  private onAssistantSaid(transcript: string) {
+    const said = spoken(transcript);
+    if (said && !this.appSaid.some((text) => text.includes(said))) this.deps.handlers.assistantSaid();
+  }
+
+  // Everything the app says in the agent's voice goes through here, so its transcript is known to be the app's.
+  private speak(text: string) {
+    this.appSaid = [...this.appSaid.slice(-9), spoken(text)];
+    this.deps.call?.say(text);
   }
 
   private async runTool(call: ToolCall) {
@@ -201,7 +209,7 @@ export class AgentSession {
     const { call } = this.deps;
     if (outcome.after === 'end') return this.stop('agent');
     if (outcome.after === 'signIn') return this.stop('signIn');
-    if (outcome.speak) call?.say(outcome.speak);
+    if (outcome.speak) this.speak(outcome.speak);
     call?.addMessage(`Result of ${name}: ${outcome.result}`, outcome.respond);
     if (outcome.after === 'countdown') {
       // The five seconds start once the "Posting in five seconds" notice has been spoken.
@@ -229,6 +237,12 @@ export class AgentSession {
     this.deps.exit(reason, `${cancelled ? agentMessages.notSent : ''}${EXIT_MESSAGES[reason]}`);
   }
 }
+
+const spoken = (text: string) =>
+  text
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim();
 
 type ToolCall = { id?: string; name?: string; arguments?: unknown; function?: { name?: string; arguments?: unknown } };
 

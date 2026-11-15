@@ -20,4 +20,7 @@ export const agentMessages = {
   removedRepostAfterSend: 'It had gone out, so I removed the repost.',
   deletedBeforeUndo: "It was already deleted. A deleted post can't be brought back.",
   failedBeforeUndo: "It didn't go out, so there was nothing to remove.",
+  postStuck: "It went out, and I couldn't remove it. Say delete my last post to remove it.",
+  repostStuck: "It went out, and I couldn't remove the repost. Say undo to try again.",
+  held: 'I stopped it, nothing was sent.',
 };

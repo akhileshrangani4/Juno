@@ -1,7 +1,7 @@
 import { v } from 'convex/values';
 
 import { memoryRejection, type Memory } from '../src/agent/memoryClient';
-import { MAX_FACTS, memoryChecks } from '../src/agent/memoryRateLimits';
+import { callerChecks, deviceCheck, MAX_FACTS } from '../src/agent/memoryRateLimits';
 import { internal } from './_generated/api';
 import { action, type ActionCtx } from './_generated/server';
 
@@ -11,6 +11,7 @@ import { action, type ActionCtx } from './_generated/server';
 
 const API = 'https://api.supermemory.ai';
 const SOURCE = 'user_stated';
+const TOO_MANY = 'Too many memory requests. Try again in a few minutes.';
 
 const identity = { userKey: v.string(), secret: v.string() };
 
@@ -23,10 +24,11 @@ async function sha256(text: string): Promise<string> {
 async function namespaceFor(ctx: ActionCtx, userKey: string, secret: string): Promise<string> {
   if (userKey.length > 200 || secret.length < 16 || secret.length > 200) throw new Error('Invalid memory identity');
   const { ip } = await ctx.meta.getRequestMetadata();
-  const checks = memoryChecks(userKey, ip ? await sha256(`address:${ip}`) : null);
-  if (!(await ctx.runMutation(internal.memoryLimits.take, { checks }))) throw new Error('Too many memory requests. Try again in a few minutes.');
+  const callerAllowed = await ctx.runMutation(internal.memoryLimits.take, { checks: callerChecks(ip ? await sha256(`address:${ip}`) : null) });
+  if (!callerAllowed) throw new Error(TOO_MANY);
   const allowed = await ctx.runMutation(internal.memoryOwners.verify, { userKey, secretHash: await sha256(secret) });
   if (!allowed) throw new Error('This memory belongs to another device');
+  if (!(await ctx.runMutation(internal.memoryLimits.take, { checks: deviceCheck(userKey) }))) throw new Error(TOO_MANY);
   return `consumerhack_${(await sha256(`memory:${userKey}`)).slice(0, 40)}`;
 }
 

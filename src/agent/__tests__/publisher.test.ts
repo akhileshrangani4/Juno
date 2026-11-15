@@ -158,6 +158,34 @@ describe('Publisher', () => {
     for (const said of no) expect([said, isAffirmative(said)]).toEqual([said, false]);
   });
 
+  it('matches an assent verb to the kind of draft', () => {
+    for (const [said, kind, fits] of [
+      ['yes', 'delete', true],
+      ['go ahead', 'post', true],
+      ['yes, delete it', 'post', false],
+      ['yes, delete it', 'delete', true],
+      ['remove it', 'delete', true],
+      ['send it', 'delete', false],
+      ['publish', 'delete', false],
+      ['yeah post it', 'reply', true],
+      ['repost it', 'post', false],
+      ['repost it', 'repost', true],
+      ['yes send it', 'repost', true],
+    ] as const) {
+      expect([said, kind, isAffirmative(said, kind)]).toEqual([said, kind, fits]);
+    }
+  });
+
+  it('needs a new read-back when the assistant speaks before the user answers', () => {
+    const { publisher } = setup();
+    const draft = publisher.draftText('post', 'Hello', null, 1);
+    if (!draft.ok) throw new Error('expected a draft');
+    publisher.assistantSpoke(1);
+    expect(publisher.confirm(draft.draft.id, 2, 'yes')).toMatchObject({ ok: false, reason: 'expired' });
+    publisher.assistantSpoke(3);
+    expect(publisher.confirm(draft.draft.id, 3, 'yes')).toMatchObject({ ok: true });
+  });
+
   it('accepts a yes only in the very next turn after the read-back', () => {
     const { publisher } = setup();
     const draft = publisher.draftText('post', 'Hello', null, 1);

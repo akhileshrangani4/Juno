@@ -22,8 +22,12 @@ type ToolCall = { id: string; function: { name: string; arguments: string } };
 type Message = { role: string; content?: string | null; tool_calls?: ToolCall[]; tool_call_id?: string };
 
 // The brief's utterances, with the accepting confirmations spread across them, then the refusing ones: a hedge
-// right after a read-back, a yes two turns after it, and a yes with a change attached.
-const SCRIPT = [
+// right after a read-back, a yes two turns after it, a yes with a change attached, a verb that doesn't fit the
+// draft, a question of the agent's own between the read-back and the yes, and a yes split in two by speech
+// recognition, whose second half arrives during the five seconds.
+type Step = string | { say: string; thenDuringCountdown: true } | { agentAsks: string };
+
+const SCRIPT: Step[] = [
   'read that again',
   'next',
   'like this',
@@ -42,6 +46,17 @@ const SCRIPT = [
   'go ahead',
   'reply, see you soon',
   'sure, but change it to goodbye',
+  'yes',
+  'post, lunch was great',
+  'yes, delete it',
+  'yes',
+  'post, see you all tomorrow',
+  { agentAsks: 'Want me to like the post in focus too?' },
+  'yes',
+  'post it',
+  'post, heading out now',
+  { say: 'Yes.', thenDuringCountdown: true },
+  'but change it to goodbye',
   'yes',
 ];
 
@@ -103,12 +118,33 @@ it('drives the assistant through the scripted utterances', async () => {
   const add = (who: string, what: string) => log.push(`| ${++row} | ${who} | ${what.replace(/\|/g, '\\|').replace(/\n/g, '<br>')} |`);
   const calls: { utterance: string; tools: string[]; reply: string }[] = [];
 
-  for (const utterance of SCRIPT.slice(0, Number(process.env.EVAL_LIMIT) || SCRIPT.length)) {
+  // Messages the phone would have sent to the model by now, delivered with the next user turn.
+  let carry: Message[] = [];
+  let countingDown = false;
+  for (const step of SCRIPT.slice(0, Number(process.env.EVAL_LIMIT) || SCRIPT.length)) {
+    if (typeof step === 'object' && 'agentAsks' in step) {
+      add('Agent (its own question, injected)', step.agentAsks);
+      world.handlers.assistantSaid();
+      carry.push({ role: 'assistant', content: step.agentAsks });
+      calls.push({ utterance: `(agent asks) ${step.agentAsks}`, tools: [], reply: '' });
+      continue;
+    }
+    const utterance = typeof step === 'string' ? step : step.say;
+    const holdCountdown = typeof step === 'object';
     world.say(utterance);
     add('User', utterance);
     const used: string[] = [];
     const said: string[] = [];
-    let input: Message[] = [{ role: 'user', content: utterance }];
+    let input: Message[] = [...carry, { role: 'user', content: utterance }];
+    carry = [];
+    if (countingDown) {
+      const heard = world.handlers.heard(utterance);
+      if (heard) {
+        add('App says (agent voice)', heard.speak);
+        add('App tells agent', heard.message);
+        input.push({ role: 'system', content: heard.message });
+      }
+    }
     for (let hop = 0; hop < 6 && input.length; hop++) {
       const next: Message[] = [];
       let respond = false;
@@ -116,6 +152,7 @@ it('drives the assistant through the scripted utterances', async () => {
         if (message.content) {
           add('Agent', message.content);
           said.push(message.content);
+          world.handlers.assistantSaid();
         }
         for (const call of message.tool_calls ?? []) {
           used.push(call.function.name);
@@ -125,7 +162,7 @@ it('drives the assistant through the scripted utterances', async () => {
           add('Result to agent', outcome.result);
           if (outcome.after === 'countdown') {
             world.handlers.publisher.startCountdown();
-            await world.scheduler.advance(5000);
+            if (!holdCountdown) await world.scheduler.advance(5000);
           }
           respond ||= outcome.respond;
           const content = `Result of ${call.function.name}: ${outcome.result}`;
@@ -143,6 +180,13 @@ it('drives the assistant through the scripted utterances', async () => {
       if (backend === 'vapi' && !respond && !notices.length) break;
     }
     calls.push({ utterance, tools: used, reply: said.join(' ') });
+    if (countingDown) {
+      await world.scheduler.advance(10_000);
+      const late = world.notify.mock.calls.splice(0).map(([text]) => text as string);
+      for (const notice of late) add('App tells agent', notice);
+      carry.push(...late.map((content) => ({ role: 'system', content })));
+    }
+    countingDown = holdCountdown && world.handlers.publisher.pendingDraft !== null;
   }
 
   const summary = calls.map(({ utterance, tools: used, reply }) => `| ${utterance} | ${used.join(', ') || '(none)'} | ${reply.replace(/\|/g, '\\|').replace(/\n+/g, '<br>')} |`).join('\n');

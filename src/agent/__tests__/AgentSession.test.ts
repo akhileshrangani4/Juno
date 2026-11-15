@@ -132,6 +132,43 @@ describe('AgentSession', () => {
     expect(provider.createPost).not.toHaveBeenCalled();
   });
 
+  it("voids the read-back when the assistant says something of its own before the user's yes, but not for the app's own words", async () => {
+    const { session, call, userSays, toolCall, emit, provider } = setup();
+    await session.start();
+    const assistantSays = (transcript: string) => emit({ type: 'transcript', role: 'assistant', transcriptType: 'final', transcript });
+    userSays('post hello from my new app');
+    await toolCall('draft_post', { text: 'Hello from my new app.' });
+    assistantSays('Posting to your followers: Hello from my new app.');
+    assistantSays('Shall I post it?');
+    assistantSays('Want me to like it too?');
+    userSays('yes');
+    await toolCall('publish_draft', { draftId: draftIdOf(call.addMessage) });
+    expect(call.addMessage).toHaveBeenLastCalledWith(expect.stringMatching(/^Result of publish_draft: REREAD/), false);
+    expect(call.say).toHaveBeenLastCalledWith('Posting to your followers: Hello from my new app. Shall I post it?');
+    assistantSays('Posting to your followers: Hello from my new app. Shall I post it?');
+    userSays('yes');
+    await toolCall('publish_draft', { draftId: draftIdOf(call.addMessage) });
+    expect(call.say).toHaveBeenLastCalledWith('Posting in five seconds. Say undo to stop it.');
+    expect(provider.createPost).not.toHaveBeenCalled();
+  });
+
+  it('holds a send counting down when the second half of a split yes asks for a change', async () => {
+    const { session, call, userSays, toolCall, emit, scheduler, provider } = setup();
+    await session.start();
+    userSays('post hello from my new app');
+    await toolCall('draft_post', { text: 'Hello from my new app.' });
+    userSays('Yes.');
+    await toolCall('publish_draft', { draftId: draftIdOf(call.addMessage) });
+    emit({ type: 'speech-update', role: 'assistant', status: 'started' });
+    emit({ type: 'speech-update', role: 'assistant', status: 'stopped' });
+    await scheduler.advance(1000);
+    userSays('But change it to goodbye.');
+    expect(call.say).toHaveBeenLastCalledWith('I stopped it, nothing was sent. Posting to your followers: Hello from my new app. Shall I post it?');
+    expect(call.addMessage).toHaveBeenLastCalledWith(expect.stringMatching(/^HELD draftId=/), false);
+    await scheduler.advance(20_000);
+    expect(provider.createPost).not.toHaveBeenCalled();
+  });
+
   it('sends after five seconds and tells the model it was sent', async () => {
     const { session, call, userSays, toolCall, emit, scheduler, provider } = setup();
     await session.start();

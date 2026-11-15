@@ -6,7 +6,7 @@ import { agentMessages } from './agentMessages';
 import { memoryRejection, type MemoryClient } from './memoryClient';
 import { narrateForFeed, narratePost, type ReadMode } from './narrationAdapter';
 import { describeFocus } from './postContext';
-import { Publisher, type ConfirmOutcome, type Draft, type DraftOutcome, type UndoOutcome } from './publisher';
+import { isAffirmative, Publisher, type ConfirmOutcome, type Draft, type DraftOutcome } from './publisher';
 import { MAX_RATE, MIN_RATE, RATE_STEP, type NarrationSettings, type SettingsStore } from './settings';
 import type { ToolName } from './tools';
 
@@ -45,8 +45,15 @@ export type AgentDeps = {
 
 type UndoEntry = { label: string; undo(): Promise<string> };
 
+// What the app does with a user utterance heard while a confirmed send is counting down or in flight.
+export type Heard = { kind: 'undone' | 'held'; speak: string; message: string };
+
+const UNDO_WORDS = /\b(undo|stop|cancel|wait|don'?t|no)\b/i;
+
 // Kept on top of the history once the user's last confirmed action was stopped or removed, so another undo
 // never reaches back to an earlier action.
+const NOT_SENT: UndoEntry = { label: 'failed', undo: async () => "NOTHING_TO_UNDO: The last post didn't go out, so there is nothing to undo. Tell the user." };
+
 const ALREADY_REMOVED: UndoEntry = { label: 'removed', undo: async () => 'NOTHING_TO_UNDO: The last action was already stopped or removed. Tell the user.' };
 
 const NOT_SIGNED_IN =
@@ -94,6 +101,8 @@ function refusal(outcome: Extract<ConfirmOutcome, { ok: false }>, utterance: str
       return `REFUSED: The user's reply to the read-back was not a plain yes ("${utterance}"), so nothing was published and the draft is unchanged. If they asked for a change, make it with edit_draft, which reads the new draft back. Otherwise ask whether to go ahead.`;
     case 'expired':
       return "REREAD: The user's yes did not come right after the read-back, so the app read the draft aloud again and asked for a yes. Say nothing now. If the user's next reply is yes, call publish_draft again with the same draftId.";
+    case 'wrongVerb':
+      return `REREAD: "${utterance}" doesn't fit this draft (for example "delete it" for a post), so nothing was published and the app read the draft aloud again. Say nothing now. If the user's next reply is a yes, call publish_draft again with the same draftId; if they want to throw it away, call discard_draft.`;
     case 'alreadyPending':
       return 'REFUSED: Something is already about to be sent. Wait five seconds or let the user say undo.';
   }
@@ -109,51 +118,88 @@ export function createToolHandlers(deps: AgentDeps) {
     deps.notify(`Result of undo: ${speak} The app told the user. Say nothing.`, speak);
   };
 
+  const sendFailed = (error: unknown, undoAsked: boolean) => {
+    history.push(NOT_SENT);
+    if (undoAsked) return deps.notify(`Result of undo: ${agentMessages.failedBeforeUndo} The app told the user. Say nothing.`, agentMessages.failedBeforeUndo);
+    deps.notify(`Result of publish_draft: FAILED. Nothing was published (${error instanceof Error ? error.message : 'unknown error'}). Tell the user it didn't work and they can try again.`);
+  };
+
+  // Removes what an undo during the send asked to remove, with one retry. If it still fails, the user hears that it is
+  // public and how to remove it, and the entry stays on the history so undo can try again.
+  async function removeAfterSend(remove: () => Promise<unknown>, entry: UndoEntry, removed: string, stuck: string) {
+    for (let attempt = 0; attempt < 2; attempt++) {
+      try {
+        await remove();
+        return undoneWhileSending(removed);
+      } catch {
+        continue;
+      }
+    }
+    history.push(entry);
+    lastUndoneAt = -Infinity;
+    deps.notify(`Result of undo: REMOVE_FAILED. It is public. ${stuck} The app told the user. Say nothing.`, stuck);
+  }
+
   async function send(draft: Draft, undoRequested: () => boolean) {
     const { provider } = deps;
-    try {
-      if (draft.kind === 'repost' && draft.target) {
-        const target = draft.target;
-        const record = await provider.repost(target);
-        if (undoRequested()) {
-          await provider.unrepost(target, record);
-          return undoneWhileSending(agentMessages.removedRepostAfterSend);
-        }
-        history.push({ label: 'repost', undo: async () => ((await provider.unrepost(target, record)) ? 'UNDONE: Removed the repost.' : 'NOTHING_TO_UNDO: It was not reposted.') });
-        return deps.notify(`Result of publish_draft: SENT. Reposted ${authorName(target)}'s post. Confirm in a few words.`);
+    if (draft.kind === 'repost' && draft.target) {
+      const target = draft.target;
+      let record: RecordRef;
+      try {
+        record = await provider.repost(target);
+      } catch (error) {
+        return sendFailed(error, undoRequested());
       }
-      if (draft.kind === 'delete' && draft.target) {
+      const unrepost = () => provider.unrepost(target, record);
+      const entry: UndoEntry = { label: 'repost', undo: async () => ((await unrepost()) ? 'UNDONE: Removed the repost.' : 'NOTHING_TO_UNDO: It was not reposted.') };
+      if (undoRequested()) return removeAfterSend(unrepost, entry, agentMessages.removedRepostAfterSend, agentMessages.repostStuck);
+      history.push(entry);
+      return deps.notify(`Result of publish_draft: SENT. Reposted ${authorName(target)}'s post. Confirm in a few words.`);
+    }
+    if (draft.kind === 'delete' && draft.target) {
+      try {
         await provider.deletePost(draft.target);
-        history.push({ label: 'delete', undo: async () => "CANNOT_UNDO: A deleted post can't be brought back. Tell the user." });
-        if (undoRequested()) return deps.notify(`Result of undo: ${agentMessages.deletedBeforeUndo} The app told the user. Say nothing.`, agentMessages.deletedBeforeUndo);
-        return deps.notify('Result of publish_draft: SENT. The post was deleted. Confirm in a few words.');
+      } catch (error) {
+        return sendFailed(error, undoRequested());
       }
-      const refs: PostRef[] = [];
-      let parent: ReplyParent | null = draft.kind === 'reply' && draft.target ? draft.target : null;
-      const root = parent ? (parent.replyRoot ?? { uri: parent.uri, cid: parent.cid }) : null;
+      history.push({ label: 'delete', undo: async () => "CANNOT_UNDO: A deleted post can't be brought back. Tell the user." });
+      if (undoRequested()) return deps.notify(`Result of undo: ${agentMessages.deletedBeforeUndo} The app told the user. Say nothing.`, agentMessages.deletedBeforeUndo);
+      return deps.notify('Result of publish_draft: SENT. The post was deleted. Confirm in a few words.');
+    }
+    const refs: PostRef[] = [];
+    const deleteSent = async () => {
+      for (const ref of [...refs].reverse()) await provider.deletePost(ref);
+    };
+    const entry: UndoEntry = {
+      label: draft.kind,
+      undo: async () => {
+        await deleteSent();
+        return `UNDONE: Deleted the ${draft.kind === 'reply' ? 'reply' : 'post'} that was just sent.`;
+      },
+    };
+    let parent: ReplyParent | null = draft.kind === 'reply' && draft.target ? draft.target : null;
+    const root = parent ? (parent.replyRoot ?? { uri: parent.uri, cid: parent.cid }) : null;
+    try {
       for (const text of draft.parts) {
         if (undoRequested()) break;
         const ref = parent ? await provider.reply(parent, { text }) : await provider.createPost({ text });
         refs.push(ref);
         parent = { ...ref, replyRoot: root ?? refs[0] };
       }
-      if (undoRequested()) {
-        for (const ref of [...refs].reverse()) await provider.deletePost(ref);
-        return undoneWhileSending(refs.length ? agentMessages.deletedAfterSend : agentMessages.stoppedBeforeSend);
-      }
-      history.push({
-        label: draft.kind,
-        undo: async () => {
-          for (const ref of [...refs].reverse()) await provider.deletePost(ref);
-          return `UNDONE: Deleted the ${draft.kind === 'reply' ? 'reply' : 'post'} that was just sent.`;
-        },
-      });
-      deps.notify(`Result of publish_draft: SENT. The ${draft.kind === 'reply' ? 'reply was sent' : refs.length > 1 ? 'thread was posted' : 'post was published'}. Confirm in a few words.`);
     } catch (error) {
-      history.push({ label: 'failed', undo: async () => "NOTHING_TO_UNDO: The last post didn't go out, so there is nothing to undo. Tell the user." });
-      if (undoRequested()) return undoneWhileSending(agentMessages.failedBeforeUndo);
-      deps.notify(`Result of publish_draft: FAILED. Nothing was published (${error instanceof Error ? error.message : 'unknown error'}). Tell the user it didn't work and they can try again.`);
+      if (!refs.length) return sendFailed(error, undoRequested());
+      if (undoRequested()) return removeAfterSend(deleteSent, entry, agentMessages.deletedAfterSend, agentMessages.postStuck);
+      history.push(entry);
+      return deps.notify(
+        `Result of publish_draft: PARTLY_SENT. ${refs.length} of ${draft.parts.length} posts went out before an error (${error instanceof Error ? error.message : 'unknown error'}). Tell the user, and that saying undo removes what went out.`,
+      );
     }
+    if (undoRequested()) {
+      if (!refs.length) return undoneWhileSending(agentMessages.stoppedBeforeSend);
+      return removeAfterSend(deleteSent, entry, agentMessages.deletedAfterSend, agentMessages.postStuck);
+    }
+    history.push(entry);
+    deps.notify(`Result of publish_draft: SENT. The ${draft.kind === 'reply' ? 'reply was sent' : refs.length > 1 ? 'thread was posted' : 'post was published'}. Confirm in a few words.`);
   }
 
   const publisher = new Publisher({ send, schedule: deps.schedule, newId: deps.newId, now: deps.now });
@@ -251,7 +297,7 @@ export function createToolHandlers(deps: AgentDeps) {
       case 'publish_draft': {
         const utterance = deps.conversation.lastUtterance();
         const outcome = publisher.confirm(typeof args.draftId === 'string' ? args.draftId : '', turn, utterance);
-        if (!outcome.ok && outcome.reason === 'expired') return { speak: outcome.readBack, respond: false, result: refusal(outcome, utterance) };
+        if (!outcome.ok && (outcome.reason === 'expired' || outcome.reason === 'wrongVerb')) return { speak: outcome.readBack, respond: false, result: refusal(outcome, utterance) };
         if (!outcome.ok) return { respond: true, result: refusal(outcome, utterance) };
         return {
           speak: outcome.announcement,
@@ -343,12 +389,33 @@ export function createToolHandlers(deps: AgentDeps) {
         };
       }
     },
-    // Called when the app hears "undo" in the five seconds or during the send, before the model does.
-    undoFromTranscript(): UndoOutcome {
-      const undone = publisher.undo();
-      if (undone) lastUndoneAt = deps.now().getTime();
-      if (undone?.state === 'stopped') history.push(ALREADY_REMOVED);
-      return undone;
+    // Every final user transcript, already added to the conversation, while something confirmed is counting down
+    // or being sent. Undo stops or removes it; anything that isn't a plain yes for this draft holds it as a draft.
+    heard(utterance: string): Heard | null {
+      const busy = publisher.pendingDraft ?? publisher.sendingDraft;
+      if (!busy) return null;
+      if (UNDO_WORDS.test(utterance)) {
+        const undone = publisher.undo();
+        if (!undone) return null;
+        lastUndoneAt = deps.now().getTime();
+        if (undone.state === 'sending') {
+          return { kind: 'undone', speak: agentMessages.undoWhileSending, message: 'The user said undo while it was being sent. The app removes it when the send finishes and tells them what happened. Say nothing.' };
+        }
+        history.push(ALREADY_REMOVED);
+        return { kind: 'undone', speak: agentMessages.undone, message: 'The user said undo during the five seconds. The app stopped it, nothing was sent, and it told them. Say nothing.' };
+      }
+      if (isAffirmative(utterance, busy.kind)) return null;
+      const held = publisher.hold(deps.conversation.turn());
+      if (!held) return null;
+      return {
+        kind: 'held',
+        speak: `${agentMessages.held} ${held.readBack}`,
+        message: `HELD draftId="${held.draft.id}": The user said "${utterance}" during the five seconds, so nothing was sent and the app read the draft aloud again. If they asked for a change, make it with edit_draft, which reads the new draft back. Otherwise say nothing, and if their next reply is a yes, call publish_draft with this draftId.`,
+      };
+    },
+    // The assistant said something of its own (not the app's words), which voids a read-back the user hasn't answered.
+    assistantSaid(): void {
+      publisher.assistantSpoke(deps.conversation.turn());
     },
   };
 }

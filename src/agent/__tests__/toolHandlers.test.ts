@@ -136,7 +136,8 @@ describe('agent tools', () => {
     say('yes');
     await handlers.run('publish_draft', { draftId: draftIdOf(again.result) });
     handlers.publisher.startCountdown();
-    expect(handlers.undoFromTranscript()).toMatchObject({ state: 'stopped' });
+    say('undo');
+    expect(handlers.heard('undo')).toMatchObject({ kind: 'undone', speak: 'Stopped. Nothing was sent.' });
     expect(await handlers.run('undo', {})).toMatchObject({ respond: false, result: expect.stringMatching(/^ALREADY_UNDONE/) });
     await scheduler.advance(UNDO_WINDOW_MS);
     expect(provider.createPost).toHaveBeenCalledTimes(1);
@@ -216,6 +217,76 @@ describe('agent tools', () => {
     say('undo');
     expect((await handlers.run('undo', {})).result).toMatch(/^NOTHING_TO_UNDO: The last post didn't go out/);
     expect(failing.unlike).not.toHaveBeenCalled();
+  });
+
+  it('confirms only with a verb that fits the draft, and reads it back again otherwise', async () => {
+    const mine = makePost({ uri: 'at://me/post/9', cid: 'c9', text: 'Old news', createdAt: '2026-11-15T11:00:00.000Z' });
+    const { handlers, say, provider } = setup({ provider: makeProvider({ getMyLatestPost: jest.fn(async () => mine) }) });
+    say('post hello from my new app');
+    const post = await handlers.run('draft_post', { text: 'Hello from my new app.' });
+    say('yes, delete it');
+    expect(await handlers.run('publish_draft', { draftId: draftIdOf(post.result) })).toMatchObject({
+      speak: 'Posting to your followers: Hello from my new app. Shall I post it?',
+      result: expect.stringMatching(/^REREAD: "yes, delete it" doesn't fit this draft/),
+    });
+    say('yes, send it');
+    expect(await handlers.run('publish_draft', { draftId: draftIdOf(post.result) })).toMatchObject({ after: 'countdown' });
+    handlers.publisher.cancelPending();
+
+    say('delete my last post');
+    const del = await handlers.run('draft_delete_my_last_post', {});
+    say('send it');
+    expect((await handlers.run('publish_draft', { draftId: draftIdOf(del.result) })).result).toMatch(/^REREAD/);
+    say('yes, remove it');
+    expect(await handlers.run('publish_draft', { draftId: draftIdOf(del.result) })).toMatchObject({ after: 'countdown' });
+    handlers.publisher.cancelPending();
+    expect(provider.createPost).not.toHaveBeenCalled();
+    expect(provider.deletePost).not.toHaveBeenCalled();
+  });
+
+  it('holds the send and reads the draft back when the user says more than yes during the five seconds', async () => {
+    const { handlers, say, provider, scheduler } = setup();
+    say('post hello from my new app');
+    const draft = await handlers.run('draft_post', { text: 'Hello from my new app.' });
+    say('Yes.');
+    await handlers.run('publish_draft', { draftId: draftIdOf(draft.result) });
+    handlers.publisher.startCountdown();
+    await scheduler.advance(2000);
+    say('Yes please.');
+    expect(handlers.heard('Yes please.')).toBeNull();
+    say('But change it to goodbye.');
+    expect(handlers.heard('But change it to goodbye.')).toMatchObject({
+      kind: 'held',
+      speak: 'I stopped it, nothing was sent. Posting to your followers: Hello from my new app. Shall I post it?',
+      message: expect.stringMatching(/^HELD draftId="d1": .*edit_draft/),
+    });
+    await scheduler.advance(20_000);
+    expect(provider.createPost).not.toHaveBeenCalled();
+    say('change it to goodbye');
+    expect((await handlers.run('edit_draft', { find: 'Hello from my new app', replace: 'goodbye' })).speak).toBe('Posting to your followers: goodbye. Shall I post it?');
+  });
+
+  it('says truthfully that a post went out when removing it after an undo fails, and keeps it undoable', async () => {
+    let finishSend: () => void = () => undefined;
+    const provider = makeProvider({
+      createPost: jest.fn(() => new Promise((resolve) => (finishSend = () => resolve({ uri: 'at://me/post/1', cid: 'cid-1' })))),
+      deletePost: jest.fn(async () => Promise.reject(new Error('offline'))),
+    });
+    const { handlers, say, scheduler, notify } = setup({ provider });
+    say('post hello from my new app');
+    const draft = await handlers.run('draft_post', { text: 'Hello from my new app.' });
+    say('yes');
+    await handlers.run('publish_draft', { draftId: draftIdOf(draft.result) });
+    handlers.publisher.startCountdown();
+    await scheduler.advance(UNDO_WINDOW_MS);
+    say('undo');
+    expect(handlers.heard('undo')).toMatchObject({ kind: 'undone', speak: "One moment, it's going out right now." });
+    finishSend();
+    await scheduler.advance(0);
+    expect(provider.deletePost).toHaveBeenCalledTimes(2);
+    expect(notify).toHaveBeenLastCalledWith(expect.stringMatching(/^Result of undo: REMOVE_FAILED\. It is public\./), "It went out, and I couldn't remove it. Say delete my last post to remove it.");
+    provider.deletePost.mockResolvedValueOnce(undefined);
+    expect((await handlers.run('undo', {})).result).toMatch(/^UNDONE: Deleted the post/);
   });
 
   it('catches drafts over 300 characters and publishes a split thread only after a new read-back', async () => {
