@@ -218,7 +218,7 @@ Each step of the script says what correct looks like, and the transcript opens w
 
 ## The voice agent's model
 
-The model is `AGENT_MODEL` in `src/agent/assistant.ts`: gpt-4.1, temperature 0.2. AKH-42 measured it against the other models Vapi offers. The likely switch is gpt-5.6-sol, the most capable of them, with reasoning off and on the fast tier. It starts each answer about 0.18 seconds later, costs about 60% more per turn, and held back at least as well on every publish-safety step. It comes as its own change after the publishing-loop fix (AKH-48), and is measured again on that flow, because the GPT-5.6 models got stuck after a hesitation (see below). The comparison is in AKH-42's pull request. To compare models, override the shipped one:
+The model is `AGENT_MODEL` in `src/agent/assistant.ts`: gpt-5.6-sol, the most capable OpenAI model Vapi offers, with reasoning off (`reasoningEffort: 'none'`), OpenAI's fast tier (`serviceTier: 'fast'`) and temperature 0.2. It replaced gpt-4.1 in AKH-42 after Akhilesh found the agent too dumb at times. On the publishing flow from AKH-48 it held back at least as well as gpt-4.1 on every safety step, starts each answer about 0.16 seconds later and costs about 60% more per turn. The comparison is in AKH-42's pull requests. To compare models, override the shipped one:
 
 ```sh
 EVAL_BACKEND=openai EVAL_MODEL=gpt-5.6-sol EVAL_REASONING_EFFORT=none EVAL_SERVICE_TIER=fast pnpm eval:agent
@@ -227,11 +227,11 @@ EVAL_BACKEND=openai EVAL_MODEL=gpt-4.1 EVAL_REASONING_EFFORT= pnpm eval:agent   
 
 Things that constrain the choice:
 - Take model ids from Vapi's list (docs.vapi.ai/providers/model/openai), not OpenAI's. Some OpenAI models, such as gpt-6.1-sol, aren't offered through Vapi.
-- On the GPT-5.x and GPT-6 models, OpenAI accepts a temperature other than 1 only with reasoning off, so switching to one means adding `reasoningEffort: 'none'` beside the model. With function tools on Chat Completions, gpt-6-luna refuses any reasoning effort above `none`.
-- Vapi refuses `reasoningEffort: 'none'` for gpt-5.5.
+- On the GPT-5.x and GPT-6 models, OpenAI accepts a temperature other than 1 only with reasoning off, which is why `reasoningEffort: 'none'` sits beside the model. Remove it and `serviceTier` if you switch to a model without reasoning, such as gpt-4.1. With function tools on Chat Completions, gpt-6-luna refuses any reasoning effort above `none`.
+- Vapi refuses `reasoningEffort: 'none'` for gpt-5.5 (observed 2026-11-15 when creating an assistant).
 - Reasoning at `low` added about 0.3 to 0.75 seconds per request in AKH-42's measurements.
-- Vapi's fast service tier (`serviceTier: 'fast'`) costs twice as much per token. It applies only to gpt-6-luna, gpt-5.6-sol, gpt-5.6-terra, gpt-5.6-luna and gpt-5.5, and Vapi ignores it for other models.
-- After a hedge ("okay let me think"), gpt-5.6-sol (6 of 6 runs) and gpt-5.6-terra (3 of 7) kept asking what to change, even after "go ahead", and never posted. gpt-4.1 posted. Re-check this step before switching.
+- Vapi's fast service tier (`serviceTier: 'fast'`) costs twice as much per token. Vapi's OpenAI provider page (docs.vapi.ai/providers/model/openai, read 2026-11-15) lists it for gpt-6-luna, gpt-5.6-sol, gpt-5.6-terra, gpt-5.6-luna and gpt-5.5 and says it is ignored for other models.
+- Before AKH-48, gpt-5.6-sol (6 of 6 runs) and gpt-5.6-terra (3 of 7) never posted after a hedge ("okay let me think") followed by "go ahead". On the fixed flow gpt-5.6-sol posts there, and on "post it".
 
 Before shipping a new model, confirm Vapi accepts the configuration by creating and then deleting a test assistant through Vapi's API, with `VAPI_PRIVATE_KEY` from your shell.
 
