@@ -4,10 +4,12 @@ import type { KeyValueStore } from '@/storage/keyValueStore';
 
 import type { NewPost, Post, PostRef, SocialAccount, SocialProvider, TimelinePage, UploadedImage } from '../types';
 import { mapFeedItem } from './mapPost';
+import { isHiddenByModeration } from './moderation';
 
 const SESSION_KEY = 'bluesky.session';
 const DEFAULT_SERVICE = 'https://bsky.social';
 const PUBLIC_APPVIEW = 'https://public.api.bsky.app';
+const MAX_FILTERED_PAGES = 3;
 const DEFAULT_DEMO_FEED = 'at://did:plc:z72i7hdynmk6r22z27h6tvur/app.bsky.feed.generator/whats-hot';
 
 type Options = { store: KeyValueStore; service?: string; demoFeed?: string };
@@ -59,13 +61,19 @@ export class BlueskyProvider implements SocialProvider {
   }
 
   async getTimeline({ cursor, limit = 30 }: { cursor?: string; limit?: number } = {}): Promise<TimelinePage> {
-    const { data } = this.agent.session
-      ? await this.agent.getTimeline({ cursor, limit })
-      : await this.publicAgent.app.bsky.feed.getFeed({ feed: this.demoFeed, cursor, limit });
-    return {
-      posts: data.feed.map(mapFeedItem).filter((post): post is Post => post !== null),
-      cursor: data.cursor ?? null,
-    };
+    let next = cursor;
+    for (let attempt = 0; attempt < MAX_FILTERED_PAGES; attempt += 1) {
+      const { data } = this.agent.session
+        ? await this.agent.getTimeline({ cursor: next, limit })
+        : await this.publicAgent.app.bsky.feed.getFeed({ feed: this.demoFeed, cursor: next, limit });
+      const posts = data.feed
+        .filter((item) => !isHiddenByModeration(item.post, this.agent.session?.did))
+        .map(mapFeedItem)
+        .filter((post): post is Post => post !== null);
+      next = data.cursor;
+      if (posts.length || !next) return { posts, cursor: next ?? null };
+    }
+    return { posts: [], cursor: next ?? null };
   }
 
   createPost(post: NewPost): Promise<PostRef> {

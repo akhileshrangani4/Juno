@@ -1,6 +1,8 @@
 import { createContext, createElement, use, useEffect, useState, type ReactNode } from 'react';
 import { AccessibilityInfo, Platform } from 'react-native';
 
+import { LoadingScreen } from '@/screens/LoadingScreen';
+
 const ScreenReaderContext = createContext(false);
 
 export function ScreenReaderProvider({ children }: { children: ReactNode }) {
@@ -11,7 +13,7 @@ export function ScreenReaderProvider({ children }: { children: ReactNode }) {
     const subscription = AccessibilityInfo.addEventListener('screenReaderChanged', setEnabled);
     return () => subscription.remove();
   }, []);
-  return enabled === null ? null : createElement(ScreenReaderContext, { value: enabled }, children);
+  return enabled === null ? createElement(LoadingScreen) : createElement(ScreenReaderContext, { value: enabled }, children);
 }
 
 export function useScreenReader(): boolean {

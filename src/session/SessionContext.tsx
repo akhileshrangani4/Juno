@@ -4,8 +4,11 @@ import { recordUser } from '@/backend/convex';
 import { createSocialProvider, type SocialAccount, type SocialProvider } from '@/social';
 import { secureStore } from '@/storage/keyValueStore';
 
+import { withTimeout } from './withTimeout';
+
 const ONBOARDED_KEY = 'app.onboarded';
 const GUEST_KEY = 'app.guest';
+const STARTUP_TIMEOUT_MS = 4000;
 
 type Session = {
   ready: boolean;
@@ -26,17 +29,31 @@ export function SessionProvider({ children, provider: injected }: { children: Re
   const [state, setState] = useState({ ready: false, onboarded: false, guest: false, account: null as SocialAccount | null });
 
   useEffect(() => {
+    let mounted = true;
     const read = (key: string) =>
-      secureStore.get(key).catch((error: unknown) => {
-        console.warn(`Could not read ${key} from secure storage`, error);
-        return null;
-      });
-    Promise.all([provider.restoreSession().catch(() => null), read(ONBOARDED_KEY), read(GUEST_KEY)]).then(
-      ([account, onboarded, guest]) => {
-        if (account) recordUser(provider.id, account);
-        setState({ ready: true, onboarded: onboarded === '1', guest: guest === '1', account });
-      },
-    );
+      withTimeout(
+        secureStore.get(key).catch((error: unknown) => {
+          console.warn(`Could not read ${key} from secure storage`, error);
+          return null;
+        }),
+        STARTUP_TIMEOUT_MS,
+        null,
+      );
+    const restore = provider.restoreSession().catch(() => null);
+    const adopt = (account: SocialAccount | null) => {
+      if (!mounted || !account) return;
+      recordUser(provider.id, account);
+      setState((current) => ({ ...current, account }));
+    };
+    Promise.all([withTimeout(restore, STARTUP_TIMEOUT_MS, undefined), read(ONBOARDED_KEY), read(GUEST_KEY)]).then(([account, onboarded, guest]) => {
+      if (!mounted) return;
+      setState({ ready: true, onboarded: onboarded === '1', guest: guest === '1', account: null });
+      if (account === undefined) restore.then(adopt);
+      else adopt(account);
+    });
+    return () => {
+      mounted = false;
+    };
   }, [provider]);
 
   const session: Session = {

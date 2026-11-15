@@ -2,26 +2,30 @@ import { useEffect } from 'react';
 import { Pressable, StyleSheet, Text } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
+import { useScreenReader } from '@/accessibility/useScreenReader';
 import { haptic } from '@/feedback/haptics';
-import { messages } from '@/narration/buildNarration';
+import { INTRO_SUMMARY, introInstructions } from '@/narration/buildNarration';
 import { useNarrator } from '@/narration/useNarrator';
 import { colors, type } from '@/theme';
 
 export function Intro({ onDone }: { onDone(): void }) {
   const narrator = useNarrator();
+  const screenReader = useScreenReader();
+  const instructions = introInstructions(screenReader);
 
   useEffect(() => {
-    narrator.speak(messages.intro);
+    if (screenReader) return;
+    narrator.speak(`${INTRO_SUMMARY} ${instructions}`);
     return () => narrator.stop();
-  }, [narrator]);
+  }, [narrator, screenReader, instructions]);
 
   return (
     <SafeAreaView style={styles.screen}>
       <Pressable
         style={styles.button}
         accessibilityRole="button"
-        accessibilityLabel="Welcome. Continue"
-        accessibilityHint="Double tap to continue to sign in."
+        accessibilityLabel={INTRO_SUMMARY}
+        accessibilityHint={instructions}
         onPress={() => {
           haptic('next');
           onDone();
@@ -30,7 +34,7 @@ export function Intro({ onDone }: { onDone(): void }) {
           Welcome
         </Text>
         <Text style={styles.body} maxFontSizeMultiplier={type.maxScale}>
-          {messages.intro}
+          {INTRO_SUMMARY} {instructions}
         </Text>
       </Pressable>
     </SafeAreaView>

@@ -75,8 +75,14 @@ export function buildPostNarration(post: Post, now: Date, description: string | 
 const GESTURES =
   'Tap the bottom half of the screen for the next post. Tap the top half for the previous post. Draw a circle clockwise anywhere on the screen to wake the voice agent. Draw a circle counter-clockwise to put it to sleep and go back to scrolling.';
 
+export const INTRO_SUMMARY = 'Welcome. This app reads your social feed aloud, one post at a time.';
+
+export function introInstructions(screenReader: boolean): string {
+  return `${GESTURES} ${screenReader ? 'Double tap to continue.' : 'Tap anywhere to continue.'}`;
+}
+
 export const messages = {
-  intro: `Welcome. This app reads your social feed aloud, one post at a time. ${GESTURES} Tap anywhere to continue.`,
+  unrecognized: 'Gesture not recognized.',
   gestures: GESTURES,
   alreadyAwake: 'The agent is already awake.',
   alreadyScrolling: 'You are already scrolling.',

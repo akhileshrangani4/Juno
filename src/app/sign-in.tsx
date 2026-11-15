@@ -1,4 +1,3 @@
-import { router } from 'expo-router';
 import { useEffect, useRef, useState, type ComponentRef } from 'react';
 import { KeyboardAvoidingView, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -6,6 +5,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { useScreenReader } from '@/accessibility/useScreenReader';
 import { haptic } from '@/feedback/haptics';
 import { useNarrator } from '@/narration/useNarrator';
+import { returnToFeed } from '@/session/returnToFeed';
 import { useSession } from '@/session/SessionContext';
 import { colors, type } from '@/theme';
 
@@ -41,7 +41,7 @@ export default function SignIn() {
     try {
       await signIn(handle, password);
       haptic('next');
-      router.replace('/');
+      returnToFeed();
     } catch {
       fail(`Could not sign in to ${provider.name}. Check your handle and app password, then try again.`);
     } finally {
@@ -52,7 +52,7 @@ export default function SignIn() {
   const leave = (action?: () => void | Promise<void>) => async () => {
     haptic('next');
     await action?.();
-    router.replace('/');
+    returnToFeed();
   };
 
   return (
