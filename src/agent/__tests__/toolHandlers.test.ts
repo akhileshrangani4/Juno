@@ -653,9 +653,9 @@ describe('agent and posts in other languages', () => {
     expect((await handlers.run('draft_repost', {})).speak).toBe(
       'Reposting Ana\'s post that starts, translated from Spanish, "Today we went to the market with my grandmother. We bought fresh…" to your followers. Shall I repost it?',
     );
-    await handlers.run('discard_draft', {});
-    say('Qué bonito');
-    expect((await handlers.run('draft_reply', { text: 'Qué bonito' })).speak).toBe(
+    const replying = foreign(spanishParts);
+    replying.say('Qué bonito');
+    expect((await replying.handlers.run('draft_reply', { text: 'Qué bonito' })).speak).toBe(
       'Replying to Ana\'s post that starts, translated from Spanish, "Today we went to the market with my grandmother. We bought fresh…": Qué bonito. Shall I send the reply?',
     );
   });
