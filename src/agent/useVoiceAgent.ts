@@ -11,8 +11,9 @@ import { secureStore } from '@/storage/keyValueStore';
 import { AgentSession, ConversationLog, type AgentStatus, type EndReason } from './AgentSession';
 import { agentMessages } from './agentMessages';
 import { buildAssistant } from './assistant';
-import { createConvexMemory } from './convexMemory';
-import { memoryIdentity } from './identity';
+import { convexMemoryAudience, createConvexMemory } from './convexMemory';
+import { createMemoryAccess } from './memoryAccess';
+import { createMemoryOffer } from './memoryOffer';
 import { ensureMicrophone } from './microphone';
 import { detailFor } from './narrationAdapter';
 import { narrationSettings } from './narrationSettings';
@@ -76,7 +77,15 @@ export function useVoiceAgent({
     if (!active) return;
     const publicKey = process.env.EXPO_PUBLIC_VAPI_PUBLIC_KEY;
     const conversation = new ConversationLog();
-    const memory = createConvexMemory(() => memoryIdentity(secureStore, latest.current.account));
+    const access = createMemoryAccess({
+      store: secureStore,
+      account: () => latest.current.account,
+      serviceAuth: (request) => provider.serviceAuth(request),
+      audience: convexMemoryAudience,
+      now: Date.now,
+    });
+    const memory = createConvexMemory(access, secureStore);
+    const memoryOffer = memory ? createMemoryOffer(secureStore, memory, () => latest.current.account) : null;
     const handlers = createToolHandlers({
       provider,
       account: () => latest.current.account,
@@ -91,6 +100,7 @@ export function useVoiceAgent({
       cachedDescription: (target, detail) => descriptionCache.peek(target, detail),
       settings: narrationSettings,
       memory,
+      memoryOffer,
       conversation,
       notify: (text, speak) => session.current?.notify(text, speak),
       schedule,
@@ -104,15 +114,18 @@ export function useVoiceAgent({
       microphone: () => ensureMicrophone((text) => speakAndWait(latest.current.narrator, text)).catch(() => 'denied' as const),
       assistant: async () => {
         const focus = latest.current.post;
-        const [memories, description] = await Promise.all([
+        const [memories, offer, description] = await Promise.all([
           memory ? withTimeout(memory.list(), MEMORY_TIMEOUT_MS) : Promise.resolve(null),
+          memoryOffer ? withTimeout(memoryOffer.prepare(), MEMORY_TIMEOUT_MS) : Promise.resolve(null),
           focus ? Promise.resolve(descriptionCache.peek(focus, detailFor('full', narrationSettings.get()))) : Promise.resolve(null),
         ]);
+        if (!offer) memoryOffer?.withdraw();
         return buildAssistant({
           account: describeAccount(latest.current.account),
           settings: describeSettings(narrationSettings.get()),
           memories: describeMemories(memories),
           focus: describeFocus(focus, description),
+          memoryOffer: offer,
         });
       },
       status: setStatus,

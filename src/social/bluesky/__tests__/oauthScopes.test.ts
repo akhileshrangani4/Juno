@@ -1,4 +1,5 @@
 import { OAUTH_SCOPES } from '../../../../convex/oauthClientMetadata';
+import { MEMORY_METHOD, memoryAudience } from '../../../../convex/memoryService';
 import type { SocialProvider } from '../../types';
 import { BlueskyProvider } from '../BlueskyProvider';
 import type { BlueskyOAuth } from '../oauth';
@@ -9,7 +10,9 @@ const APPVIEW = 'did:web:api.bsky.app%23bsky_appview';
 const LIKE = `at://${DID}/app.bsky.feed.like/3kaaaaaaaaaaa`;
 const REPOST = `at://${DID}/app.bsky.feed.repost/3kaaaaaaaaaab`;
 
-type Request = { nsid: string; body: any; contentType: string | null };
+type Request = { nsid: string; params: URLSearchParams; body: any; contentType: string | null };
+
+const MEMORY_AUDIENCE = memoryAudience('https://dependable-goshawk-583.convex.site');
 
 const postView = (n: number) => ({
   uri: `at://${DID}/app.bsky.feed.post/${n}`,
@@ -28,10 +31,14 @@ const responses: Record<string, (body: any) => unknown> = {
   'app.bsky.feed.getPostThread': () => ({ thread: { $type: 'app.bsky.feed.defs#threadViewPost', post: postView(1), replies: [] } }),
   'com.atproto.repo.createRecord': (body) => ({ uri: `at://${DID}/${body.collection}/3kaaaaaaaaaac`, cid: CID }),
   'com.atproto.repo.deleteRecord': () => ({}),
+  'com.atproto.server.getServiceAuth': () => ({ token: 'proof' }),
   'com.atproto.repo.uploadBlob': () => ({ blob: { $type: 'blob', ref: { $link: CID }, mimeType: 'image/jpeg', size: 4 } }),
 };
 
-function scopeFor({ nsid, body, contentType }: Request): string {
+// A service-auth token is granted by the rpc scope of the method and audience it is for, not by the method
+// that fetches it (https://atproto.com/specs/permission).
+function scopeFor({ nsid, params, body, contentType }: Request): string {
+  if (nsid === 'com.atproto.server.getServiceAuth') return `rpc:${params.get('lxm')}?aud=${params.get('aud')}`;
   if (nsid === 'com.atproto.repo.createRecord') return `repo:${body.collection}?action=create`;
   if (nsid === 'com.atproto.repo.putRecord') return `repo:${body.collection}?action=update`;
   if (nsid === 'com.atproto.repo.deleteRecord') return `repo:${body.collection}?action=delete`;
@@ -44,7 +51,7 @@ function granted(scope: string): boolean {
     const mime = scope.slice('blob:'.length);
     return OAUTH_SCOPES.some((candidate) => candidate.startsWith('blob:') && new RegExp(`^${candidate.slice(5).replace('*', '[^/]+')}$`).test(mime));
   }
-  return OAUTH_SCOPES.includes(scope);
+  return OAUTH_SCOPES.includes(scope) || (scope.startsWith('rpc:') && OAUTH_SCOPES.includes(scope.replace(/\?aud=.*$/, '?aud=*')));
 }
 
 async function signedIn() {
@@ -52,11 +59,12 @@ async function signedIn() {
   const session = {
     did: DID,
     fetchHandler: async (path: string, init: RequestInit) => {
-      const nsid = path.split('?')[0].replace('/xrpc/', '');
+      const [route, query] = path.split('?');
+      const nsid = route.replace('/xrpc/', '');
       const contentType = new Headers(init.headers).get('content-type');
       const raw = init.body instanceof Uint8Array && contentType === 'application/json' ? new TextDecoder().decode(init.body) : init.body;
       const body = typeof raw === 'string' ? JSON.parse(raw) : undefined;
-      requests.push({ nsid, body, contentType });
+      requests.push({ nsid, params: new URLSearchParams(query), body, contentType });
       const respond = responses[nsid];
       if (!respond) throw new Error(`No fake response for ${nsid}`);
       return new Response(JSON.stringify(respond(body)), { status: 200, headers: { 'content-type': 'application/json' } });
@@ -106,6 +114,7 @@ const everyMethod: Record<Exclude<keyof SocialProvider, 'id' | 'name'>, (provide
   unrepost: async (provider) => [await provider.unrepost(post, { uri: REPOST }), await provider.unrepost(post)],
   deletePost: (provider) => provider.deletePost(post),
   getMyLatestPost: (provider) => provider.getMyLatestPost(),
+  serviceAuth: (provider) => provider.serviceAuth({ aud: MEMORY_AUDIENCE, lxm: MEMORY_METHOD }),
 };
 
 describe('OAuth scopes', () => {
@@ -138,11 +147,12 @@ describe('OAuth scopes', () => {
         `rpc:app.bsky.feed.getAuthorFeed?aud=${APPVIEW}`,
         `rpc:app.bsky.feed.getPosts?aud=${APPVIEW}`,
         `rpc:app.bsky.feed.getTimeline?aud=${APPVIEW}`,
+        `rpc:${MEMORY_METHOD}?aud=${MEMORY_AUDIENCE}`,
       ].sort(),
     );
   });
 
-  it('ask for nothing beyond those calls and the post thread read that comments will use', () => {
+  it('ask for nothing beyond those calls, the post thread read that comments will use, and the memory proof', () => {
     expect(OAUTH_SCOPES).toEqual([
       'atproto',
       'repo:app.bsky.feed.post?action=create',
@@ -157,6 +167,7 @@ describe('OAuth scopes', () => {
       `rpc:app.bsky.feed.getPosts?aud=${APPVIEW}`,
       `rpc:app.bsky.feed.getPostThread?aud=${APPVIEW}`,
       `rpc:app.bsky.actor.getProfile?aud=${APPVIEW}`,
+      `rpc:${MEMORY_METHOD}?aud=*`,
     ]);
   });
 });

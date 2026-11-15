@@ -4,6 +4,7 @@ import { makePost } from '@/testing/fixtures';
 
 import { ConversationLog } from '@/agent/AgentSession';
 import type { Memory, MemoryClient } from '@/agent/memoryClient';
+import type { MemoryOffer } from '@/agent/memoryOffer';
 import { settingsStore } from '@/agent/settings';
 import { PreferencesStore } from '@/narration/preferences';
 import { createToolHandlers, type AgentDeps } from '@/agent/toolHandlers';
@@ -26,6 +27,7 @@ export function makeProvider(overrides: Partial<SocialProvider> = {}): jest.Mock
     unrepost: jest.fn(async () => true),
     deletePost: jest.fn(async () => undefined),
     getMyLatestPost: jest.fn(async () => null),
+    serviceAuth: jest.fn(async () => 'proof'),
     ...overrides,
   } as jest.Mocked<SocialProvider>;
 }
@@ -46,6 +48,8 @@ export function makeMemory(initial: Memory[] = []): jest.Mocked<MemoryClient> & 
       for (const item of gone) items.splice(items.indexOf(item), 1);
       return gone;
     }),
+    savedSignedOut: jest.fn(async () => []),
+    carryOver: jest.fn(async () => ({ carried: 0, left: 0 })),
   };
 }
 
@@ -84,7 +88,9 @@ export const maya = makePost({
 
 export const nextPost = makePost({ uri: 'at://did:plc:sam/app.bsky.feed.post/2', cid: 'cid-2', text: 'Second post here.' });
 
-export function setup(options: { signedIn?: boolean; focus?: Post | null; memory?: MemoryClient | null; provider?: jest.Mocked<SocialProvider> } = {}) {
+export function setup(
+  options: { signedIn?: boolean; focus?: Post | null; memory?: MemoryClient | null; memoryOffer?: MemoryOffer | null; provider?: jest.Mocked<SocialProvider> } = {},
+) {
   const provider = options.provider ?? makeProvider();
   const scheduler = makeScheduler();
   const conversation = new ConversationLog();
@@ -105,6 +111,7 @@ export function setup(options: { signedIn?: boolean; focus?: Post | null; memory
     cachedDescription: () => null,
     settings,
     memory: options.memory === undefined ? makeMemory() : options.memory,
+    memoryOffer: options.memoryOffer ?? null,
     conversation,
     notify,
     schedule: scheduler.schedule,

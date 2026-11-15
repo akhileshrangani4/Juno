@@ -17,7 +17,7 @@ export const clientMessages = ['tool-calls', 'transcript', 'status-update', 'spe
 export function buildAssistant(context: PromptContext) {
   return {
     name: `${APP_NAME} voice agent`,
-    firstMessage: FIRST_MESSAGE,
+    firstMessage: context.memoryOffer ? `${FIRST_MESSAGE} ${context.memoryOffer}` : FIRST_MESSAGE,
     firstMessageMode: 'assistant-speaks-first' as const,
     model: {
       provider: 'openai' as const,

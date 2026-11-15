@@ -1,4 +1,5 @@
 import { APP_NAME } from '../src/appName';
+import { MEMORY_METHOD } from './memoryService';
 
 export const OAUTH_CLIENT_METADATA_PATH = '/oauth/client-metadata.json';
 export const OAUTH_REDIRECT_PATH = '/oauth/callback';
@@ -19,6 +20,9 @@ export const OAUTH_SCOPES = [
   `rpc:app.bsky.feed.getPosts?aud=${BLUESKY_APPVIEW}`,
   `rpc:app.bsky.feed.getPostThread?aud=${BLUESKY_APPVIEW}`,
   `rpc:app.bsky.actor.getProfile?aud=${BLUESKY_APPVIEW}`,
+  // The memory proof (convex/memoryAuth.ts). Any audience, because the proof names the Convex deployment, which
+  // isn't necessarily where this metadata is served; the method is Juno's own and opens nothing else.
+  `rpc:${MEMORY_METHOD}?aud=*`,
 ];
 
 export function oauthRedirectUri(origin: string): string {

@@ -97,6 +97,11 @@ const definitions: { name: string; description: string; parameters: Schema }[] =
     description: 'Forget memories the user asks to forget.',
     parameters: { type: 'object', properties: { ids: { type: 'array', items: { type: 'string' }, description: 'Memory ids from the list.' } }, required: ['ids'] },
   },
+  {
+    name: 'answer_memory_offer',
+    description: "Only after your first words asked whether to keep what they saved before signing in: keep true if they said yes, keep false if they said no.",
+    parameters: { type: 'object', properties: { keep: { type: 'boolean', description: 'true only for a plain yes.' } }, required: ['keep'] },
+  },
   { name: 'open_sign_in', description: 'End the conversation and open the sign-in screen. Only after the user agrees.', parameters: none },
   { name: 'end_conversation', description: 'End the conversation and go back to scrolling, when the user says goodbye, stop, or that they are done.', parameters: none },
 ];
@@ -120,6 +125,7 @@ export type ToolName =
   | 'remember'
   | 'recall_memories'
   | 'forget_memory'
+  | 'answer_memory_offer'
   | 'open_sign_in'
   | 'end_conversation';
 

@@ -201,6 +201,12 @@ export class BlueskyProvider implements SocialProvider {
     return data.feed.filter((item) => !item.reason).map(mapFeedItem).find((post) => post?.author.id === did) ?? null;
   }
 
+  async serviceAuth({ aud, lxm }: { aud: string; lxm: string }): Promise<string> {
+    if (!this.signed) throw new Error('Not signed in');
+    const { data } = await this.agent().com.atproto.server.getServiceAuth({ aud, lxm });
+    return data.token;
+  }
+
   async uploadImage(image: { uri: string; mimeType: string }, alt: string): Promise<UploadedImage> {
     const bytes = new Uint8Array(await (await fetch(image.uri)).arrayBuffer());
     const { data } = await this.agent().uploadBlob(bytes, { encoding: image.mimeType });
