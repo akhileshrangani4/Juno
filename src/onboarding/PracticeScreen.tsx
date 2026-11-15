@@ -1,5 +1,5 @@
-import { useEffect, useRef, useState } from 'react';
-import { Platform, Pressable, StyleSheet, Text, View, type AccessibilityActionEvent, type AccessibilityRole } from 'react-native';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { Platform, Pressable, StyleSheet, Text, useWindowDimensions, View, type AccessibilityActionEvent, type AccessibilityRole } from 'react-native';
 import { ScrollView } from 'react-native-gesture-handler';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
@@ -15,10 +15,12 @@ import { classifyStroke } from './strokes';
 
 const DIRECT_TOUCH = 'allowsDirectInteraction' as unknown as AccessibilityRole;
 const SCREEN_READER_DELAY_MS = 900;
+const STACK_BUTTONS_AT_FONT_SCALE = 1.2;
 
 export function PracticeScreen({ onDone }: { onDone(): void }) {
   const narrator = useNarrator();
   const screenReader = useScreenReader();
+  const stacked = useWindowDimensions().fontScale >= STACK_BUTTONS_AT_FONT_SCALE;
   const [practice, setPractice] = useState(() => startPractice(Date.now()));
   const latest = useRef(practice);
 
@@ -89,49 +91,51 @@ export function PracticeScreen({ onDone }: { onDone(): void }) {
         }
         onAccessibilityAction={onAccessibilityAction}
         onAccessibilityEscape={() => dispatch({ type: 'skip' })}>
-        <View style={[styles.half, current?.half === 'top' && styles.target]}>
+        <Panel testID="practice-step" target={current?.half === 'top'} resetKey={state.step}>
           <Text style={styles.progress} maxFontSizeMultiplier={type.maxScale}>
             {complete ? 'Practice complete' : `Step ${state.step + 1} of ${GESTURES.length}`}
           </Text>
-          <Text style={styles.title} maxFontSizeMultiplier={type.maxScale} adjustsFontSizeToFit numberOfLines={3}>
+          <Text style={styles.title} maxFontSizeMultiplier={type.maxScale}>
             {current ? `${current.symbol} ${current.title}` : 'All done'}
           </Text>
           {current?.half === 'top' ? <TapHere /> : null}
-        </View>
-        <View style={[styles.half, current?.half === 'bottom' && styles.target]}>
-          <Caption text={spoken} />
+        </Panel>
+        <Panel testID="practice-caption" target={current?.half === 'bottom'} resetKey={spoken}>
+          <Text style={styles.caption} maxFontSizeMultiplier={type.maxScale}>
+            {spoken}
+          </Text>
           {current?.half === 'bottom' ? <TapHere /> : null}
-        </View>
+        </Panel>
       </GestureSurface>
-      <View style={styles.controls}>
-        <Button label="Repeat" accessibilityLabel={complete ? 'Repeat the summary' : 'Repeat the instruction'} hint="Speaks the current step again." onPress={() => dispatch({ type: 'repeat' })} />
+      <View testID="practice-controls" style={[styles.controls, stacked && styles.stacked]}>
+        <Button label="Repeat" accessibilityLabel={complete ? 'Repeat the summary' : 'Repeat the instruction'} hint="Speaks the current step again." onPress={() => dispatch({ type: 'repeat' })} inRow={!stacked} />
         <Button
           label={complete ? 'Continue' : 'Skip practice'}
           hint={complete ? 'Leaves gesture practice.' : 'Skips gesture practice. You can practice again from account settings.'}
           onPress={() => dispatch({ type: 'skip' })}
           primary
+          inRow={!stacked}
         />
       </View>
     </SafeAreaView>
   );
 }
 
-function Caption({ text }: { text: string }) {
+function Panel({ testID, target, resetKey, children }: { testID: string; target: boolean; resetKey: string | number; children: ReactNode }) {
   const stroke = useStrokeGesture();
   return (
     <ScrollView
-      key={text}
-      testID="practice-caption"
+      key={resetKey}
+      testID={testID}
       simultaneousWith={stroke?.gesture}
       onScroll={stroke?.onScroll}
       scrollEventThrottle={16}
       bounces={false}
-      style={styles.captionScroll}
+      style={[styles.half, target && styles.target]}
+      contentContainerStyle={styles.halfContent}
       indicatorStyle="white"
       persistentScrollbar>
-      <Text style={styles.caption} maxFontSizeMultiplier={type.maxScale}>
-        {text}
-      </Text>
+      {children}
     </ScrollView>
   );
 }
@@ -144,10 +148,10 @@ function TapHere() {
   );
 }
 
-function Button({ label, accessibilityLabel, hint, onPress, primary }: { label: string; accessibilityLabel?: string; hint: string; onPress(): void; primary?: boolean }) {
+function Button({ label, accessibilityLabel, hint, onPress, primary, inRow }: { label: string; accessibilityLabel?: string; hint: string; onPress(): void; primary?: boolean; inRow: boolean }) {
   return (
     <Pressable
-      style={[styles.button, primary && styles.primary]}
+      style={[styles.button, inRow && styles.inRow, primary && styles.primary]}
       accessibilityRole="button"
       accessibilityLabel={accessibilityLabel ?? label}
       accessibilityHint={hint}
@@ -162,15 +166,17 @@ function Button({ label, accessibilityLabel, hint, onPress, primary }: { label: 
 const styles = StyleSheet.create({
   screen: { flex: 1, backgroundColor: colors.background },
   surface: { flex: 1, padding: 12, gap: 12 },
-  half: { flex: 1, overflow: 'hidden', borderWidth: 3, borderColor: colors.muted, borderRadius: 24, backgroundColor: colors.surface, padding: 20, gap: 12, justifyContent: 'center' },
+  half: { flex: 1, borderWidth: 3, borderColor: colors.muted, borderRadius: 24, backgroundColor: colors.surface },
+  halfContent: { flexGrow: 1, padding: 20, gap: 12, justifyContent: 'center' },
   target: { borderWidth: 6, borderColor: colors.focus },
   progress: { color: colors.muted, fontSize: type.label, fontWeight: '700' },
   title: { color: colors.focus, fontSize: 36, fontWeight: '800' },
-  captionScroll: { flexGrow: 0, flexShrink: 1 },
   caption: { color: colors.text, fontSize: 20, lineHeight: 26, fontWeight: '600' },
   tapHere: { color: colors.focus, fontSize: type.title, fontWeight: '800', textAlign: 'center' },
   controls: { flexDirection: 'row', gap: 12, paddingHorizontal: 12, paddingBottom: 12 },
-  button: { flex: 1, minHeight: 72, borderRadius: 16, borderWidth: 3, borderColor: colors.focus, alignItems: 'center', justifyContent: 'center', padding: 12 },
+  stacked: { flexDirection: 'column' },
+  inRow: { flex: 1 },
+  button: { minHeight: 72, borderRadius: 16, borderWidth: 3, borderColor: colors.focus, alignItems: 'center', justifyContent: 'center', padding: 12 },
   primary: { backgroundColor: colors.focus },
   buttonText: { color: colors.focus, fontSize: type.title, fontWeight: '800', textAlign: 'center' },
 });

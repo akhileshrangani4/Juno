@@ -1,6 +1,6 @@
 import { act, fireEvent, render, screen } from '@testing-library/react-native';
 import type { ReactNode } from 'react';
-import { View } from 'react-native';
+import { StyleSheet, View } from 'react-native';
 
 import { DiscoverySurface } from '../DiscoverySurface';
 import { gestureHelp, GESTURES } from '../gestures';
@@ -28,6 +28,11 @@ jest.mock('@/storage/keyValueStore', () => {
   const actual = jest.requireActual('@/storage/keyValueStore');
   return { ...actual, secureStore: actual.createMemoryStore() };
 });
+const mockWindow = { fontScale: 1 };
+jest.mock('react-native/Libraries/Utilities/useWindowDimensions', () => ({
+  __esModule: true,
+  default: () => ({ width: 393, height: 852, scale: 3, fontScale: mockWindow.fontScale }),
+}));
 jest.mock('react-native-gesture-handler', () => ({ ScrollView: jest.requireActual('react-native').ScrollView }));
 jest.mock('@/gestures/GestureSurface', () => ({
   useStrokeGesture: () => null,
@@ -120,6 +125,34 @@ describe('PracticeScreen', () => {
     expect(mockNarrator.stop).not.toHaveBeenCalled();
   });
 
+  it('stacks Repeat and Skip practice at large text sizes so neither label breaks mid-word', async () => {
+    mockWindow.fontScale = 1;
+    const { unmount } = await render(<PracticeScreen onDone={jest.fn()} />);
+    expect(StyleSheet.flatten(screen.getByTestId('practice-controls').props.style).flexDirection).toBe('row');
+    expect(StyleSheet.flatten(screen.getByRole('button', { name: 'Skip practice' }).props.style).flex).toBe(1);
+    await unmount();
+
+    mockWindow.fontScale = 3.1;
+    await render(<PracticeScreen onDone={jest.fn()} />);
+    expect(StyleSheet.flatten(screen.getByTestId('practice-controls').props.style).flexDirection).toBe('column');
+    expect(StyleSheet.flatten(screen.getByRole('button', { name: 'Skip practice' }).props.style).flex).toBeUndefined();
+    mockWindow.fontScale = 1;
+  });
+
+  it('lets the step title grow and scroll inside its half instead of shrinking, while both halves keep an equal share of the tap area', async () => {
+    await render(<PracticeScreen onDone={jest.fn()} />);
+    const title = screen.getByText(`${GESTURES[0].symbol} ${GESTURES[0].title}`);
+    expect(title.props.adjustsFontSizeToFit).toBeUndefined();
+    expect(title.props.numberOfLines).toBeUndefined();
+    expect(title.props.allowFontScaling).not.toBe(false);
+    for (const id of ['practice-step', 'practice-caption']) {
+      const half = screen.getByTestId(id);
+      expect(half.type).toBe('RCTScrollView');
+      expect(half.props.persistentScrollbar).toBe(true);
+      expect(StyleSheet.flatten(half.props.style).flex).toBe(1);
+    }
+  });
+
   it('repeats the instruction from the button', async () => {
     await render(<PracticeScreen onDone={jest.fn()} />);
     await fireEvent.press(screen.getByRole('button', { name: 'Repeat the instruction' }));
@@ -196,6 +229,22 @@ describe('DiscoverySurface', () => {
     expect(feedCue).toHaveBeenCalledTimes(7);
     await act(async () => mockSurface.props.onUnrecognizedStroke(curve));
     expect(mockNarrator.speak).toHaveBeenCalledWith(GESTURES[2].hint);
+  });
+
+  it('drops a hint held for the end of a post when the agent woke without a gesture, such as the developer wake', async () => {
+    mockNarrator.speaking.mockReturnValue(true);
+    const surface = (mode: 'scroll' | 'agent') => (
+      <DiscoverySurface discoveryMode={mode} tapsEnabled onTapTop={jest.fn()} onTapBottom={jest.fn()} onCircle={jest.fn()} accessibilityActions={[]}>
+        <View />
+      </DiscoverySurface>
+    );
+    const { rerender } = await render(surface('scroll'));
+    await act(async () => undefined);
+    for (let i = 0; i < 3; i += 1) await act(async () => mockSurface.props.onUnrecognizedStroke(curve));
+    await rerender(surface('agent'));
+    mockNarrator.speaking.mockReturnValue(false);
+    await narrationEnds();
+    expect(mockNarrator.speak).not.toHaveBeenCalled();
   });
 
   it('forwards magic tap and escape, and passes neither when the feed has none', async () => {

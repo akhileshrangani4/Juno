@@ -15,13 +15,13 @@ export const TIP_EVERY = 3;
 const stepText = (step: number, gestures: TaughtGesture[]) => `Step ${step + 1} of ${gestures.length}. ${gestures[step].instruction}`;
 
 export const completeText = (gestures: TaughtGesture[] = GESTURES) =>
-  `That's all ${gestures.length}. ${gestureSummary(gestures)} The Gesture help action on the feed repeats this. Tap anywhere to continue.`;
+  `That's all ${gestures.length}. ${gestureSummary(gestures)} With VoiceOver, the feed's Gesture help repeats this. Tap above the buttons to finish.`;
 
 export function startPractice(at: number, gestures: TaughtGesture[] = GESTURES): PracticeResult {
   return {
     state: { phase: 'practicing', step: 0, misses: 0, readyAt: at },
     feedback: {
-      text: `Let's practice ${gestures.length} gestures, one at a time. To skip, press Skip practice at the bottom right, choose it from the VoiceOver actions, or with Voice Control, say: tap Skip practice. ${stepText(0, gestures)}`,
+      text: `Let's practice ${gestures.length} gestures, one at a time. To skip, press Skip practice at the bottom of the screen, choose it from the VoiceOver actions, or with Voice Control, say: tap Skip practice. ${stepText(0, gestures)}`,
       haptic: null,
     },
   };
