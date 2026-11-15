@@ -66,7 +66,8 @@ export const cachedKey = internalQuery({
   },
 });
 
-// A fetched key, or null when the document couldn't be had or held no usable key; either way the fetch time.
+// A fetched key (or the one verified before, when the fetch found none), or null when there is no key at all;
+// either way the fetch time.
 export const storeKey = internalMutation({
   args: { did: v.string(), key: v.union(v.null(), v.object({ curve: v.union(v.literal('p256'), v.literal('k256')), publicKey: v.string() })) },
   handler: async (ctx, { did, key }) => {
