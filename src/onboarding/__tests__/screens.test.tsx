@@ -110,6 +110,16 @@ describe('PracticeScreen', () => {
     expect(text.props.allowFontScaling).not.toBe(false);
   });
 
+  it('stops its own speech on the way out, and not on unmount, so the screen it returns to can announce itself', async () => {
+    const onDone = jest.fn(() => expect(mockNarrator.stop).toHaveBeenCalledTimes(1));
+    const { unmount } = await render(<PracticeScreen onDone={onDone} />);
+    await fireEvent.press(screen.getByRole('button', { name: 'Skip practice' }));
+    expect(onDone).toHaveBeenCalledTimes(1);
+    mockNarrator.stop.mockClear();
+    await unmount();
+    expect(mockNarrator.stop).not.toHaveBeenCalled();
+  });
+
   it('repeats the instruction from the button', async () => {
     await render(<PracticeScreen onDone={jest.fn()} />);
     await fireEvent.press(screen.getByRole('button', { name: 'Repeat the instruction' }));

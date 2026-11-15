@@ -27,10 +27,7 @@ export function PracticeScreen({ onDone }: { onDone(): void }) {
     const timer = setTimeout(() => {
       if (latest.current === scheduled && scheduled.feedback) narrator.speak(scheduled.feedback.text);
     }, screenReader ? SCREEN_READER_DELAY_MS : 0);
-    return () => {
-      clearTimeout(timer);
-      narrator.stop();
-    };
+    return () => clearTimeout(timer);
   }, [narrator, screenReader]);
 
   const dispatch = (event: PracticeEvent) => {
@@ -40,6 +37,7 @@ export function PracticeScreen({ onDone }: { onDone(): void }) {
     setPractice(next);
     if (next.state.phase === 'closed') {
       haptic('next');
+      narrator.stop();
       onDone();
       return;
     }
