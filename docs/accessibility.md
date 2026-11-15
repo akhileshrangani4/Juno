@@ -2,6 +2,8 @@
 
 The app is built for people who cannot see the screen. Most of them run VoiceOver (iOS) or TalkBack (Android), and both screen readers intercept touches: a single tap moves the screen reader cursor instead of reaching the app, and a one-finger drag is read as "explore by touch". Left alone, the half-screen taps and the circle gesture would never fire for the people the app is for.
 
+The app is iOS first: VoiceOver is the supported screen reader for now. The code stays cross-platform and the TalkBack handling below is in place, but TalkBack is unverified.
+
 Nothing in this document has been tried with VoiceOver or TalkBack on a physical phone yet. Simulators and cloud phones cannot run them properly. The checklist at the end is what to try on a real device.
 
 ## The main screen is one accessibility element
@@ -24,7 +26,7 @@ Users can turn direct touch off per app in the VoiceOver rotor. For them, and as
 | Two-finger double tap (magic tap, iOS) | Wake the agent | Back to scrolling |
 | Two-finger scrub (escape, iOS) | - | Back to scrolling |
 
-### Android: adjustable element plus two-finger gestures
+### Android (unverified): adjustable element plus two-finger gestures
 
 Android has no direct-touch trait. With TalkBack on, the element has the `adjustable` role, so volume keys or swipe up and down step through posts, double tap goes to the next post, and the custom actions above are in the TalkBack actions menu. TalkBack passes two-finger drags to the app as one-finger drags, so the circle can be drawn with two fingers.
 
@@ -64,6 +66,6 @@ Black background, white 30 point bold text, a thick yellow border around the foc
 1. VoiceOver on: do taps on each half and both circles work without double tapping? (Direct touch.)
 2. VoiceOver on: does the app's announcement cut off VoiceOver's reading of the hint, or the other way round?
 3. VoiceOver direct touch disabled in the rotor: double tap, swipe up and down, magic tap, scrub.
-4. TalkBack on: swipe up and down, double tap, actions menu, two-finger circle.
+4. Later, when Android is in scope: TalkBack swipe up and down, double tap, actions menu, two-finger circle.
 5. Haptic patterns: are the five patterns distinguishable?
 6. Speech with the ringer switch on silent (iOS silences expo-speech in silent mode unless an audio session is configured; that belongs with the Vapi audio work).
