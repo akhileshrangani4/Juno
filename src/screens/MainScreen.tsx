@@ -8,6 +8,8 @@ import { actionHistory } from '@/actions/history';
 import type { AgentStatus, EndReason } from '@/agent/AgentSession';
 import { onDevWake } from '@/agent/devWake';
 import { useVoiceAgent } from '@/agent/useVoiceAgent';
+import { POST_FIRST_MESSAGE } from '@/agent/assistant';
+import { onAppLink, type AppLink } from '@/links/appLinks';
 import { registerCommentsController } from '@/comments/commentsControl';
 import { useComments } from '@/comments/useComments';
 import { haptic } from '@/feedback/haptics';
@@ -53,6 +55,7 @@ export function MainScreen() {
   const comments = useComments(provider);
   const { thread, reply } = comments;
   const [mode, setMode] = useState<Mode>('scroll');
+  const [opening, setOpening] = useState<'post' | null>(null);
   const [narration, setNarration] = useState('');
   const prefix = useRef('');
   const entering = useRef(false);
@@ -76,10 +79,11 @@ export function MainScreen() {
 
   const onAgentExit = (reason: EndReason, message: string) => {
     prefix.current = [message, takeHeld()].filter(Boolean).join(' ');
+    setOpening(null);
     changeMode('scroll');
     if (reason === 'signIn') router.push('/sign-in');
   };
-  const agent = useVoiceAgent({ active: mode === 'agent', post, feed: { state, go }, narrator, onExit: onAgentExit });
+  const agent = useVoiceAgent({ active: mode === 'agent', post, feed: { state, go }, narrator, onExit: onAgentExit, opening });
   const agentStatus = agent.status;
 
   useEffect(() => onDevWake(() => changeMode('agent')), []);
@@ -193,10 +197,34 @@ export function MainScreen() {
       return;
     }
     haptic(next === 'agent' ? 'agentAwake' : 'agentAsleep');
-    if (next === 'scroll') prefix.current = [messages.agentAsleep, takeHeld()].filter(Boolean).join(' ');
-    else comments.close();
+    if (next === 'scroll') {
+      prefix.current = [messages.agentAsleep, takeHeld()].filter(Boolean).join(' ');
+      setOpening(null);
+    } else comments.close();
     changeMode(next);
   };
+
+  // The widget, Siri and Shortcuts links. juno://feed reads the post in focus from the start, in the feed;
+  // juno://agent wakes the agent as the clockwise circle does; juno://post wakes it asking what to post, and the
+  // post then goes through the usual draft, read-back and yes. A link never does anything else.
+  const openLink = (link: AppLink) => {
+    if (link === 'feed') {
+      if (mode === 'agent') return switchMode('scroll');
+      if (thread) return closeComments();
+      if (post) postNarrator.focus(post);
+      return;
+    }
+    if (link === 'post') {
+      if (mode === 'agent') return void agent.say(POST_FIRST_MESSAGE);
+      setOpening('post');
+    }
+    if (mode !== 'agent') switchMode('agent');
+  };
+  const linkHandler = useRef(openLink);
+  useEffect(() => {
+    linkHandler.current = openLink;
+  });
+  useEffect(() => onAppLink((link) => linkHandler.current(link)), []);
 
   const target = thread ? reply : post;
   const liked = target ? !!likeUriOf(target) : false;

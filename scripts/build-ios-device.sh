@@ -22,7 +22,12 @@ if [ "${#workspaces[@]}" -ne 1 ]; then
 fi
 workspace=${workspaces[0]}
 signing=(DEVELOPMENT_TEAM="$APPLE_TEAM_ID" CODE_SIGN_STYLE=Automatic)
-if [ -n "${IOS_BUNDLE_ID:-}" ]; then signing+=(PRODUCT_BUNDLE_IDENTIFIER="$IOS_BUNDLE_ID"); fi
+if [ -n "${IOS_BUNDLE_ID:-}" ]; then
+  # Renames the app and its widget together in the generated project: the widget's identifier must start with the
+  # app's, so a command-line PRODUCT_BUNDLE_IDENTIFIER (which would give both the same identifier) can't be used.
+  app_id=$(node -p "require('./app.json').expo.ios.bundleIdentifier")
+  sed -i '' "s/${app_id//./\\.}/${IOS_BUNDLE_ID}/g" "${workspace%.xcworkspace}.xcodeproj/project.pbxproj"
+fi
 xcodebuild \
   -workspace "$workspace" \
   -scheme "$(basename "$workspace" .xcworkspace)" \

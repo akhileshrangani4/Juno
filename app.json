@@ -68,7 +68,9 @@
           "microphonePermission": "Juno's voice agent listens through the microphone only while it is awake, after you draw a clockwise circle."
         }
       ],
-      "expo-localization"
+      "expo-localization",
+      "@bacons/apple-targets",
+      "./plugins/withAppShortcuts"
     ],
     "experiments": {
       "typedRoutes": true,

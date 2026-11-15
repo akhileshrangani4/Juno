@@ -60,20 +60,23 @@ export function useVoiceAgent({
   feed,
   narrator,
   onExit,
+  opening = null,
 }: {
   active: boolean;
   post: Post | null;
   feed: Feed;
   narrator: Narrator;
   onExit(reason: EndReason, message: string): void;
+  // juno://post: the agent's first words ask what to post. Nothing else about the call changes.
+  opening?: 'post' | null;
 }): { status: AgentStatus | null; say(text: string): boolean } {
   const { provider, account } = useSession();
   const [status, setStatus] = useState<AgentStatus | null>(null);
-  const latest = useRef({ post, feed, narrator, onExit, account });
+  const latest = useRef({ post, feed, narrator, onExit, account, opening });
   const session = useRef<AgentSession | null>(null);
 
   useEffect(() => {
-    latest.current = { post, feed, narrator, onExit, account };
+    latest.current = { post, feed, narrator, onExit, account, opening };
   });
 
   useEffect(() => {
@@ -121,10 +124,10 @@ export function useVoiceAgent({
       conversation,
       microphone: () => ensureMicrophone((text) => speakAndWait(latest.current.narrator, text)).catch(() => 'denied' as const),
       assistant: async () => {
-        const focus = latest.current.post;
+        const { post: focus, opening: startWith } = latest.current;
         const [memories, offer, description] = await Promise.all([
           memory ? withTimeout(memory.list().catch((error: unknown) => (error instanceof MemorySignInNeededError ? ('signInNeeded' as const) : null)), MEMORY_TIMEOUT_MS) : Promise.resolve(null),
-          memoryOffer ? withTimeout(memoryOffer.prepare(), MEMORY_TIMEOUT_MS) : Promise.resolve(null),
+          memoryOffer && !startWith ? withTimeout(memoryOffer.prepare(), MEMORY_TIMEOUT_MS) : Promise.resolve(null),
           focus ? Promise.resolve(descriptionCache.peek(focus, detailFor('full', narrationSettings.get()))) : Promise.resolve(null),
         ]);
         if (!offer) memoryOffer?.withdraw();
@@ -134,6 +137,7 @@ export function useVoiceAgent({
           memories: describeMemories(memories),
           focus: describeFocus(focus, description),
           memoryOffer: offer,
+          opening: startWith,
         });
       },
       status: setStatus,

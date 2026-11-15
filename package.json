@@ -5,6 +5,7 @@
   "dependencies": {
     "@atproto/api": "^0.32.0",
     "@atproto/oauth-client": "^0.9.3",
+    "@bacons/apple-targets": "5.0.0",
     "@config-plugins/react-native-webrtc": "15.0.2",
     "@daily-co/config-plugin-rn-daily-js": "0.0.13",
     "@daily-co/react-native-daily-js": "0.90.0",

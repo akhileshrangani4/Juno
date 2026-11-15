@@ -11,6 +11,8 @@ export type PromptContext = {
   focus: string;
   // The question about keeping what was saved before sign-in, when the app asks it in the first message.
   memoryOffer?: string | null;
+  // Set when the app was opened with juno://post (the widget, Siri or Shortcuts): the first words ask what to post.
+  opening?: 'post' | null;
 };
 
 // Who the agent is talking to and how it sounds. The agent shares the app's name: it answers to it and gives
@@ -79,6 +81,6 @@ Account: ${context.account}
 Reading settings: ${context.settings}
 What you remember about them (they told you this):
 ${context.memories}
-The post in focus: ${context.focus}${context.memoryOffer ? `\nYour first words asked: "${context.memoryOffer}" If their very next reply is a yes, call answer_memory_offer with keep true; if it is a no, keep false. After that reply the question is closed.` : ''}`,
+The post in focus: ${context.focus}${context.memoryOffer ? `\nYour first words asked: "${context.memoryOffer}" If their very next reply is a yes, call answer_memory_offer with keep true; if it is a no, keep false. After that reply the question is closed.` : ''}${context.opening === 'post' ? '\nYour first words asked what they would like to post. Their next words are the post: call draft_post with them. The app reads the draft back and asks for a yes, as always.' : ''}`,
   ].join('\n\n');
 }
