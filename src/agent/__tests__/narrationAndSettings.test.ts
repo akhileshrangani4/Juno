@@ -16,9 +16,9 @@ const now = new Date('2026-11-15T12:00:00.000Z');
 
 describe('narration adapter', () => {
   it('reads the feed in the mode the user chose, with the feed\'s own script', () => {
-    expect(narrateForFeed(maya, { ...defaultSettings, mode: 'brief' }, null, now)).toBe('Maya. Meet our new puppy Biscuit! Has an image and two hashtags.');
+    expect(narrateForFeed(maya, { ...defaultSettings, mode: 'brief' }, null, now)).toBe('Maya. Meet our new puppy Biscuit! Has an image and two hashtags. 2 replies.');
     expect(narrateForFeed(maya, defaultSettings, null, now)).toBe(
-      'Maya, 2 hours ago. Meet our new puppy Biscuit! One image: A golden puppy asleep on a red blanket. Its paws twitch. Tagged puppy and dogsofbluesky.',
+      'Maya, 2 hours ago. Meet our new puppy Biscuit! One image: A golden puppy asleep on a red blanket. Its paws twitch. Tagged puppy and dogsofbluesky. 2 replies.',
     );
     expect(narrateForFeed(maya, { ...defaultSettings, skipHashtags: true }, null, now)).not.toContain('Tagged');
   });

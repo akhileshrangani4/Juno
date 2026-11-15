@@ -149,5 +149,6 @@ export function mapFeedItem(item: unknown): Post | null {
     replyTo: replyContext(item, record, id),
     facets: mapFacets(text, record.facets),
     counts: { likes: num(post.likeCount), reposts: num(post.repostCount), replies: num(post.replyCount) },
+    likeUri: isRec(post.viewer) ? str(post.viewer.like) : null,
   };
 }

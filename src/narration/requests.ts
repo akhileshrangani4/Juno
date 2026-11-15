@@ -1,6 +1,7 @@
-import type { Post } from '@/social/types';
+import type { Post, Reply } from '@/social/types';
 
 import { messages, type DetailLevel, type NarrationMode } from './buildNarration';
+import { buildReplyScript } from './comments';
 import { activePostNarrator, narrationPreferences } from './postNarration';
 import { RATE_LIMITS, stepRate, type NarrationPreferences } from './preferences';
 
@@ -11,6 +12,13 @@ export type { NarrationMode } from './buildNarration';
 // Returns the script that is now being spoken, or null when no feed is on screen.
 export function narratePost(post: Post, mode?: NarrationMode): string | null {
   return activePostNarrator()?.focus(post, { mode }) ?? null;
+}
+
+// The scripts the voice agent reads for "read the comments", each built exactly as the comments view reads it,
+// with the user's standing mode and hashtag setting.
+export function replyScripts(replies: Reply[], now = new Date()): string[] {
+  const { mode, skipHashtags } = narrationPreferences.get();
+  return replies.map((reply, index) => buildReplyScript(reply, index, replies.length, { now, mode, skipHashtags }));
 }
 
 export function stopNarration(): void {

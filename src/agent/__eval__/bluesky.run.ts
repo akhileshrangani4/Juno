@@ -4,6 +4,7 @@ import { ConversationLog } from '@/agent/AgentSession';
 import { settingsStore } from '@/agent/settings';
 import { PreferencesStore } from '@/narration/preferences';
 import { createToolHandlers, type ToolOutcome } from '@/agent/toolHandlers';
+import { buildReplyScript } from '@/narration/comments';
 import { BlueskyProvider } from '@/social/bluesky/BlueskyProvider';
 import type { Post } from '@/social/types';
 import { createMemoryStore } from '@/storage/keyValueStore';
@@ -36,6 +37,11 @@ async function main() {
     move: () => ({ outcome: 'atEnd', post: null }),
     description: async () => null,
     cachedDescription: () => null,
+    loadedReplies: () => null,
+    replies: async (post) => {
+      const replies = await provider.getReplies(post.uri);
+      return replies.map((reply, index) => buildReplyScript(reply, index, replies.length));
+    },
     settings: settingsStore(new PreferencesStore(createMemoryStore())),
     memory: null,
     conversation,

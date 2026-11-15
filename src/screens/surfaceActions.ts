@@ -1,22 +1,35 @@
 export type Mode = 'scroll' | 'agent';
 
-export type SurfaceActionName = 'next' | 'previous' | 'reread' | 'toggleAgent' | 'instructions' | 'account' | 'increment' | 'decrement';
+export type SurfaceView = 'feed' | 'comments' | 'agent';
+
+export type SurfaceActionName = 'next' | 'previous' | 'like' | 'comments' | 'back' | 'reread' | 'toggleAgent' | 'instructions' | 'account' | 'increment' | 'decrement';
 
 export type SurfaceAction = { name: SurfaceActionName; label?: string };
 
-export function surfaceActions(mode: Mode, platform: string): SurfaceAction[] {
+export function surfaceActions(view: SurfaceView, platform: string, liked: boolean): SurfaceAction[] {
+  const like: SurfaceAction = { name: 'like', label: liked ? 'Remove like' : 'Like' };
   const labeled: SurfaceAction[] =
-    mode === 'scroll'
+    view === 'feed'
       ? [
           { name: 'next', label: 'Next post' },
           { name: 'previous', label: 'Previous post' },
+          like,
+          { name: 'comments', label: 'Open comments' },
           { name: 'reread', label: 'Read this post again' },
           { name: 'toggleAgent', label: 'Wake the agent' },
         ]
-      : [
-          { name: 'toggleAgent', label: 'Back to scrolling' },
-          { name: 'instructions', label: 'Hear the instructions' },
-          { name: 'account', label: 'Account settings' },
-        ];
-  return platform === 'android' ? [...labeled, { name: 'increment' }, { name: 'decrement' }] : labeled;
+      : view === 'comments'
+        ? [
+            { name: 'next', label: 'Next reply' },
+            { name: 'previous', label: 'Previous reply' },
+            like,
+            { name: 'back', label: 'Back to posts' },
+            { name: 'reread', label: 'Read this reply again' },
+          ]
+        : [
+            { name: 'toggleAgent', label: 'Back to scrolling' },
+            { name: 'instructions', label: 'Hear the instructions' },
+            { name: 'account', label: 'Account settings' },
+          ];
+  return platform === 'android' && view !== 'agent' ? [...labeled, { name: 'increment' }, { name: 'decrement' }] : labeled;
 }

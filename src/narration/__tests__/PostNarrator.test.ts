@@ -86,6 +86,27 @@ describe('PostNarrator', () => {
     expect(spoken(log)).toEqual(['speak: Alice Chen, 2 hours ago. Hello world. One image: A cat on a sofa.']);
   });
 
+  it('holds a confirmation until the earcon and the post have played, and speaks it at once when nothing is playing', () => {
+    jest.useFakeTimers();
+    const { postNarrator, narrator, log } = setup({ earconMs: 200 });
+    postNarrator.focus(withImage());
+    postNarrator.sayAfter('Liked.');
+    expect(spoken(log)).toEqual([]);
+    jest.advanceTimersByTime(200);
+    expect(spoken(log)).toEqual(['speak: Alice Chen, 2 hours ago. Hello world. One image, with no description yet.', 'append: Liked.']);
+    narrator.speaking = () => true;
+    postNarrator.sayAfter('Like removed.');
+    expect(spoken(log).at(-1)).toBe('append: Like removed.');
+    narrator.speaking = () => false;
+    postNarrator.sayAfter('Liked.');
+    expect(spoken(log).at(-1)).toBe('speak: Liked.');
+    postNarrator.focus(withImage('at://p/2'));
+    postNarrator.sayAfter('Gone with the post.');
+    postNarrator.stop();
+    jest.advanceTimersByTime(200);
+    expect(spoken(log)).not.toContain('append: Gone with the post.');
+  });
+
   it('plays the earcon first and starts speaking as it ends, folding in a description that lands meanwhile', async () => {
     jest.useFakeTimers();
     const { postNarrator, log, earcons, describe } = setup({ earconMs: 200 });

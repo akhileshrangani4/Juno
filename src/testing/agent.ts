@@ -28,6 +28,7 @@ export function makeProvider(overrides: Partial<SocialProvider> = {}): jest.Mock
     deletePost: jest.fn(async () => undefined),
     getMyLatestPost: jest.fn(async () => null),
     serviceAuth: jest.fn(async () => 'proof'),
+    getReplies: jest.fn(async () => []),
     ...overrides,
   } as jest.Mocked<SocialProvider>;
 }
@@ -89,7 +90,15 @@ export const maya = makePost({
 export const nextPost = makePost({ uri: 'at://did:plc:sam/app.bsky.feed.post/2', cid: 'cid-2', text: 'Second post here.' });
 
 export function setup(
-  options: { signedIn?: boolean; focus?: Post | null; memory?: MemoryClient | null; memoryOffer?: MemoryOffer | null; provider?: jest.Mocked<SocialProvider> } = {},
+  options: {
+    signedIn?: boolean;
+    focus?: Post | null;
+    memory?: MemoryClient | null;
+    memoryOffer?: MemoryOffer | null;
+    provider?: jest.Mocked<SocialProvider>;
+    replies?: string[];
+    loadedReplies?: string[];
+  } = {},
 ) {
   const provider = options.provider ?? makeProvider();
   const scheduler = makeScheduler();
@@ -109,6 +118,8 @@ export function setup(
     },
     description: async () => null,
     cachedDescription: () => null,
+    loadedReplies: jest.fn(() => options.loadedReplies ?? null),
+    replies: jest.fn(async () => options.replies ?? []),
     settings,
     memory: options.memory === undefined ? makeMemory() : options.memory,
     memoryOffer: options.memoryOffer ?? null,

@@ -1,12 +1,12 @@
 import type { Post } from '@/social/types';
 
-import { buildPostScript, lateDescription, needsDescription, postEarcon, type NarrationMode } from './buildNarration';
+import { buildPostScript, lateDescription, needsDescription, postEarcon, type NarrationMode, type ReplyPosition } from './buildNarration';
 import type { DescriptionCache } from './descriptions';
 import type { EarconPlayer } from './earcons';
 import type { Narrator } from './Narrator';
 import type { PreferencesStore } from './preferences';
 
-export type FocusOptions = { mode?: NarrationMode; prefix?: string };
+export type FocusOptions = { mode?: NarrationMode; prefix?: string; reply?: ReplyPosition };
 
 type Deps = {
   narrator: Narrator;
@@ -24,11 +24,12 @@ export class PostNarrator {
   private session = 0;
   private timer: ReturnType<typeof setTimeout> | null = null;
   private script = '';
+  private queued: string[] = [];
   private readonly listeners = new Set<(script: string) => void>();
 
   constructor(private readonly deps: Deps) {}
 
-  focus(post: Post, { mode, prefix }: FocusOptions = {}): string {
+  focus(post: Post, { mode, prefix, reply }: FocusOptions = {}): string {
     this.stop();
     const session = this.session;
     const { narrator, descriptions, earcons, preferences } = this.deps;
@@ -38,7 +39,7 @@ export class PostNarrator {
     const usesDescriptions = effective === 'full' || effective === 'detailedImage';
     const parts = usesDescriptions ? descriptions.peek(post, detail) : null;
     const now = this.deps.now?.() ?? new Date();
-    const script = [prefix, buildPostScript(post, { now, mode: effective, parts, skipHashtags: prefs.skipHashtags })].filter(Boolean).join(' ');
+    const script = [prefix, buildPostScript(post, { now, mode: effective, parts, skipHashtags: prefs.skipHashtags, reply })].filter(Boolean).join(' ');
     this.publish(script);
 
     narrator.setRate(prefs.rate);
@@ -48,6 +49,8 @@ export class PostNarrator {
       this.timer = setTimeout(() => {
         this.timer = null;
         narrator.speak(this.script);
+        this.queued.forEach((text) => narrator.append(text));
+        this.queued = [];
       }, lead);
     } else narrator.speak(script);
 
@@ -73,7 +76,16 @@ export class PostNarrator {
     this.session += 1;
     if (this.timer) clearTimeout(this.timer);
     this.timer = null;
+    this.queued = [];
     this.deps.narrator.stop();
+  }
+
+  // A short confirmation that must not cut off the post in focus: it waits for the earcon and the post to finish,
+  // and is spoken at once when nothing is playing.
+  sayAfter(text: string): void {
+    if (this.timer) this.queued.push(text);
+    else if (this.deps.narrator.speaking()) this.deps.narrator.append(text);
+    else this.deps.narrator.speak(text);
   }
 
   speaking(): boolean {

@@ -85,6 +85,12 @@ const definitions: { name: string; description: string; parameters: Schema }[] =
       },
     },
   },
+  { name: 'read_comments', description: 'Read the replies to the post in focus aloud, in thread order. The app speaks them itself. Use for "read the comments", "what did people reply".', parameters: none },
+  {
+    name: 'summarize_comments',
+    description: 'Get the replies to the post in focus so you can say in one or two sentences what people are saying. Use for "what are people saying", "how are people reacting".',
+    parameters: none,
+  },
   { name: 'gesture_help', description: 'Repeat how the gestures work. The app speaks it itself.', parameters: none },
   {
     name: 'remember',
@@ -126,6 +132,8 @@ export type ToolName =
   | 'publish_draft'
   | 'undo'
   | 'change_narration'
+  | 'read_comments'
+  | 'summarize_comments'
   | 'gesture_help'
   | 'remember'
   | 'recall_memories'

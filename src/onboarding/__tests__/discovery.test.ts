@@ -79,9 +79,10 @@ describe('stuck hint after unrecognized strokes', () => {
 
   it('never counts a drag that scrolled a long post, because GestureSurface does not report it as unrecognized', () => {
     const drag = Array.from({ length: 31 }, (_, i) => ({ x: 196, y: 620 - i * 10 }));
-    expect(surfaceOutcome(drag, true)).toBe('scroll');
-    expect(surfaceOutcome(drag, false)).toBe('unrecognized');
-    const outcomes = [surfaceOutcome(drag, true), surfaceOutcome(drag, true), surfaceOutcome(drag, true)];
+    const scrolled = { scrolled: true, durationMs: 900 };
+    expect(surfaceOutcome(drag, scrolled)).toBe('scroll');
+    expect(surfaceOutcome(drag, { scrolled: false, durationMs: 900 })).toBe('up');
+    const outcomes = [surfaceOutcome(drag, scrolled), surfaceOutcome(drag, scrolled), surfaceOutcome(drag, scrolled)];
     const events = outcomes.filter((outcome) => outcome === 'unrecognized').map(() => ({ type: 'unrecognized', stroke: classifyStroke(drag), mode: 'scroll', narrating: false, at: 0 }) as DiscoveryEvent);
     const { state, hints } = apply(listening(), events);
     expect(state.streak).toEqual([]);

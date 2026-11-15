@@ -29,7 +29,14 @@ describe('mapFeedItem', () => {
       replyTo: null,
       facets: [],
       counts: { likes: 3, reposts: 2, replies: 1 },
+      likeUri: null,
     });
+  });
+
+  it('carries whether the viewer already likes the post, with the like record to undo it', () => {
+    const liked = mapFeedItem({ post: { ...base.post, viewer: { like: 'at://did:plc:me/app.bsky.feed.like/3k' } } });
+    expect(liked?.likeUri).toBe('at://did:plc:me/app.bsky.feed.like/3k');
+    expect(mapFeedItem({ post: { ...base.post, viewer: {} } })?.likeUri).toBeNull();
   });
 
   it('treats empty alt text as missing', () => {

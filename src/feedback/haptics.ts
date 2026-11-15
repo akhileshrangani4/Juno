@@ -1,7 +1,7 @@
 import * as Haptics from 'expo-haptics';
 import { Platform } from 'react-native';
 
-export type HapticEvent = 'next' | 'previous' | 'edge' | 'unrecognized' | 'agentConnecting' | 'agentAwake' | 'agentAsleep' | 'agentFailed';
+export type HapticEvent = 'next' | 'previous' | 'edge' | 'unrecognized' | 'agentConnecting' | 'agentAwake' | 'agentAsleep' | 'agentFailed' | 'like' | 'unlike' | 'commentsOpen' | 'commentsClose' | 'camera';
 
 const pause = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -23,6 +23,19 @@ const patterns: Record<HapticEvent, () => Promise<void>> = {
     await pause(120);
     await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy);
   },
+  like: () => Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success),
+  unlike: () => Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Soft),
+  commentsOpen: async () => {
+    await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    await pause(90);
+    await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+  },
+  commentsClose: async () => {
+    await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+    await pause(90);
+    await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+  },
+  camera: () => Haptics.selectionAsync(),
   agentAsleep: async () => {
     await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy);
     await pause(200);

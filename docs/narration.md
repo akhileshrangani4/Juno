@@ -24,7 +24,9 @@ A listener cannot check a paraphrase against the original, so no model ever rewr
 | A repost | "Reposted by Bob." first |
 | Line breaks | a pause (a full stop, or a comma when the next line continues the sentence); no words change |
 
-Order: who and what first, then media and quoted posts, then tags, then links.
+Order: who and what first, then media and quoted posts, then tags, then links. In `full` and `brief`, a post with replies ends with the count: "12 replies." or "1 reply.".
+
+In the comments view each reply goes through the same `buildPostScript` with a `reply` position, so it opens with "Reply 2 of 12, from Maya." (plus ", replying to Sam" for a nested reply) instead of the author line, and gets the same rules, modes, descriptions, and earcons as a post. `src/narration/comments.ts` builds the entry line ("12 replies. Swipe down to go back.") and the per-reply scripts; `replyScripts` in `requests.ts` is what the voice agent reads for "read the comments".
 
 ## Modes
 

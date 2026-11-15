@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 
+import { loadedComments, readComments } from '@/comments/commentsControl';
 import { move, type FeedState, type MoveOutcome } from '@/feed/feedState';
 import { haptic } from '@/feedback/haptics';
 import type { Narrator } from '@/narration/Narrator';
@@ -99,6 +100,8 @@ export function useVoiceAgent({
       },
       description: (target, detail) => descriptionCache.request(target, detail),
       cachedDescription: (target, detail) => descriptionCache.peek(target, detail),
+      loadedReplies: (target) => loadedComments(target.uri),
+      replies: (target) => readComments(target.uri),
       settings: narrationSettings,
       memory,
       memoryOffer,
