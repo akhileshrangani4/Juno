@@ -2,6 +2,7 @@ import { Image } from 'expo-image';
 import { StyleSheet, Text, View } from 'react-native';
 import { ScrollView } from 'react-native-gesture-handler';
 
+import { useScreenReader } from '@/accessibility/useScreenReader';
 import { useStrokeGesture } from '@/gestures/GestureSurface';
 import { authorName, formatAge } from '@/narration/buildNarration';
 import type { Post, PostMedia } from '@/social/types';
@@ -23,11 +24,13 @@ function mediaLine(media: PostMedia): string {
   }
 }
 
-export function PostCard({ post, position }: { post: Post; position: string }) {
+export function PostCard({ post, position, context }: { post: Post; position: string; context?: string }) {
   const stroke = useStrokeGesture();
+  const screenReader = useScreenReader();
   const image = post.media.flatMap((media) => (media.kind === 'images' ? media.images : []))[0];
   return (
     <View style={styles.card}>
+      {context ? <Text style={styles.meta} numberOfLines={1} maxFontSizeMultiplier={type.maxScale}>{context}</Text> : null}
       {post.repostedBy ? <Text style={styles.meta} maxFontSizeMultiplier={type.maxScale}>Reposted by {post.repostedBy}</Text> : null}
       <Text style={styles.author} numberOfLines={2} maxFontSizeMultiplier={type.maxScale}>
         {authorName(post)}
@@ -40,6 +43,7 @@ export function PostCard({ post, position }: { post: Post; position: string }) {
         simultaneousWith={stroke?.gesture}
         onScroll={stroke?.onScroll}
         scrollEventThrottle={16}
+        scrollEnabled={!screenReader}
         bounces={false}
         style={styles.scroll}
         contentContainerStyle={styles.scrollContent}

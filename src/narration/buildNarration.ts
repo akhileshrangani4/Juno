@@ -38,7 +38,10 @@ export type DescriptionInput = {
   langs: string[];
 };
 
-export type ScriptOptions = { now: Date; mode?: NarrationMode; parts?: DescriptionParts | null; skipHashtags?: boolean; translation?: TranslationState };
+// A reply read inside a post's comments: its place in the thread and whose reply it answers (null for a direct reply to the post).
+export type ReplyPosition = { index: number; total: number; answering: string | null };
+
+export type ScriptOptions = { now: Date; mode?: NarrationMode; parts?: DescriptionParts | null; skipHashtags?: boolean; reply?: ReplyPosition; translation?: TranslationState };
 
 const ORDINALS = ['First', 'Second', 'Third', 'Fourth', 'Fifth', 'Sixth', 'Seventh', 'Eighth', 'Ninth', 'Tenth', 'Eleventh', 'Twelfth', 'Thirteenth', 'Fourteenth', 'Fifteenth', 'Sixteenth', 'Seventeenth', 'Eighteenth', 'Nineteenth', 'Twentieth'];
 const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
@@ -240,7 +243,16 @@ export function authorName(post: Post): string {
   return post.author.displayName?.trim() || handleName(post.author.handle);
 }
 
-function header(post: Post, now: Date | null): string {
+function replyHeader(post: Post, { index, total, answering }: ReplyPosition): string {
+  return sentence([`Reply ${index + 1} of ${total}, from ${authorName(post)}`, answering ? `replying to ${answering}` : null].filter(Boolean).join(', '));
+}
+
+export function replyCount(count: number): string | null {
+  return count > 0 ? `${count} ${count === 1 ? 'reply' : 'replies'}.` : null;
+}
+
+function header(post: Post, now: Date | null, position?: ReplyPosition): string {
+  if (position) return replyHeader(post, position);
   const reply = post.replyTo
     ? post.replyTo.isSelf
       ? 'continuing their thread'
@@ -315,6 +327,7 @@ const quotedPost = (text: string): Post => ({
   repostedBy: null,
   replyRoot: null,
   counts: { likes: 0, reposts: 0, replies: 0 },
+  likeUri: null,
 });
 
 function describeMedia(media: PostMedia, parts: DescriptionParts | null, imageOffset: number): string | null {
@@ -456,10 +469,11 @@ function spokenBody(analysis: TextAnalysis, parts: DescriptionParts | null, tran
   return brief ? briefSentence(analysis.body) : sentence(analysis.body);
 }
 
-export function buildPostScript(post: Post, { now, mode = 'full', parts = null, skipHashtags = false, translation = null }: ScriptOptions): string {
+export function buildPostScript(post: Post, { now, mode = 'full', parts = null, skipHashtags = false, translation = null, reply }: ScriptOptions): string {
   if (mode === 'verbatim') return post.text.trim() || 'This post has no text.';
   const analysis = analyzeText(post);
   const repost = post.repostedBy ? `Reposted by ${post.repostedBy}.` : null;
+  const replies = reply ? null : replyCount(post.counts.replies);
   switch (mode) {
     case 'hashtags': {
       const tags = analysis.allTags.map(splitTag);
@@ -468,16 +482,16 @@ export function buildPostScript(post: Post, { now, mode = 'full', parts = null, 
     }
     case 'detailedImage': {
       const media = mediaSentences(post, parts, false);
-      return join([header(post, null), media.length ? media.join(' ') : 'This post has no images or video.']);
+      return join([header(post, null, reply), media.length ? media.join(' ') : 'This post has no images or video.']);
     }
     case 'brief':
-      return join([repost, header(post, null), spokenBody(analysis, parts, translation, true), briefMarkers(post, analysis, skipHashtags)]);
+      return join([repost, header(post, null, reply), spokenBody(analysis, parts, translation, true), briefMarkers(post, analysis, skipHashtags), replies]);
     case 'full': {
       const media = mediaSentences(post, parts, true);
       const tags = skipHashtags ? null : tagSentence(analysis.pileTags, parts?.hashtagTopic ?? null);
       const links = linkSentence(post, [...analysis.anchorLinks, ...analysis.trailingLinks]);
       const empty = !analysis.body && !media.length && !links && !analysis.pileTags.length;
-      return join([repost, header(post, now), spokenBody(analysis, parts, translation, false), ...media, tags, links, empty ? 'This post has no text.' : null]);
+      return join([repost, header(post, now, reply), spokenBody(analysis, parts, translation, false), ...media, tags, links, empty ? 'This post has no text.' : null, replies]);
     }
   }
 }
@@ -512,7 +526,7 @@ export function lateDescription(post: Post, parts: DescriptionParts): string | n
 }
 
 const GESTURES =
-  'Tap the bottom half of the screen for the next post. Tap the top half for the previous post. Draw a circle clockwise anywhere on the screen to wake the voice agent. Draw a circle counter-clockwise to put it to sleep and go back to scrolling.';
+  'Tap the bottom half of the screen for the next post. Tap the top half for the previous post. Swiping right or left does the same. Swipe up to hear the replies, and swipe down to come back. Hold two fingers on the screen to like a post. Draw a circle clockwise anywhere on the screen to wake the voice agent. Draw a circle counter-clockwise to put it to sleep and go back to scrolling.';
 
 export const INTRO_SUMMARY = `Welcome to ${APP_NAME}. It reads your social feed aloud, one post at a time.`;
 

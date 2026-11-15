@@ -18,10 +18,10 @@ export const PHOTO_FIRST_MESSAGE = cameraMessages.photoReady;
 // "host" ("Host, hello again.", "Host it."), so the agent missed drafts and "post it" never confirmed.
 export const KEYTERMS = [APP_NAME, 'post', 'post it', 'repost', 'reply', 'undo', 'cancel'] as const;
 
-// The model behind the voice agent, measured against the newer models Vapi offers (docs/building.md, "The voice
-// agent's model"). A GPT-5.x or GPT-6 model also needs reasoningEffort: 'none' here, or OpenAI refuses the
-// temperature and the first word comes later.
-export const AGENT_MODEL = 'gpt-4.1';
+// The model behind the voice agent, chosen by measuring tool use, publish safety and time to first word against
+// gpt-4.1 (docs/building.md, "The voice agent's model"). Reasoning stays off, because any effort adds time before the
+// first word and OpenAI then refuses the temperature; the fast tier keeps the first word close to gpt-4.1's.
+export const AGENT_MODEL = 'gpt-5.6-sol';
 
 // assistant.speechStarted names who is speaking each turn (the app's say() or the model); see agentVoice.ts.
 export const clientMessages = ['tool-calls', 'transcript', 'status-update', 'speech-update', 'assistant.speechStarted'] as const;
@@ -34,6 +34,8 @@ export function buildAssistant(context: PromptContext) {
     model: {
       provider: 'openai' as const,
       model: AGENT_MODEL,
+      reasoningEffort: 'none' as const,
+      serviceTier: 'fast' as const,
       temperature: 0.2,
       messages: [{ role: 'system' as const, content: buildSystemPrompt(context) }],
       tools: vapiTools,

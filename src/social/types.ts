@@ -37,7 +37,10 @@ export type Post = PostRef & {
   // The languages the post's record declares (often missing or wrong, so only a hint).
   langs?: string[];
   counts: { likes: number; reposts: number; replies: number };
+  likeUri: string | null;
 };
+
+export type Reply = Post & { parentAuthor: PostAuthor | null };
 
 export type TimelinePage = { posts: Post[]; cursor: string | null };
 
@@ -62,6 +65,10 @@ export type ReplyParent = Pick<Post, 'uri' | 'cid' | 'replyRoot'>;
 
 export type RecordRef = { uri: string };
 
+// Thrown by a provider call that got no answer at all, so the caller can say the network is the problem. It never
+// ends the session: the user stays signed in and can try again.
+export class OfflineError extends Error {}
+
 export interface SocialProvider {
   readonly id: string;
   readonly name: string;
@@ -77,6 +84,7 @@ export interface SocialProvider {
   createPost(post: NewPost): Promise<PostRef>;
   repost(post: PostRef): Promise<RecordRef>;
   like(post: PostRef): Promise<RecordRef>;
+  getReplies(postUri: string): Promise<Reply[]>;
   reply(parent: ReplyParent, post: NewPost): Promise<PostRef>;
   uploadImage(image: { uri: string; mimeType: string; width?: number; height?: number }, alt: string): Promise<UploadedImage>;
   unlike(post: PostRef, like?: RecordRef): Promise<boolean>;

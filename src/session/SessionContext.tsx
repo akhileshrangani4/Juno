@@ -6,6 +6,7 @@ import { createSocialProvider, type RestoreResult, type SignInResult, type Socia
 import { secureStore } from '@/storage/keyValueStore';
 
 import { GUEST_KEY, signOut } from './signOut';
+import { clearViewerState } from './viewerState';
 import { withTimeout } from './withTimeout';
 
 const ONBOARDED_KEY = 'app.onboarded';
@@ -50,7 +51,14 @@ export function SessionProvider({ children, provider: injected }: { children: Re
     expiredAccount: null as SocialAccount | null,
   });
 
-  useEffect(() => provider.onSessionExpired((expiredAccount) => setState((current) => ({ ...current, expiredAccount }))), [provider]);
+  useEffect(
+    () =>
+      provider.onSessionExpired((expiredAccount) => {
+        clearViewerState();
+        setState((current) => ({ ...current, expiredAccount }));
+      }),
+    [provider],
+  );
 
   const mounted = useRef(true);
 
@@ -58,6 +66,7 @@ export function SessionProvider({ children, provider: injected }: { children: Re
     const result = await withTimeout(provider.restoreSession().catch(() => UNREACHABLE), RESTORE_TIMEOUT_MS, UNREACHABLE);
     if (!mounted.current) return;
     if (result.status === 'restored') recordUser(provider.id, result.account);
+    if (result.status === 'invalid') clearViewerState();
     setState((current) => ({
       ...current,
       ready: true,
@@ -104,6 +113,7 @@ export function SessionProvider({ children, provider: injected }: { children: Re
 
   const adoptResult = (result: SignInResult): SignInResult => {
     if (result.status !== 'success') return result;
+    clearViewerState();
     recordUser(provider.id, result.account);
     setState((current) => ({ ...current, account: result.account, expiredAccount: null }));
     return result;
@@ -121,10 +131,12 @@ export function SessionProvider({ children, provider: injected }: { children: Re
     },
     signOut: async () => {
       await signOut(provider, secureStore, forgetLibraryDescriptions);
+      clearViewerState();
       setState((current) => ({ ...current, account: null, expiredAccount: null, guest: false }));
     },
     continueAsGuest: async () => {
       if (state.account) await provider.signOut();
+      clearViewerState();
       void secureStore.set(GUEST_KEY, '1');
       setState((current) => ({ ...current, account: null, expiredAccount: null, guest: true }));
     },

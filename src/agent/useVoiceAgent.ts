@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 
+import { actionHistory } from '@/actions/history';
+import { loadedComments, readComments } from '@/comments/commentsControl';
 import { createCameraTools, describePendingPhoto } from '@/camera/agentTools';
 import { move, type FeedState, type MoveOutcome } from '@/feed/feedState';
 import { haptic } from '@/feedback/haptics';
@@ -100,6 +102,9 @@ export function useVoiceAgent({
       },
       description: (target, detail, options) => descriptionCache.request(target, detail, options),
       cachedDescription: (target, detail) => descriptionCache.peek(target, detail),
+      loadedReplies: (target) => loadedComments(target.uri),
+      replies: (target) => readComments(target.uri),
+      history: actionHistory,
       camera: createCameraTools(),
       mayNeedTranslation: (target) => descriptionCache.mayNeedTranslation(target),
       translationState: (target, detail) => descriptionCache.translationState(target, detail),

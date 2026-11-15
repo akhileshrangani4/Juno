@@ -1,4 +1,3 @@
-import AsyncStorage from '@react-native-async-storage/async-storage';
 import { File, Paths } from 'expo-file-system';
 
 import type { KeyValueStore } from '@/storage/keyValueStore';
@@ -26,6 +25,7 @@ export const cacheFileStore: KeyValueStore = {
 
 // Sign-out clears the library descriptions (and the old AsyncStorage copy an earlier build kept).
 export async function forgetLibraryDescriptions(): Promise<void> {
-  await Promise.all([cacheFileStore.remove(LIBRARY.cacheKey), AsyncStorage.removeItem(LIBRARY.cacheKey)]).catch(() => undefined);
+  const legacy = async () => (await import('@react-native-async-storage/async-storage')).default.removeItem(LIBRARY.cacheKey);
+  await Promise.all([cacheFileStore.remove(LIBRARY.cacheKey), legacy()]).catch(() => undefined);
 }
 

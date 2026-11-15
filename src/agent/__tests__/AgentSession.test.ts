@@ -124,7 +124,7 @@ describe('AgentSession', () => {
     const { session, call, toolCall } = setup();
     await session.start();
     await toolCall('read_post', { mode: 'brief' });
-    expect(call.say).toHaveBeenCalledWith('Maya. Meet our new puppy Biscuit! Has an image and two hashtags.', true);
+    expect(call.say).toHaveBeenCalledWith('Maya. Meet our new puppy Biscuit! Has an image and two hashtags. 2 replies.', true);
     expect(call.addMessage).toHaveBeenLastCalledWith(expect.stringMatching(/^Result of read_post: READ_ALOUD/), false);
     await toolCall('like_post');
     expect(call.addMessage).toHaveBeenLastCalledWith("Result of like_post: LIKED: Liked Maya's post. Confirm in a word or two.", true);

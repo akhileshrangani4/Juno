@@ -66,8 +66,16 @@ jest.mock('@atproto/api', () => ({
         ],
       },
     }));
+    getPostThread = jest.fn(async () => ({ data: { thread: { $type: 'app.bsky.feed.defs#threadViewPost', post: feedItem(1).post, replies: [{ $type: 'app.bsky.feed.defs#threadViewPost', post: feedItem(2).post, replies: [] }] } } }));
     uploadBlob = jest.fn(async () => ({ data: { blob: { ref: 'blob' } } }));
-    app = { bsky: { feed: { getFeed: jest.fn(async () => ({ data: { feed: [feedItem(9)] } })) } } };
+    app = {
+      bsky: {
+        feed: {
+          getFeed: jest.fn(async () => ({ data: { feed: [feedItem(9)] } })),
+          getPostThread: jest.fn(async () => ({ data: { thread: { $type: 'app.bsky.feed.defs#threadViewPost', post: feedItem(1).post, replies: [{ $type: 'app.bsky.feed.defs#threadViewPost', post: feedItem(3).post }] } } })),
+        },
+      },
+    };
     options: any;
     constructor(input: any) {
       this.options = input;
@@ -126,6 +134,15 @@ describe('BlueskyProvider', () => {
     expect(await provider.restoreSession()).toEqual({ status: 'unreachable' });
     expect(await store.get('bluesky.session')).toBe(saved);
     expect(await provider.hasStoredSession()).toBe(true);
+  });
+
+  it('reads replies through the public AppView when signed out and the home service when signed in', async () => {
+    const { provider, agent, publicAgent } = setup();
+    expect((await provider.getReplies('at://post/1')).map((reply) => reply.uri)).toEqual(['at://post/3']);
+    expect(publicAgent.app.bsky.feed.getPostThread).toHaveBeenCalledWith({ uri: 'at://post/1', depth: 10, parentHeight: 0 });
+    await signInWithKey(provider, 'me.bsky.social');
+    expect((await provider.getReplies('at://post/1')).map((reply) => reply.uri)).toEqual(['at://post/2']);
+    expect(agent.getPostThread).toHaveBeenCalledWith({ uri: 'at://post/1', depth: 10, parentHeight: 0 });
   });
 
   it('clears the stored session on sign out', async () => {

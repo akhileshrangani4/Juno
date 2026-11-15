@@ -1,3 +1,5 @@
+import { ActionHistory } from '@/actions/history';
+import { forgetLikes } from '@/feed/likes';
 import type { Post, SocialProvider } from '@/social/types';
 import { createMemoryStore } from '@/storage/keyValueStore';
 import { makePost } from '@/testing/fixtures';
@@ -28,6 +30,7 @@ export function makeProvider(overrides: Partial<SocialProvider> = {}): jest.Mock
     deletePost: jest.fn(async () => undefined),
     getMyLatestPost: jest.fn(async () => null),
     serviceAuth: jest.fn(async () => 'proof'),
+    getReplies: jest.fn(async () => []),
     ...overrides,
   } as jest.Mocked<SocialProvider>;
 }
@@ -95,9 +98,14 @@ export function setup(
     memory?: MemoryClient | null;
     memoryOffer?: MemoryOffer | null;
     provider?: jest.Mocked<SocialProvider>;
+    replies?: string[];
+    loadedReplies?: string[];
+    history?: ActionHistory;
     readBacksHeard?: boolean;
   } = {},
 ) {
+  if (!options.history) forgetLikes();
+  const history = options.history ?? new ActionHistory();
   const provider = options.provider ?? makeProvider();
   const scheduler = makeScheduler();
   const conversation = new ConversationLog();
@@ -116,6 +124,9 @@ export function setup(
     },
     description: async () => null,
     cachedDescription: () => null,
+    loadedReplies: jest.fn(() => options.loadedReplies ?? null),
+    replies: jest.fn(async () => options.replies ?? []),
+    history,
     mayNeedTranslation: () => false,
     translationState: () => null,
     settings,
@@ -139,5 +150,5 @@ export function setup(
   const setFocus = (post: Post | null) => {
     focus = post;
   };
-  return { provider, scheduler, conversation, notify, settings, handlers, say, deps, focus: () => focus, setFocus };
+  return { provider, scheduler, conversation, notify, settings, handlers, say, deps, history, focus: () => focus, setFocus };
 }

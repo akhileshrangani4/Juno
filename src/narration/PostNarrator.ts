@@ -10,6 +10,7 @@ import {
   translationMessages,
   type DescriptionParts,
   type NarrationMode,
+  type ReplyPosition,
   type TranslationState,
 } from './buildNarration';
 import type { DescriptionCache } from './descriptions';
@@ -17,7 +18,7 @@ import type { EarconPlayer } from './earcons';
 import type { Narrator } from './Narrator';
 import type { PreferencesStore } from './preferences';
 
-export type FocusOptions = { mode?: NarrationMode; prefix?: string };
+export type FocusOptions = { mode?: NarrationMode; prefix?: string; reply?: ReplyPosition };
 
 type Deps = {
   narrator: Narrator;
@@ -35,11 +36,15 @@ export class PostNarrator {
   private session = 0;
   private timer: ReturnType<typeof setTimeout> | null = null;
   private script = '';
+  private queued: string[] = [];
+  private notices: string[] = [];
   private readonly listeners = new Set<(script: string) => void>();
 
-  constructor(private readonly deps: Deps) {}
+  constructor(private readonly deps: Deps) {
+    deps.narrator.onDone(() => this.sayNotices());
+  }
 
-  focus(post: Post, { mode, prefix }: FocusOptions = {}): string {
+  focus(post: Post, { mode, prefix, reply }: FocusOptions = {}): string {
     this.stop();
     const session = this.session;
     const { narrator, descriptions, earcons, preferences } = this.deps;
@@ -51,8 +56,9 @@ export class PostNarrator {
     const parts = usesDescriptions || translates ? descriptions.peek(post, detail) : null;
     const translation = translates ? descriptions.translationState(post, detail) : null;
     const now = this.deps.now?.() ?? new Date();
-    const { body, language } = this.reading(post, effective, parts, translation, now);
-    const script = [prefix, body].filter(Boolean).join(' ');
+    const notices = this.notices.splice(0);
+    const { body, language } = this.reading(post, effective, parts, translation, now, reply);
+    const script = [...notices, prefix, body].filter(Boolean).join(' ');
     this.publish(script);
 
     narrator.setRate(prefs.rate);
@@ -63,6 +69,8 @@ export class PostNarrator {
       this.timer = setTimeout(() => {
         this.timer = null;
         say(this.script);
+        this.queued.forEach((text) => narrator.append(text));
+        this.queued = [];
       }, lead);
     } else say(script);
 
@@ -84,16 +92,16 @@ export class PostNarrator {
 
   // The script for a post, and the voice to read it in. A post in another language is read exactly in its own
   // language's voice when one is installed, and otherwise as its labeled translation, never in the wrong voice.
-  private reading(post: Post, mode: NarrationMode, parts: DescriptionParts | null, translation: TranslationState, now: Date): { body: string; language?: string } {
+  private reading(post: Post, mode: NarrationMode, parts: DescriptionParts | null, translation: TranslationState, now: Date, reply?: ReplyPosition): { body: string; language?: string } {
     const { narrator, preferences } = this.deps;
     const foreign = parts?.translation?.language ?? parts?.untranslatedLanguage;
     if (mode === 'verbatim' && foreign) {
-      if (narrator.canSpeak?.(foreign)) return { body: buildPostScript(post, { now, mode }), language: foreign };
+      if (narrator.canSpeak?.(foreign)) return { body: buildPostScript(post, { now, mode, reply }), language: foreign };
       const translated = translatedText(parts?.translation);
       return { body: translated ? `${cannotPronounce(foreign)} ${translated}` : translationMessages.failedIn(foreign) };
     }
     if (mode === 'verbatim' && translation) return { body: translationMessages[translation] };
-    return { body: buildPostScript(post, { now, mode, parts, skipHashtags: preferences.get().skipHashtags, translation }) };
+    return { body: buildPostScript(post, { now, mode, parts, skipHashtags: preferences.get().skipHashtags, translation, reply }) };
   }
 
   prefetch(upcoming: Post[]): void {
@@ -105,7 +113,24 @@ export class PostNarrator {
     this.session += 1;
     if (this.timer) clearTimeout(this.timer);
     this.timer = null;
+    this.queued = [];
     this.deps.narrator.stop();
+  }
+
+  // A short confirmation that must not cut off the post in focus: it waits for the earcon and the post to finish,
+  // and is spoken at once when nothing is playing.
+  sayAfter(text: string): void {
+    if (this.timer) this.queued.push(text);
+    else if (this.deps.narrator.speaking()) this.deps.narrator.append(text);
+    else this.deps.narrator.speak(text);
+  }
+
+  // Something the user must hear in full, such as a like that failed, that must not cut off what is being said. It is
+  // said at once when nothing is playing, else as soon as the speech ends, or before the next post if the user moves
+  // on first. Stopping the narration never drops it.
+  notice(text: string): void {
+    if (!this.speaking()) return this.deps.narrator.speak(text);
+    this.notices.push(text);
   }
 
   speaking(): boolean {
@@ -115,6 +140,11 @@ export class PostNarrator {
   onScript(listener: (script: string) => void): () => void {
     this.listeners.add(listener);
     return () => void this.listeners.delete(listener);
+  }
+
+  private sayNotices() {
+    if (!this.notices.length || this.timer) return;
+    this.deps.narrator.speak(this.notices.splice(0).join(' '));
   }
 
   private publish(script: string) {

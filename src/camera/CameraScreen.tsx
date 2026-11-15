@@ -234,6 +234,7 @@ export function CameraScreen({ start }: { start: 'camera' | 'library' }) {
         onTapBottom={() => controller.tapBottom()}
         onCircle={onCircle}
         onHold={() => controller.longPress()}
+        onSwipe={(direction) => direction === 'up' && controller.close()}
         accessible
         accessibilityRole={Platform.OS === 'ios' ? DIRECT_TOUCH : 'none'}
         accessibilityLabel={`Camera, ${PHASE_LABEL[state.phase]}`}

@@ -90,7 +90,7 @@ const definitions: { name: string; description: string; parameters: Schema; answ
     parameters: { type: 'object', properties: { draftId: { type: 'string', description: 'The draft id from the draft result.' } }, required: ['draftId'] },
     answersReadBack: true,
   },
-  { name: 'undo', description: 'Undo the last action: stop a post still in its five seconds, or remove the last like, repost, post or reply.', parameters: none, answersReadBack: true },
+  { name: 'undo', description: "Undo the user's most recent action: stop a post still in its five seconds or remove one being sent, throw away a draft, or reverse a like, unlike or repost. It never deletes a post or reply that already went out: for those the app reads back what would be deleted and asks for a yes, so never say anything was deleted unless the result says so.", parameters: none, answersReadBack: true },
   {
     name: 'change_narration',
     description: 'Change how the app reads posts, now and while scrolling. Pass only what changes.',
@@ -112,6 +112,12 @@ const definitions: { name: string; description: string; parameters: Schema; answ
         translateAgain: { type: 'string', description: 'A language name, for "translate Spanish again" after it was set not to be translated.' },
       },
     },
+  },
+  { name: 'read_comments', description: 'Read the replies to the post in focus aloud, in thread order. The app speaks them itself. Use for "read the comments", "what did people reply".', parameters: none },
+  {
+    name: 'summarize_comments',
+    description: 'Get the replies to the post in focus so you can say in one or two sentences what people are saying. Use for "what are people saying", "how are people reacting".',
+    parameters: none,
   },
   { name: 'gesture_help', description: 'Repeat how the gestures work. The app speaks it itself.', parameters: none },
   {
@@ -172,6 +178,8 @@ export type ToolName =
   | 'publish_draft'
   | 'undo'
   | 'change_narration'
+  | 'read_comments'
+  | 'summarize_comments'
   | 'gesture_help'
   | 'remember'
   | 'recall_memories'
