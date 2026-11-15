@@ -2,7 +2,7 @@ import { v } from 'convex/values';
 
 import { internal } from './_generated/api';
 import { action } from './_generated/server';
-import { hashDevice, invalidReason, isDeviceId, isPostUri, LIMITS, needsModel, normalizeParts, postDid, type Parts } from './describeCache';
+import { decideClaim, hashAddress, hashDevice, invalidReason, isDeviceId, isPostUri, LIMITS, needsModel, normalizeParts, postDid, type Parts } from './describeCache';
 import { fetchCaptions } from './describeCaptions';
 import { DEFAULT_MODEL, describeWithOpenAI, env } from './describeOpenAI';
 import { PROMPT_VERSION, systemPrompt, userContent } from './describePrompt';
@@ -12,42 +12,58 @@ import { detailValidator } from './schema';
 type Source = 'cache' | 'model' | 'shared';
 
 // Describes a post's images, video and hashtag pile. The client names the post and nothing more; the post
-// itself is fetched from Bluesky here. Returns null whenever there is nothing to describe or anything goes
-// wrong; the app then keeps its deterministic narration and never tells the listener about the failure.
+// itself is fetched from Bluesky here, and only after the fetch limits allow it. Returns null whenever there is
+// nothing to describe or anything goes wrong; the app then keeps its deterministic narration and never tells
+// the listener about the failure.
 export const describePost = action({
   args: { uri: v.string(), detail: detailValidator, deviceId: v.string() },
   handler: async (ctx, { uri, detail, deviceId }): Promise<{ parts: Parts; source: Source } | null> => {
     if (!isPostUri(uri) || !isDeviceId(deviceId)) return null;
     const key = { postUri: uri, promptVersion: PROMPT_VERSION, detail };
-    const cached = await ctx.runQuery(internal.postDescriptions.get, key);
-    if (cached?.status === 'done' && cached.parts) return { parts: cached.parts, source: 'cache' };
 
-    const post = await fetchPost(uri);
-    if (!post || !needsModel(post)) return null;
-    const reason = invalidReason(post);
-    if (reason) {
-      console.warn(`describePost rejected ${uri}: ${reason}`);
+    const waitForShared = async () => {
+      const deadline = Date.now() + LIMITS.sharedWaitMs;
+      while (Date.now() < deadline) {
+        await new Promise((resolve) => setTimeout(resolve, LIMITS.sharedPollMs));
+        const row = await ctx.runQuery(internal.postDescriptions.get, key);
+        if (row?.status === 'done' && row.parts) return { parts: row.parts, source: 'shared' as const };
+        if (!row || row.status === 'failed') return null;
+      }
+      return null;
+    };
+
+    // Served or settled from the cache before anything is fetched: a description, one being written right
+    // now, or a recent miss or failure.
+    const known = decideClaim(await ctx.runQuery(internal.postDescriptions.get, key), Date.now());
+    if (known.kind === 'cached') return { parts: known.parts, source: 'cache' };
+    if (known.kind === 'failedRecently') return null;
+    if (known.kind === 'inflight') return waitForShared();
+
+    const deviceHash = await hashDevice(deviceId);
+    const { ip } = await ctx.meta.getRequestMetadata();
+    if (!(await ctx.runMutation(internal.postDescriptions.admit, { deviceHash, addressHash: ip ? await hashAddress(ip) : null }))) {
+      console.warn('describePost fetch limit reached');
       return null;
     }
-    const decision = await ctx.runMutation(internal.postDescriptions.claim, { ...key, deviceHash: await hashDevice(deviceId) });
+
+    const post = await fetchPost(uri);
+    const reason = !post ? 'post not found' : !needsModel(post) ? 'nothing to describe' : invalidReason(post);
+    if (!post || reason) {
+      if (reason !== 'nothing to describe') console.warn(`describePost skipped ${uri}: ${reason}`);
+      await ctx.runMutation(internal.postDescriptions.miss, { ...key, reason: reason ?? 'post not found' });
+      return null;
+    }
+    const decision = await ctx.runMutation(internal.postDescriptions.claim, { ...key, deviceHash });
     switch (decision.kind) {
       case 'cached':
         return { parts: decision.parts, source: 'cache' };
       case 'limited':
-        console.warn('describePost rate limited');
+        console.warn('describePost spend limit reached');
         return null;
       case 'failedRecently':
         return null;
-      case 'inflight': {
-        const deadline = Date.now() + LIMITS.sharedWaitMs;
-        while (Date.now() < deadline) {
-          await new Promise((resolve) => setTimeout(resolve, LIMITS.sharedPollMs));
-          const row = await ctx.runQuery(internal.postDescriptions.get, key);
-          if (row?.status === 'done' && row.parts) return { parts: row.parts, source: 'shared' };
-          if (!row || row.status === 'failed') return null;
-        }
-        return null;
-      }
+      case 'inflight':
+        return waitForShared();
       case 'claim':
         break;
     }
@@ -70,7 +86,7 @@ export const describePost = action({
       return { parts, source: 'model' };
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      console.error(`describePost failed for ${uri}: ${message}`);
+      console.error(`describePost failed for ${uri}: ${message}; reservation released`);
       await ctx.runMutation(internal.postDescriptions.fail, { ...key, error: message });
       return null;
     }
