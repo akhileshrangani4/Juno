@@ -2,7 +2,7 @@ import { AtpAgent, RichText, type AtpSessionData, type BlobRef } from '@atproto/
 
 import type { KeyValueStore } from '@/storage/keyValueStore';
 
-import type { NewPost, Post, PostRef, SocialAccount, SocialProvider, TimelinePage, UploadedImage } from '../types';
+import type { NewPost, Post, PostRef, RecordRef, ReplyParent, SocialAccount, SocialProvider, TimelinePage, UploadedImage } from '../types';
 import { mapFeedItem } from './mapPost';
 import { isHiddenByModeration } from './moderation';
 
@@ -84,23 +84,55 @@ export class BlueskyProvider implements SocialProvider {
     return this.publish(post);
   }
 
-  reply(parent: Post, post: NewPost): Promise<PostRef> {
+  reply(parent: ReplyParent, post: NewPost): Promise<PostRef> {
     const parentRef = { uri: parent.uri, cid: parent.cid };
     return this.publish(post, { root: parent.replyRoot ?? parentRef, parent: parentRef });
   }
 
-  async repost(post: PostRef): Promise<void> {
-    await this.agent.repost(post.uri, post.cid);
+  async repost(post: PostRef): Promise<RecordRef> {
+    const { uri } = await this.agent.repost(post.uri, post.cid);
+    return { uri };
   }
 
-  async like(post: PostRef): Promise<void> {
-    await this.agent.like(post.uri, post.cid);
+  async like(post: PostRef): Promise<RecordRef> {
+    const { uri } = await this.agent.like(post.uri, post.cid);
+    return { uri };
+  }
+
+  async unlike(post: PostRef, like?: RecordRef): Promise<boolean> {
+    const uri = like?.uri ?? (await this.viewerOf(post))?.like;
+    if (!uri) return false;
+    await this.agent.deleteLike(uri);
+    return true;
+  }
+
+  async unrepost(post: PostRef, repost?: RecordRef): Promise<boolean> {
+    const uri = repost?.uri ?? (await this.viewerOf(post))?.repost;
+    if (!uri) return false;
+    await this.agent.deleteRepost(uri);
+    return true;
+  }
+
+  async deletePost(post: PostRef): Promise<void> {
+    await this.agent.deletePost(post.uri);
+  }
+
+  async getMyLatestPost(): Promise<Post | null> {
+    const did = this.agent.session?.did;
+    if (!did) return null;
+    const { data } = await this.agent.getAuthorFeed({ actor: did, limit: 10, filter: 'posts_with_replies' });
+    return data.feed.filter((item) => !item.reason).map(mapFeedItem).find((post) => post?.author.id === did) ?? null;
   }
 
   async uploadImage(image: { uri: string; mimeType: string }, alt: string): Promise<UploadedImage> {
     const bytes = new Uint8Array(await (await fetch(image.uri)).arrayBuffer());
     const { data } = await this.agent.uploadBlob(bytes, { encoding: image.mimeType });
     return { alt, handle: data.blob };
+  }
+
+  private async viewerOf(post: PostRef) {
+    const { data } = await this.agent.getPosts({ uris: [post.uri] });
+    return data.posts[0]?.viewer ?? null;
   }
 
   private account(): SocialAccount | null {

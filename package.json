@@ -4,8 +4,15 @@
   "main": "expo-router/entry",
   "dependencies": {
     "@atproto/api": "^0.32.0",
+    "@config-plugins/react-native-webrtc": "15.0.2",
+    "@daily-co/config-plugin-rn-daily-js": "0.0.13",
+    "@daily-co/react-native-daily-js": "0.90.0",
+    "@daily-co/react-native-webrtc": "155.0.1-daily.1",
+    "@react-native-async-storage/async-storage": "2.2.0",
+    "@vapi-ai/react-native": "0.3.0",
     "convex": "^1.50.0",
     "expo": "~58.0.25",
+    "expo-audio": "~58.0.12",
     "expo-constants": "~58.0.16",
     "expo-dev-client": "~58.0.20",
     "expo-font": "~58.0.12",
@@ -21,17 +28,22 @@
     "react": "19.3.0",
     "react-dom": "19.3.0",
     "react-native": "0.88.1",
+    "react-native-background-timer": "2.4.1",
     "react-native-gesture-handler": "~3.3.0",
+    "react-native-get-random-values": "^2.1.0",
     "react-native-reanimated": "4.7.1",
     "react-native-safe-area-context": "~5.11.1",
     "react-native-screens": "~4.30.1",
     "react-native-web": "~0.21.4",
-    "react-native-worklets": "0.13.0"
+    "react-native-worklets": "0.13.0",
+    "unicode-segmenter": "^0.14.5"
   },
   "devDependencies": {
     "@testing-library/react-native": "^14.1.0",
     "@types/jest": "^30.0.0",
+    "@types/node": "^24.19.2",
     "@types/react": "~19.3.0",
+    "esbuild": "0.27.0",
     "eslint": "^9.39.5",
     "eslint-config-expo": "^58.0.4",
     "jest": "^30.5.2",
@@ -46,7 +58,9 @@
     "lint": "expo lint",
     "typecheck": "tsc --noEmit",
     "test": "jest",
-    "convex:dev": "convex dev"
+    "convex:dev": "convex dev",
+    "eval:agent": "jest --testRegex 'src/agent/__eval__/vapiChat\\.eval\\.ts$' --testTimeout 900000",
+    "eval:bluesky": "esbuild src/agent/__eval__/bluesky.run.ts --bundle --platform=node --format=cjs --log-level=warning --outfile=.eval/bluesky.cjs --alias:react-native=./src/agent/__eval__/nativeShim.ts --alias:expo-secure-store=./src/agent/__eval__/nativeShim.ts && node .eval/bluesky.cjs"
   },
   "private": true,
   "packageManager": "pnpm@12.11.2"

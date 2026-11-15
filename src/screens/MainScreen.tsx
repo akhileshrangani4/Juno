@@ -3,14 +3,18 @@ import { useEffect, useRef, useState } from 'react';
 import { Platform, StyleSheet, Text, View, type AccessibilityActionEvent, type AccessibilityRole } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
+import type { AgentStatus, EndReason } from '@/agent/AgentSession';
+import { onDevWake } from '@/agent/devWake';
+import { narrateForFeed, postHasUndescribedMedia } from '@/agent/narrationAdapter';
+import { useFeedNarrator, useNarrationSettings } from '@/agent/narrationSettings';
+import { useVoiceAgent } from '@/agent/useVoiceAgent';
 import { fetchCachedDescription } from '@/backend/convex';
 import { haptic } from '@/feedback/haptics';
 import { useFeed } from '@/feed/useFeed';
 import type { CircleDirection } from '@/gestures/circle';
 import { GestureSurface } from '@/gestures/GestureSurface';
 import { createRateLimiter } from '@/gestures/rateLimit';
-import { buildPostNarration, messages } from '@/narration/buildNarration';
-import { useNarrator } from '@/narration/useNarrator';
+import { messages } from '@/narration/buildNarration';
 import { useSession } from '@/session/SessionContext';
 import { colors, type } from '@/theme';
 
@@ -22,11 +26,19 @@ const STROKE_CUE_INTERVAL_MS = 2500;
 
 const DIRECT_TOUCH = 'allowsDirectInteraction' as unknown as AccessibilityRole;
 
+const AGENT_STATUS: Record<AgentStatus, string> = {
+  starting: 'Waking up',
+  connecting: 'Connecting',
+  listening: 'Listening',
+  ended: 'Going to sleep',
+};
+
 let mountedFeeds = 0;
 
 export function MainScreen() {
   const { provider } = useSession();
-  const narrator = useNarrator();
+  const narrator = useFeedNarrator();
+  const settings = useNarrationSettings();
   const { state, post, go } = useFeed(provider);
   const [mode, setMode] = useState<Mode>('scroll');
   const [narration, setNarration] = useState('');
@@ -36,6 +48,16 @@ export function MainScreen() {
   const strokeCueTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
 
   useEffect(() => () => clearTimeout(strokeCueTimer.current), []);
+
+  const onAgentExit = (reason: EndReason, message: string) => {
+    prefix.current = message;
+    setMode('scroll');
+    if (reason === 'signIn') router.push('/sign-in');
+  };
+  const agent = useVoiceAgent({ active: mode === 'agent', post, feed: { state, go }, narrator, onExit: onAgentExit });
+  const agentStatus = agent.status;
+
+  useEffect(() => onDevWake(() => setMode('agent')), []);
 
   const status = post ? null : state.error ? messages.feedError : state.exhausted ? (state.stalled ? messages.unavailable : messages.empty) : messages.loadingFirst;
 
@@ -58,17 +80,17 @@ export function MainScreen() {
       narrator.speak(`${prefix.current} ${text}`.trim());
       prefix.current = '';
     };
-    if (mode === 'agent') say(messages.agentAwake);
+    if (mode === 'agent') narrator.stop();
     else if (!post) say(status ?? '');
-    else if (post.media.some((media) => (media.kind === 'images' && media.images.some((image) => !image.alt)) || (media.kind === 'video' && !media.alt))) {
-      show(buildPostNarration(post, new Date()));
-      fetchCachedDescription(post.uri).then((description) => say(buildPostNarration(post, new Date(), description)));
-    } else say(buildPostNarration(post, new Date()));
+    else if (postHasUndescribedMedia(post)) {
+      show(narrateForFeed(post, settings, null));
+      fetchCachedDescription(post.uri).then((description) => say(narrateForFeed(post, settings, description)));
+    } else say(narrateForFeed(post, settings, null));
     return () => {
       cancelled = true;
       narrator.stop();
     };
-  }, [mode, post, status, narrator]);
+  }, [mode, post, status, narrator, settings]);
 
   const step = (direction: 'next' | 'previous') => {
     const outcome = go(direction);
@@ -77,10 +99,17 @@ export function MainScreen() {
     if (!state.error) narrator.speak(outcome === 'atStart' ? messages.atStart : outcome === 'atEnd' ? messages.atEnd : outcome === 'unavailable' ? messages.noMore : messages.loading);
   };
 
+  // While the agent is awake the call owns the audio: the app's messages go through the agent's voice, never
+  // on-device speech, and before the call is live a haptic is the only answer.
+  const tellInAgentMode = (text: string) => {
+    if (!agent.say(text)) haptic('edge');
+  };
+
   const switchMode = (next: Mode) => {
     if (next === mode) {
       haptic('edge');
-      narrator.speak(next === 'agent' ? messages.alreadyAwake : messages.alreadyScrolling);
+      if (next === 'agent') agent.say(messages.alreadyAwake);
+      else narrator.speak(messages.alreadyScrolling);
       return;
     }
     haptic(next === 'agent' ? 'agentAwake' : 'agentAsleep');
@@ -88,13 +117,13 @@ export function MainScreen() {
     setMode(next);
   };
 
-  const onTapTop = () => (mode === 'scroll' ? step('previous') : narrator.speak(messages.gestures));
-  const onTapBottom = () => (mode === 'scroll' ? step('next') : router.push('/sign-in'));
+  const onTapTop = () => (mode === 'scroll' ? step('previous') : tellInAgentMode(messages.gestures));
+  const onTapBottom = () => (mode === 'scroll' ? step('next') : onAgentExit('signIn', 'Opening the sign-in screen.'));
   const onCircle = (direction: CircleDirection) => switchMode(direction === 'clockwise' ? 'agent' : 'scroll');
   const onUnrecognizedStroke = () =>
     playUnrecognizedCue({
       narrator,
-      allowSpeech: allowStrokeCue,
+      allowSpeech: () => mode === 'scroll' && allowStrokeCue(),
       showHint: () => {
         setStrokeCue(true);
         clearTimeout(strokeCueTimer.current);
@@ -111,13 +140,13 @@ export function MainScreen() {
       case 'decrement':
         return step('previous');
       case 'reread':
-        return narrator.speak(narration);
+        return mode === 'scroll' ? narrator.speak(narration) : tellInAgentMode(narration);
       case 'toggleAgent':
         return switchMode(mode === 'scroll' ? 'agent' : 'scroll');
       case 'instructions':
-        return narrator.speak(messages.gestures);
+        return mode === 'scroll' ? narrator.speak(messages.gestures) : tellInAgentMode(messages.gestures);
       case 'account':
-        return router.push('/sign-in');
+        return mode === 'scroll' ? router.push('/sign-in') : onTapBottom();
     }
   };
 
@@ -133,7 +162,7 @@ export function MainScreen() {
         onUnrecognizedStroke={onUnrecognizedStroke}
         accessible
         accessibilityRole={Platform.OS === 'ios' ? DIRECT_TOUCH : 'adjustable'}
-        accessibilityLabel={scrolling ? 'Feed' : 'Voice agent'}
+        accessibilityLabel={scrolling ? 'Feed' : `Voice agent, ${AGENT_STATUS[agentStatus ?? 'starting'].toLowerCase()}`}
         accessibilityHint={
           scrolling
             ? 'Tap the bottom half for the next post, the top half for the previous post. Draw a clockwise circle to wake the agent.'
@@ -149,11 +178,13 @@ export function MainScreen() {
           {scrolling ? '▲ Previous post' : '▲ Hear the instructions'}
         </Text>
         {!scrolling ? (
-          <View style={[styles.panel, styles.agent]}>
-            <Text style={[styles.title, { color: colors.agent }]}>Agent is awake</Text>
-            <Text style={styles.statusText}>The voice agent is not connected yet. Draw a counter-clockwise circle to go back to scrolling.</Text>
+          <View style={styles.agentBar}>
+            <Text style={[styles.agentTitle, { color: colors.agent }]} maxFontSizeMultiplier={type.maxScale}>
+              Agent: {AGENT_STATUS[agentStatus ?? 'starting']}
+            </Text>
           </View>
-        ) : post ? (
+        ) : null}
+        {post ? (
           <PostCard post={post} position={`${state.index + 1} of ${state.posts.length}${state.exhausted ? '' : '+'}`} />
         ) : (
           <View style={styles.panel}>
@@ -173,7 +204,7 @@ const styles = StyleSheet.create({
   surface: { flex: 1, padding: 12, gap: 8 },
   hint: { color: colors.muted, fontSize: type.label, fontWeight: '700', textAlign: 'center', paddingVertical: 6 },
   panel: { flex: 1, borderWidth: 6, borderColor: colors.focus, borderRadius: 24, backgroundColor: colors.surface, padding: 20, gap: 16, justifyContent: 'center' },
-  agent: { borderColor: colors.agent },
-  title: { fontSize: 36, fontWeight: '800' },
+  agentBar: { borderWidth: 4, borderColor: colors.agent, borderRadius: 16, padding: 12 },
+  agentTitle: { fontSize: type.title, fontWeight: '800', textAlign: 'center' },
   statusText: { color: colors.text, fontSize: type.body, lineHeight: type.bodyLineHeight, fontWeight: '600' },
 });

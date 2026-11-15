@@ -1,0 +1,245 @@
+import type { Post } from '@/social/types';
+
+import { agentMessages } from './agentMessages';
+import { describeFocus } from './postContext';
+import type { Conversation, ToolHandlers, ToolOutcome } from './toolHandlers';
+import type { VapiMessage, VoiceCall } from './voiceCall';
+
+export type EndReason = 'user' | 'agent' | 'silence' | 'maxDuration' | 'dropped' | 'failed' | 'micDenied' | 'notConfigured' | 'signIn';
+
+export type AgentStatus = 'starting' | 'connecting' | 'listening' | 'ended';
+
+export const CONNECT_TIMEOUT_MS = 20_000;
+export const COUNTDOWN_FALLBACK_MS = 6_000;
+
+const UNDO_WORDS = /\b(undo|stop|cancel|wait|don'?t|no)\b/i;
+
+export type SessionDeps = {
+  call: VoiceCall | null;
+  handlers: ToolHandlers;
+  conversation: ConversationLog;
+  microphone(): Promise<'granted' | 'denied'>;
+  assistant(): Promise<object>;
+  status(status: AgentStatus): void;
+  // Haptic plus the app's own spoken cue; the agent's first message is the spoken "listening" cue.
+  connecting(): void;
+  listening(): void;
+  exit(reason: EndReason, message: string): void;
+  schedule(run: () => void, ms: number): () => void;
+  log(event: string, detail?: Record<string, unknown>): void;
+};
+
+export class ConversationLog implements Conversation {
+  private readonly utterances: string[] = [];
+
+  add(utterance: string) {
+    this.utterances.push(utterance.trim());
+  }
+
+  turn() {
+    return this.utterances.length;
+  }
+
+  lastUtterance() {
+    return this.utterances[this.utterances.length - 1] ?? '';
+  }
+
+  recentUtterances() {
+    return this.utterances.slice(-4);
+  }
+}
+
+const END_REASONS: Record<string, EndReason> = {
+  'silence-timed-out': 'silence',
+  'exceeded-max-duration': 'maxDuration',
+  'customer-ended-call': 'user',
+  'assistant-ended-call': 'agent',
+};
+
+const EXIT_MESSAGES: Record<EndReason, string> = {
+  user: agentMessages.asleep,
+  agent: agentMessages.asleep,
+  silence: agentMessages.silence,
+  maxDuration: agentMessages.maxDuration,
+  dropped: agentMessages.dropped,
+  failed: agentMessages.couldNotConnect,
+  micDenied: agentMessages.micDenied,
+  notConfigured: agentMessages.notConfigured,
+  signIn: agentMessages.signIn,
+};
+
+export class AgentSession {
+  private live = false;
+  private finished = false;
+  private countdownArmed: (() => void) | null = null;
+  private announcementStarted = false;
+  private focusUri: string | null = null;
+  private queue: Promise<void> = Promise.resolve();
+
+  constructor(private readonly deps: SessionDeps) {}
+
+  async start(): Promise<void> {
+    const { deps } = this;
+    deps.status('starting');
+    if (!deps.call) return this.finish('notConfigured');
+    if ((await deps.microphone()) !== 'granted') return this.finish('micDenied');
+    if (this.finished) return;
+    deps.status('connecting');
+    deps.connecting();
+    deps.log('connecting');
+    try {
+      const assistant = await deps.assistant();
+      if (this.finished) return;
+      await new Promise<void>((resolve, reject) => {
+        const cancel = deps.schedule(() => reject(new Error('Timed out connecting')), CONNECT_TIMEOUT_MS);
+        deps.call!.start(assistant, { onMessage: (message) => this.onMessage(message), onEnd: () => this.finish('dropped'), onError: (error) => this.onError(error) }).then(
+          () => {
+            cancel();
+            resolve();
+          },
+          (error: unknown) => {
+            cancel();
+            reject(error);
+          },
+        );
+      });
+    } catch (error) {
+      deps.log('connect failed', { error: error instanceof Error ? error.message : String(error) });
+      deps.call.stop();
+      return this.finish('failed');
+    }
+    if (this.finished) return deps.call.stop();
+    this.live = true;
+    deps.log('connected');
+    deps.status('listening');
+    deps.listening();
+  }
+
+  stop(reason: EndReason = 'user'): void {
+    if (this.finished) return;
+    this.deps.call?.stop();
+    this.finish(reason);
+  }
+
+  // Something finished outside a tool call (a post was sent). With speak, the app says it word for word and the
+  // model only hears about it; otherwise the model is asked to tell the user.
+  notify(text: string, speak?: string): void {
+    if (!this.live) return;
+    if (speak) this.deps.call?.say(speak);
+    this.deps.call?.addMessage(text, !speak);
+  }
+
+  // While the call is live it owns the audio, so the app's own messages (gesture help) are spoken by the agent.
+  say(text: string): boolean {
+    if (!this.live) return false;
+    this.deps.call?.say(text);
+    this.deps.call?.addMessage(`The app just said this to the user: "${text}". Don't repeat it.`, false);
+    return true;
+  }
+
+  focusChanged(post: Post | null): void {
+    const uri = post?.uri ?? null;
+    if (uri === this.focusUri) return;
+    this.focusUri = uri;
+    if (this.live) this.deps.call?.addMessage(`Focus changed. The post in focus is now: ${describeFocus(post)}`, false);
+  }
+
+  private onError(error: unknown) {
+    this.deps.log('call error', { error: error instanceof Error ? error.message : typeof error === 'object' ? JSON.stringify(error).slice(0, 200) : String(error) });
+    if (this.live) this.finish('dropped');
+  }
+
+  private onMessage(message: VapiMessage) {
+    switch (message.type) {
+      case 'transcript':
+        if (message.role === 'user' && message.transcriptType === 'final' && typeof message.transcript === 'string') this.onUserSaid(message.transcript);
+        return;
+      case 'tool-calls':
+        for (const call of (message.toolCallList as ToolCall[] | undefined) ?? []) this.queue = this.queue.then(() => this.runTool(call));
+        return;
+      case 'speech-update':
+        if (message.role !== 'assistant' || !this.countdownArmed) return;
+        if (message.status === 'started') this.announcementStarted = true;
+        if (message.status === 'stopped' && this.announcementStarted) this.startCountdown();
+        return;
+      case 'status-update':
+        if (message.status === 'ended') {
+          this.deps.log('ended', { reason: message.endedReason });
+          this.finish(END_REASONS[String(message.endedReason)] ?? 'dropped');
+        }
+        return;
+    }
+  }
+
+  private onUserSaid(transcript: string) {
+    this.deps.conversation.add(transcript);
+    if (!this.deps.handlers.publisher.busy || !UNDO_WORDS.test(transcript)) return;
+    const undone = this.deps.handlers.undoFromTranscript();
+    if (!undone) return;
+    this.countdownArmed?.();
+    this.countdownArmed = null;
+    this.deps.log('undone from transcript', { state: undone.state });
+    if (undone.state === 'stopped') {
+      this.deps.call?.say(agentMessages.undone);
+      this.deps.call?.addMessage('The user said undo during the five seconds. The app stopped it, nothing was sent, and it told them. Say nothing.', false);
+    } else {
+      this.deps.call?.say(agentMessages.undoWhileSending);
+      this.deps.call?.addMessage('The user said undo while it was being sent. The app removes it when the send finishes and tells them what happened. Say nothing.', false);
+    }
+  }
+
+  private async runTool(call: ToolCall) {
+    const name = call.function?.name ?? call.name ?? '';
+    const args = parseArguments(call.function?.arguments ?? call.arguments);
+    this.deps.log('tool', { name });
+    const outcome = await this.deps.handlers.run(name, args);
+    if (this.finished) return;
+    this.deliver(name, outcome);
+  }
+
+  private deliver(name: string, outcome: ToolOutcome) {
+    const { call } = this.deps;
+    if (outcome.after === 'end') return this.stop('agent');
+    if (outcome.after === 'signIn') return this.stop('signIn');
+    if (outcome.speak) call?.say(outcome.speak);
+    call?.addMessage(`Result of ${name}: ${outcome.result}`, outcome.respond);
+    if (outcome.after === 'countdown') {
+      // The five seconds start once the "Posting in five seconds" notice has been spoken.
+      this.announcementStarted = false;
+      this.countdownArmed = this.deps.schedule(() => this.startCountdown(), COUNTDOWN_FALLBACK_MS);
+    }
+  }
+
+  private startCountdown() {
+    if (!this.countdownArmed) return;
+    this.countdownArmed();
+    this.countdownArmed = null;
+    this.deps.handlers.publisher.startCountdown();
+  }
+
+  private finish(reason: EndReason) {
+    if (this.finished) return;
+    this.finished = true;
+    this.live = false;
+    this.countdownArmed?.();
+    this.countdownArmed = null;
+    const cancelled = this.deps.handlers.publisher.cancelPending();
+    this.deps.log('exit', { reason, cancelledPending: !!cancelled });
+    this.deps.status('ended');
+    this.deps.exit(reason, `${cancelled ? agentMessages.notSent : ''}${EXIT_MESSAGES[reason]}`);
+  }
+}
+
+type ToolCall = { id?: string; name?: string; arguments?: unknown; function?: { name?: string; arguments?: unknown } };
+
+function parseArguments(raw: unknown): Record<string, unknown> {
+  if (typeof raw === 'string') {
+    try {
+      const parsed: unknown = JSON.parse(raw || '{}');
+      return typeof parsed === 'object' && parsed !== null ? (parsed as Record<string, unknown>) : {};
+    } catch {
+      return {};
+    }
+  }
+  return typeof raw === 'object' && raw !== null ? (raw as Record<string, unknown>) : {};
+}

@@ -8,6 +8,9 @@
  * @module
  */
 
+import type * as memory from "../memory.js";
+import type * as memoryLimits from "../memoryLimits.js";
+import type * as memoryOwners from "../memoryOwners.js";
 import type * as postDescriptions from "../postDescriptions.js";
 import type * as users from "../users.js";
 
@@ -18,6 +21,9 @@ import type {
 } from "convex/server";
 
 declare const fullApi: ApiFromModules<{
+  memory: typeof memory;
+  memoryLimits: typeof memoryLimits;
+  memoryOwners: typeof memoryOwners;
   postDescriptions: typeof postDescriptions;
   users: typeof users;
 }>;

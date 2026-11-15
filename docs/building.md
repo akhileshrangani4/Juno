@@ -46,10 +46,53 @@ await tools.mobile.build({
 
 Then `tools.capy.phone` with `attach` and `install` puts the build on a cloud phone. `.capyignore` keeps local env files out of the upload.
 
+### Build settings for Revyl
+
+`EXPO_PUBLIC_*` values are inlined when the bundle is built, so a Revyl build needs them on the runner. `scripts/build-ios-simulator.sh` loads an optional `build.env` file from the repository root (gitignored, but uploaded with the workspace because `.capyignore` does not exclude it). Write it right before starting the build:
+
+```bash
+printf 'EXPO_PUBLIC_VAPI_PUBLIC_KEY=%s\nEXPO_PUBLIC_CONVEX_URL=https://dependable-goshawk-583.convex.cloud\nEXPO_PUBLIC_DEV_AGENT_LINK=1\n' "$VAPI_PUBLIC_KEY" > build.env
+```
+
+Only public values go in it: the Vapi public key is meant to ship in the app. Leave out `EXPO_PUBLIC_DEV_AGENT_LINK` for anything other than a test build.
+
+### Waking the agent without a circle (test builds only)
+
+Cloud phones cannot draw a circle. In a build made with `EXPO_PUBLIC_DEV_AGENT_LINK=1`, opening the link `consumerhack://dev-agent` wakes the voice agent exactly as a clockwise circle does (handled in `src/app/+native-intent.tsx` and `src/agent/devWake.ts`). If the feed is not showing yet, the agent wakes as soon as it is. In a build without the variable the check is the constant `false`, the bundler removes the code, and the link just opens the app. On a simulator: `xcrun simctl openurl booted consumerhack://dev-agent`.
+
+The same test builds print the call's lifecycle to the device log as `[agent] ...` lines (connecting, connected, each tool name, ended reason, exit). They never include what was said.
+
 ### For a physical phone
 
 `eas.json` has `development` (dev client), `preview` and `production` profiles: `npx eas-cli build --profile development --platform ios`. This needs an Expo account and, for iOS, an Apple developer account.
 
 ## Convex
 
-`pnpm convex:dev` creates or links a deployment, pushes `convex/`, regenerates `convex/_generated` and writes `EXPO_PUBLIC_CONVEX_URL` to `.env.local`. In CI or on a server, `CONVEX_DEPLOY_KEY=... npx convex deploy` pushes to the deployment the key belongs to. The app runs without `EXPO_PUBLIC_CONVEX_URL`; it then skips the description cache and user records.
+`pnpm convex:dev` creates or links a personal deployment, pushes `convex/`, regenerates `convex/_generated` and writes `EXPO_PUBLIC_CONVEX_URL` to `.env.local`. With `CONVEX_DEPLOY_KEY` in the environment, `npx convex deploy` pushes to the deployment the key belongs to.
+
+The app talks to the deployment at **https://dependable-goshawk-583.convex.cloud** (not a secret). Set `EXPO_PUBLIC_CONVEX_URL` to it for builds that should have memory and the description cache; the app still runs without it, and the voice agent then works without memory.
+
+Server-side keys live only in the deployment's environment. Set them without echoing the value:
+
+```bash
+npx convex env set SUPERMEMORY_API_KEY "$SUPERMEMORY_API_KEY"   # convex/memory.ts
+```
+
+| Variable | Where it is set | Read by |
+| --- | --- | --- |
+| `SUPERMEMORY_API_KEY` | Convex deployment only | `convex/memory.ts` |
+| `VAPI_PRIVATE_KEY` | developer shell only | `pnpm eval:agent` (Vapi chat API) |
+| `OPENAI_API_KEY` | developer shell only | `EVAL_BACKEND=openai pnpm eval:agent` (stand-in) |
+| `BLUESKY_TEST_HANDLE`, `BLUESKY_TEST_APP_PASSWORD` | developer shell only | `pnpm eval:bluesky` |
+
+None of these is ever set in the app or in `.env.local`. The voice agent's Convex code reads only `SUPERMEMORY_API_KEY`; nothing deployed forwards prompts to a model.
+
+The memory actions are rate limited per device (30 calls per 10 minutes), per caller address (60 per 10 minutes, stored as a hash) and for the whole deployment (600 per hour), and a person can keep at most 50 facts. The numbers live in `src/agent/memoryRateLimits.ts`.
+
+Several branches deploy to this one deployment, and a deploy from one branch replaces the functions of another. Deploy right before you verify, and after a merge deploy from main.
+
+## Testing the voice agent without a microphone
+
+`pnpm eval:agent` runs `src/agent/__eval__/vapiChat.eval.ts` on a developer machine: it sends a scripted conversation to the real assistant configuration through Vapi's chat API with `VAPI_PRIVATE_KEY` from your shell, runs every tool call through the real tool handlers against a mocked Bluesky account, and writes the transcript to `agent-eval-transcript.md` (or `EVAL_TRANSCRIPT`). Vapi's chat API needs a card on the Vapi account and is billed. With `EVAL_BACKEND=openai` and `OPENAI_API_KEY` it sends the same prompt and tools to the same model at OpenAI instead: a stand-in that tests the prompt and tools but not Vapi's own orchestration.
+
+`pnpm eval:bluesky` publishes a real post and reply through the tool handlers to the account in `BLUESKY_TEST_HANDLE`/`BLUESKY_TEST_APP_PASSWORD`, undoes and deletes them, and checks each step on Bluesky. Use a throwaway account.
