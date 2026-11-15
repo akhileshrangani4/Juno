@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react';
-import { Pressable, StyleSheet, Text } from 'react-native';
+import { Pressable, StyleSheet } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
+import { Text } from '@/accessibility/ScaledText';
 import { useScreenReader } from '@/accessibility/useScreenReader';
 import { haptic } from '@/feedback/haptics';
 import { INTRO_SUMMARY, introInstructions } from '@/narration/buildNarration';
