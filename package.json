@@ -55,6 +55,7 @@
     "eslint-config-expo": "^58.0.4",
     "jest": "^30.5.2",
     "jest-expo": "^58.0.14",
+    "jpeg-js": "^0.4.4",
     "typescript": "~6.0.3"
   },
   "scripts": {
@@ -67,7 +68,8 @@
     "test": "jest",
     "convex:dev": "convex dev",
     "eval:agent": "jest --testRegex 'src/agent/__eval__/vapiChat\\.eval\\.ts$' --testTimeout 900000",
-    "eval:bluesky": "esbuild src/agent/__eval__/bluesky.run.ts --bundle --platform=node --format=cjs --log-level=warning --outfile=.eval/bluesky.cjs --alias:react-native=./src/agent/__eval__/nativeShim.ts --alias:expo-secure-store=./src/agent/__eval__/nativeShim.ts && node .eval/bluesky.cjs"
+    "eval:bluesky": "esbuild src/agent/__eval__/bluesky.run.ts --bundle --platform=node --format=cjs --log-level=warning --outfile=.eval/bluesky.cjs --alias:react-native=./src/agent/__eval__/nativeShim.ts --alias:expo-secure-store=./src/agent/__eval__/nativeShim.ts && node .eval/bluesky.cjs",
+    "eval:look": "esbuild scripts/look-eval.ts --bundle --platform=node --format=cjs --log-level=warning --outfile=.eval/look.cjs --loader:.jpg=empty && node .eval/look.cjs"
   },
   "private": true,
   "packageManager": "pnpm@12.11.2"
