@@ -6,6 +6,23 @@ const run = (entry: string, events: SignInEvent[], screenReader = true) =>
 
 const account = { id: 'did:plc:maya', handle: 'maya.bsky.social', displayName: 'Maya' };
 
+describe('the iPhone sign-in prompt', () => {
+  it('is announced before sign-in and sign-up open Bluesky', () => {
+    expect(authMessages.opening).toContain('First, iPhone asks whether this app may use a website, usually bsky.social, to sign in. Choose Continue.');
+    expect(authMessages.createAccount).toMatch(/^Bluesky's sign-up page will open\. First, iPhone asks whether this app may use a website, usually bsky\.social, to sign in\. Choose Continue\. The page asks/);
+  });
+
+  it('is left out where the system shows no such prompt', () => {
+    jest.isolateModules(() => {
+      jest.doMock('react-native', () => ({ Platform: { OS: 'android' } }));
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
+      const { authMessages: android } = require('../messages') as typeof import('../messages');
+      expect(android.opening).toBe("Bluesky's sign-in page will open. Then enter your password on Bluesky's page. You'll come back here when you're done.");
+      expect(android.createAccount).not.toContain('iPhone');
+    });
+  });
+});
+
 describe('sign in flow', () => {
   it('asks for the handle first', () => {
     expect(startSignIn('', true)).toMatchObject({ step: 'entry', message: 'Type or dictate your Bluesky handle, then double tap Continue.' });
@@ -17,7 +34,11 @@ describe('sign in flow', () => {
     const confirm = nextSignIn(checking, { type: 'found' }, true);
     expect(confirm).toMatchObject({ step: 'confirm', message: "Did you mean maya dot bsky dot social? Double tap Continue if that's right." });
     const opening = nextSignIn(confirm, { type: 'confirm' }, true);
-    expect(opening).toMatchObject({ step: 'opening', message: "Bluesky's sign-in page will open. Enter your password there. You'll come back here when you're done." });
+    expect(opening).toMatchObject({
+      step: 'opening',
+      message:
+        "Bluesky's sign-in page will open. First, iPhone asks whether this app may use a website, usually bsky.social, to sign in. Choose Continue. Then enter your password on Bluesky's page. You'll come back here when you're done.",
+    });
     expect(nextSignIn(opening, { type: 'result', result: { status: 'success', account } }, true)).toEqual({ step: 'signedIn', account, message: 'Signed in as Maya.' });
   });
 

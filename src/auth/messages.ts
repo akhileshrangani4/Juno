@@ -1,8 +1,12 @@
+import { Platform } from 'react-native';
+
 import type { SocialAccount } from '@/social/types';
 
 import { spellHandle } from './handle';
 
 const act = (screenReader: boolean) => (screenReader ? 'Double tap' : 'Tap');
+
+export const SYSTEM_SIGN_IN_PROMPT = Platform.OS === 'ios' ? ' First, iPhone asks whether this app may use a website, usually bsky.social, to sign in. Choose Continue.' : '';
 
 export const authMessages = {
   choices: 'Welcome to Juno. You can sign in with your Bluesky handle, create a new Bluesky account, or listen to a public feed without signing in.',
@@ -20,13 +24,13 @@ export const authMessages = {
     `${addedDomain ? `Did you mean ${spellHandle(handle)}?` : `${spellHandle(handle)}.`} ${act(screenReader)} Continue if that's right.`,
   notFound: (handle: string) => `I couldn't find ${spellHandle(handle)} on Bluesky. Check the spelling and try again.`,
   lookupFailed: "Couldn't reach Bluesky to look up your handle. Check your connection and try again.",
-  opening: "Bluesky's sign-in page will open. Enter your password there. You'll come back here when you're done.",
+  opening: `Bluesky's sign-in page will open.${SYSTEM_SIGN_IN_PROMPT} Then enter your password on Bluesky's page. You'll come back here when you're done.`,
   signedIn: (account: SocialAccount) => `Signed in as ${account.displayName?.trim() || spellHandle(account.handle)}.`,
   cancelled: (screenReader: boolean) => `Sign in was cancelled. ${act(screenReader)} Continue to try again, or choose Use an app password instead.`,
   networkFailure: "Sign in didn't finish because Bluesky couldn't be reached. Check your connection, then try again.",
   serverFailure: "Bluesky couldn't finish signing you in. Try again, or choose Use an app password instead.",
   createAccount:
-    "Bluesky's sign-up page will open. It asks you to choose a username, then for your email address and a password, then for a check that you're human. That check may be a picture puzzle with no audio option, so you may need a sighted helper for that one step. You'll come back here signed in when you're done.",
+    `Bluesky's sign-up page will open.${SYSTEM_SIGN_IN_PROMPT} The page asks you to choose a username, then for your email address and a password, then for a check that you're human. That check may be a picture puzzle with no audio option, so you may need a sighted helper for that one step. You'll come back here signed in when you're done.`,
   createCancelled: 'Account creation was cancelled. You can try again, or sign in if you already have an account.',
   createNetworkFailure: "Bluesky's sign-up page couldn't be reached. Check your connection, then try again.",
   createServerFailure: "Bluesky couldn't finish creating your account here. Try again, or sign in if you already have an account.",
