@@ -13,8 +13,9 @@ export const FIRST_MESSAGE = "I'm listening.";
 
 // The model behind the voice agent, chosen by measuring tool use, publish safety and time to first word against
 // the other models Vapi offers (docs/building.md, "The voice agent's model"). Reasoning stays off: any effort above
-// none adds time before the first word, and OpenAI then refuses the temperature.
-export const AGENT_MODEL = 'gpt-5.6-terra';
+// none adds time before the first word, and OpenAI then refuses the temperature. The fast tier costs twice as much
+// per token and brings the first word back close to gpt-4.1's.
+export const AGENT_MODEL = 'gpt-5.6-sol';
 
 // assistant.speechStarted names who is speaking each turn (the app's say() or the model); see agentVoice.ts.
 export const clientMessages = ['tool-calls', 'transcript', 'status-update', 'speech-update', 'assistant.speechStarted'] as const;
@@ -28,6 +29,7 @@ export function buildAssistant(context: PromptContext) {
       provider: 'openai' as const,
       model: AGENT_MODEL,
       reasoningEffort: 'none' as const,
+      serviceTier: 'fast' as const,
       temperature: 0.2,
       messages: [{ role: 'system' as const, content: buildSystemPrompt(context) }],
       tools: vapiTools,
