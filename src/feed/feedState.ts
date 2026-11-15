@@ -5,6 +5,7 @@ export type FeedState = {
   index: number;
   cursor: string | null;
   exhausted: boolean;
+  stalled: boolean;
   loading: boolean;
   error: string | null;
 };
@@ -16,9 +17,9 @@ export type FeedAction =
   | { type: 'loadFailed'; error: string }
   | { type: 'moved'; index: number };
 
-export type MoveOutcome = 'moved' | 'atStart' | 'atEnd' | 'loading';
+export type MoveOutcome = 'moved' | 'atStart' | 'atEnd' | 'unavailable' | 'loading';
 
-export const initialFeedState: FeedState = { posts: [], index: 0, cursor: null, exhausted: false, loading: false, error: null };
+export const initialFeedState: FeedState = { posts: [], index: 0, cursor: null, exhausted: false, stalled: false, loading: false, error: null };
 
 export const PREFETCH_DISTANCE = 5;
 
@@ -36,6 +37,7 @@ export function feedReducer(state: FeedState, action: FeedAction): FeedState {
         posts: [...state.posts, ...fresh],
         cursor: action.cursor,
         exhausted: action.cursor === null || fresh.length === 0,
+        stalled: action.cursor !== null && fresh.length === 0,
         loading: false,
       };
     }
@@ -51,7 +53,7 @@ export function move(state: FeedState, direction: 'next' | 'previous'): { index:
     return state.index === 0 ? { index: 0, outcome: 'atStart' } : { index: state.index - 1, outcome: 'moved' };
   }
   if (state.index < state.posts.length - 1) return { index: state.index + 1, outcome: 'moved' };
-  return { index: state.index, outcome: state.loading || !state.exhausted ? 'loading' : 'atEnd' };
+  return { index: state.index, outcome: state.loading || !state.exhausted ? 'loading' : state.stalled ? 'unavailable' : 'atEnd' };
 }
 
 export function shouldLoadMore(state: FeedState): boolean {

@@ -14,6 +14,8 @@ const feedItem = (n: number) => ({
 const mockAgents: any[] = [];
 
 jest.mock('@atproto/api', () => ({
+  moderatePost: jest.requireActual('@atproto/api').moderatePost,
+  BSKY_LABELER_DID: jest.requireActual('@atproto/api').BSKY_LABELER_DID,
   RichText: class {
     facets = undefined;
     text: string;
@@ -79,7 +81,9 @@ describe('BlueskyProvider', () => {
   it('restores a stored session and survives a missing or expired one', async () => {
     const { provider, store } = setup();
     expect(await provider.restoreSession()).toBeNull();
+    expect(await provider.hasStoredSession()).toBe(false);
     await store.set('bluesky.session', JSON.stringify({ did: 'did:plc:me', handle: 'me.bsky.social', accessJwt: 'a', refreshJwt: 'r', active: true }));
+    expect(await provider.hasStoredSession()).toBe(true);
     expect(await provider.restoreSession()).toEqual({ id: 'did:plc:me', handle: 'me.bsky.social' });
     const expired = setup();
     await expired.store.set('bluesky.session', JSON.stringify({ did: 'd', handle: 'h', accessJwt: 'a', refreshJwt: 'expired', active: true }));
@@ -117,5 +121,47 @@ describe('BlueskyProvider', () => {
     await provider.repost(parent);
     expect(agent.like).toHaveBeenCalledWith(parent.uri, parent.cid);
     expect(agent.repost).toHaveBeenCalledWith(parent.uri, parent.cid);
+  });
+});
+
+describe('BlueskyProvider content filter', () => {
+  const labeled = (n: number, val: string) => {
+    const item = feedItem(n);
+    return { post: { ...item.post, labels: [{ src: 'did:plc:ar7c4by46qjdydhdevvrndac', uri: item.post.uri, val, cts: '2026-11-15T10:00:00.000Z' }] } };
+  };
+
+  it('skips adult posts in the signed-out demo feed', async () => {
+    const { provider, publicAgent } = setup();
+    publicAgent.app.bsky.feed.getFeed.mockResolvedValueOnce({ data: { feed: [feedItem(1), labeled(2, 'porn'), labeled(3, 'sexual'), feedItem(4)], cursor: 'c' } });
+    expect((await provider.getTimeline()).posts.map((post) => post.uri)).toEqual(['at://post/1', 'at://post/4']);
+  });
+
+  it('skips adult posts in the signed-in timeline too', async () => {
+    const { provider, agent } = setup();
+    await provider.signIn('me.bsky.social', 'pw');
+    agent.getTimeline.mockResolvedValueOnce({ data: { feed: [labeled(1, 'nudity'), feedItem(2), labeled(3, 'graphic-media')], cursor: 'c' } });
+    expect((await provider.getTimeline()).posts.map((post) => post.uri)).toEqual(['at://post/2']);
+  });
+
+  it('reads on when a whole page is filtered, instead of ending the feed', async () => {
+    const { provider, publicAgent } = setup();
+    publicAgent.app.bsky.feed.getFeed
+      .mockResolvedValueOnce({ data: { feed: [labeled(1, 'porn')], cursor: 'c1' } })
+      .mockResolvedValueOnce({ data: { feed: [feedItem(2)], cursor: 'c2' } });
+    expect(await provider.getTimeline()).toMatchObject({ posts: [{ uri: 'at://post/2' }], cursor: 'c2' });
+    expect(publicAgent.app.bsky.feed.getFeed).toHaveBeenLastCalledWith(expect.objectContaining({ cursor: 'c1' }));
+  });
+
+  it('keeps reading past fully filtered pages, up to ten, before giving up without ending the feed', async () => {
+    const { provider, publicAgent } = setup();
+    const filtered = (n: number) => ({ data: { feed: [labeled(n, 'porn')], cursor: `c${n}` } });
+    for (let n = 1; n <= 9; n += 1) publicAgent.app.bsky.feed.getFeed.mockResolvedValueOnce(filtered(n));
+    publicAgent.app.bsky.feed.getFeed.mockResolvedValueOnce({ data: { feed: [feedItem(10)], cursor: 'c10' } });
+    expect(await provider.getTimeline()).toMatchObject({ posts: [{ uri: 'at://post/10' }], cursor: 'c10' });
+
+    publicAgent.app.bsky.feed.getFeed.mockClear();
+    for (let n = 11; n <= 30; n += 1) publicAgent.app.bsky.feed.getFeed.mockResolvedValueOnce(filtered(n));
+    expect(await provider.getTimeline({ cursor: 'c10' })).toEqual({ posts: [], cursor: 'c20' });
+    expect(publicAgent.app.bsky.feed.getFeed).toHaveBeenCalledTimes(10);
   });
 });

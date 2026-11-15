@@ -21,6 +21,16 @@ describe('feedReducer', () => {
     expect(feedReducer(loaded(3), { type: 'pageLoaded', posts: makePosts(3), cursor: 'c2' }).exhausted).toBe(true);
   });
 
+  it('tells a feed that ended apart from one where nothing could be shown', () => {
+    const ended = feedReducer(loaded(3, { index: 2 }), { type: 'pageLoaded', posts: [], cursor: null });
+    expect(ended).toMatchObject({ exhausted: true, stalled: false });
+    expect(move(ended, 'next').outcome).toBe('atEnd');
+    const stalled = feedReducer(loaded(3, { index: 2 }), { type: 'pageLoaded', posts: [], cursor: 'c9' });
+    expect(stalled).toMatchObject({ exhausted: true, stalled: true });
+    expect(move(stalled, 'next').outcome).toBe('unavailable');
+    expect(shouldLoadMore(stalled)).toBe(false);
+  });
+
   it('tracks loading and errors, and clears the error on retry', () => {
     const loading = feedReducer(initialFeedState, { type: 'loadStarted' });
     expect(loading.loading).toBe(true);

@@ -8,36 +8,60 @@ import { haptic } from '@/feedback/haptics';
 import { useFeed } from '@/feed/useFeed';
 import type { CircleDirection } from '@/gestures/circle';
 import { GestureSurface } from '@/gestures/GestureSurface';
+import { createRateLimiter } from '@/gestures/rateLimit';
 import { buildPostNarration, messages } from '@/narration/buildNarration';
 import { useNarrator } from '@/narration/useNarrator';
 import { useSession } from '@/session/SessionContext';
 import { colors, type } from '@/theme';
 
 import { PostCard } from './PostCard';
+import { surfaceActions, type Mode, type SurfaceActionName } from './surfaceActions';
+import { playUnrecognizedCue } from './unrecognizedCue';
 
-type Mode = 'scroll' | 'agent';
+const STROKE_CUE_INTERVAL_MS = 2500;
 
 const DIRECT_TOUCH = 'allowsDirectInteraction' as unknown as AccessibilityRole;
+
+let mountedFeeds = 0;
 
 export function MainScreen() {
   const { provider } = useSession();
   const narrator = useNarrator();
   const { state, post, go } = useFeed(provider);
   const [mode, setMode] = useState<Mode>('scroll');
+  const [narration, setNarration] = useState('');
   const prefix = useRef('');
+  const [allowStrokeCue] = useState(() => createRateLimiter(STROKE_CUE_INTERVAL_MS));
+  const [strokeCue, setStrokeCue] = useState(false);
+  const strokeCueTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
 
-  const status = post ? null : state.error ? messages.feedError : state.exhausted ? messages.empty : messages.loadingFirst;
+  useEffect(() => () => clearTimeout(strokeCueTimer.current), []);
+
+  const status = post ? null : state.error ? messages.feedError : state.exhausted ? (state.stalled ? messages.unavailable : messages.empty) : messages.loadingFirst;
+
+  useEffect(() => {
+    mountedFeeds += 1;
+    if (mountedFeeds > 1) console.warn(`${mountedFeeds} feed screens are mounted; expected one`);
+    return () => {
+      mountedFeeds -= 1;
+    };
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
+    const show = (text: string) => {
+      if (!cancelled) setNarration(text);
+    };
     const say = (text: string) => {
       if (cancelled) return;
+      show(text);
       narrator.speak(`${prefix.current} ${text}`.trim());
       prefix.current = '';
     };
     if (mode === 'agent') say(messages.agentAwake);
     else if (!post) say(status ?? '');
     else if (post.media.some((media) => (media.kind === 'images' && media.images.some((image) => !image.alt)) || (media.kind === 'video' && !media.alt))) {
+      show(buildPostNarration(post, new Date()));
       fetchCachedDescription(post.uri).then((description) => say(buildPostNarration(post, new Date(), description)));
     } else say(buildPostNarration(post, new Date()));
     return () => {
@@ -50,7 +74,7 @@ export function MainScreen() {
     const outcome = go(direction);
     if (outcome === 'moved') return haptic(direction);
     haptic('edge');
-    if (!state.error) narrator.speak(outcome === 'atStart' ? messages.atStart : outcome === 'atEnd' ? messages.atEnd : messages.loading);
+    if (!state.error) narrator.speak(outcome === 'atStart' ? messages.atStart : outcome === 'atEnd' ? messages.atEnd : outcome === 'unavailable' ? messages.noMore : messages.loading);
   };
 
   const switchMode = (next: Mode) => {
@@ -67,21 +91,33 @@ export function MainScreen() {
   const onTapTop = () => (mode === 'scroll' ? step('previous') : narrator.speak(messages.gestures));
   const onTapBottom = () => (mode === 'scroll' ? step('next') : router.push('/sign-in'));
   const onCircle = (direction: CircleDirection) => switchMode(direction === 'clockwise' ? 'agent' : 'scroll');
+  const onUnrecognizedStroke = () =>
+    playUnrecognizedCue({
+      narrator,
+      allowSpeech: allowStrokeCue,
+      showHint: () => {
+        setStrokeCue(true);
+        clearTimeout(strokeCueTimer.current);
+        strokeCueTimer.current = setTimeout(() => setStrokeCue(false), STROKE_CUE_INTERVAL_MS);
+      },
+    });
 
   const onAccessibilityAction = ({ nativeEvent }: AccessibilityActionEvent) => {
-    switch (nativeEvent.actionName) {
-      case 'activate':
+    switch (nativeEvent.actionName as SurfaceActionName) {
+      case 'next':
       case 'increment':
-      case 'bottom':
-        return onTapBottom();
+        return step('next');
+      case 'previous':
       case 'decrement':
-      case 'top':
-        return onTapTop();
-      case 'magicTap':
+        return step('previous');
+      case 'reread':
+        return narrator.speak(narration);
       case 'toggleAgent':
         return switchMode(mode === 'scroll' ? 'agent' : 'scroll');
-      case 'escape':
-        return switchMode('scroll');
+      case 'instructions':
+        return narrator.speak(messages.gestures);
+      case 'account':
+        return router.push('/sign-in');
     }
   };
 
@@ -94,6 +130,7 @@ export function MainScreen() {
         onTapTop={onTapTop}
         onTapBottom={onTapBottom}
         onCircle={onCircle}
+        onUnrecognizedStroke={onUnrecognizedStroke}
         accessible
         accessibilityRole={Platform.OS === 'ios' ? DIRECT_TOUCH : 'adjustable'}
         accessibilityLabel={scrolling ? 'Feed' : 'Voice agent'}
@@ -102,16 +139,9 @@ export function MainScreen() {
             ? 'Tap the bottom half for the next post, the top half for the previous post. Draw a clockwise circle to wake the agent.'
             : 'Tap the top half to hear the instructions, the bottom half for account settings. Draw a counter-clockwise circle to go back to scrolling.'
         }
-        accessibilityActions={[
-          { name: 'activate', label: scrolling ? 'Next post' : 'Account settings' },
-          { name: 'increment' },
-          { name: 'decrement' },
-          { name: 'bottom', label: scrolling ? 'Next post' : 'Account settings' },
-          { name: 'top', label: scrolling ? 'Previous post' : 'Hear the instructions' },
-          { name: 'toggleAgent', label: scrolling ? 'Wake the agent' : 'Back to scrolling' },
-          { name: 'magicTap' },
-          { name: 'escape' },
-        ]}
+        accessibilityValue={{ text: narration }}
+        accessibilityActions={surfaceActions(mode, Platform.OS)}
+        onAccessibilityTap={onTapBottom}
         onAccessibilityAction={onAccessibilityAction}
         onMagicTap={() => switchMode(scrolling ? 'agent' : 'scroll')}
         onAccessibilityEscape={() => switchMode('scroll')}>
@@ -131,7 +161,7 @@ export function MainScreen() {
           </View>
         )}
         <Text style={styles.hint} maxFontSizeMultiplier={type.maxScale}>
-          {scrolling ? '▼ Next post' : '▼ Account settings'}
+          {strokeCue ? messages.unrecognized : scrolling ? '▼ Next post' : '▼ Account settings'}
         </Text>
       </GestureSurface>
     </SafeAreaView>

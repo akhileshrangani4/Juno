@@ -1,6 +1,6 @@
 import { makePost } from '@/testing/fixtures';
 
-import { buildPostNarration, formatAge, speakableText } from '../buildNarration';
+import { buildPostNarration, formatAge, introInstructions, speakableText } from '../buildNarration';
 
 const now = new Date('2026-11-15T12:00:00.000Z');
 
@@ -86,5 +86,14 @@ describe('buildPostNarration', () => {
     const imageOnly = makePost({ text: '', media: [{ kind: 'images', images: [{ url: 'u', alt: null }] }] });
     expect(buildPostNarration(imageOnly, now)).toBe('Alice Chen, 2 hours ago. One image, with no description yet.');
     expect(buildPostNarration(makePost({ text: '  ' }), now)).toBe('Alice Chen, 2 hours ago. This post has no text.');
+  });
+});
+
+describe('introInstructions', () => {
+  it('tells screen reader users to double tap and everyone else to tap anywhere', () => {
+    expect(introInstructions(true)).toMatch(/Double tap to continue\.$/);
+    expect(introInstructions(true)).not.toMatch(/tap anywhere/i);
+    expect(introInstructions(false)).toMatch(/Tap anywhere to continue\.$/);
+    expect(introInstructions(false)).toContain('Draw a circle clockwise');
   });
 });

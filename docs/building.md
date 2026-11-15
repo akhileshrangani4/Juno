@@ -24,6 +24,8 @@ Two scripts produce Release binaries with the JavaScript bundle embedded, so the
 
 `EXPO_PUBLIC_*` variables are inlined at build time, so set them in the build environment.
 
+`patches/expo-dev-launcher@58.0.20.patch` removes a call to `axisBehavior`, an iOS 27.1 toolbar API that Xcode 27.0 (Revyl's runner) does not have. Drop the patch when expo-dev-launcher is upgraded past 58.0.20 with a fix, or when the iOS runner moves to Xcode 27.1 or later; pnpm refuses to install if the patched version changes, so an upgrade forces the decision.
+
 ### On Revyl from a Capy thread
 
 Capy machines have no Xcode or Android SDK. Build on Revyl's runners with `tools.mobile.build`, with the repository directory as the workspace source and one of the scripts as the only command:
