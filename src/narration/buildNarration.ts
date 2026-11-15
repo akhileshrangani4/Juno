@@ -443,7 +443,7 @@ export function lateDescription(post: Post, parts: DescriptionParts): string | n
 }
 
 const GESTURES =
-  'Tap the bottom half of the screen for the next post. Tap the top half for the previous post. Swiping right or left does the same. Swipe up to hear the replies, and swipe down to come back. Press and hold to like a post. Draw a circle clockwise anywhere on the screen to wake the voice agent. Draw a circle counter-clockwise to put it to sleep and go back to scrolling.';
+  'Tap the bottom half of the screen for the next post. Tap the top half for the previous post. Swiping right or left does the same. Swipe up to hear the replies, and swipe down to come back. Hold two fingers on the screen to like a post. Draw a circle clockwise anywhere on the screen to wake the voice agent. Draw a circle counter-clockwise to put it to sleep and go back to scrolling.';
 
 export const INTRO_SUMMARY = `Welcome to ${APP_NAME}. It reads your social feed aloud, one post at a time.`;
 

@@ -59,7 +59,7 @@ const SIGNED_OUT = `Signing in:
 - If a result says NOT_SIGNED_IN, say they need to sign in to do that and ask if they want to open the sign-in screen. Call open_sign_in only if they say yes.`;
 
 // The answer to "what can I do?", kept short on purpose.
-const HELP = `If asked what you can do, answer in two or three short sentences: you can read the post in focus in different ways, read its replies or say what people are saying, go to the next or previous post, like, repost, reply, write a new post, undo, delete their last post, change the reading speed, and remember their preferences. Then say the gestures: tap the bottom half or swipe right for the next post, the top half or swipe left for the previous one, swipe up for replies, press and hold to like, draw a circle clockwise to wake you, and counter-clockwise to go back to scrolling.
+const HELP = `If asked what you can do, answer in two or three short sentences: you can read the post in focus in different ways, read its replies or say what people are saying, go to the next or previous post, like, repost, reply, write a new post, undo, delete their last post, change the reading speed, and remember their preferences. Then say the gestures: tap the bottom half or swipe right for the next post, the top half or swipe left for the previous one, swipe up for replies, hold two fingers on the screen to like, draw a circle clockwise to wake you, and counter-clockwise to go back to scrolling.
 
 When they say goodbye, stop, or that they're done, call end_conversation.`;
 

@@ -1,7 +1,8 @@
 import { messages, type DescriptionParts, type DetailLevel } from '@/narration/buildNarration';
 import type { Post } from '@/social/types';
 import { makeMemory, makeProvider, maya, nextPost, setup } from '@/testing/agent';
-import { likeUriOf, recordLike } from '@/feed/likes';
+import { ActionHistory } from '@/actions/history';
+import { likeUriOf, recordLike, toggleLike } from '@/feed/likes';
 import { makePost } from '@/testing/fixtures';
 
 import { agentMessages } from '../agentMessages';
@@ -66,7 +67,7 @@ describe('agent tools', () => {
     const { handlers, provider } = setup();
     expect((await handlers.run('like_post', {})).result).toBe("LIKED: Liked Maya's post. Confirm in a word or two.");
     expect(provider.like).toHaveBeenCalledWith(maya);
-    expect((await handlers.run('undo', {})).result).toMatch(/^UNDONE: Removed the like/);
+    expect((await handlers.run('undo', {})).result).toBe("UNDONE: Removed your like on Maya's post. Confirm in a few words.");
     expect(provider.unlike).toHaveBeenCalledWith(maya, { uri: 'at://me/like/1' });
     expect((await handlers.run('undo', {})).result).toMatch(/^NOTHING_TO_UNDO/);
   });
@@ -168,6 +169,45 @@ describe('agent tools', () => {
     handlers.publisher.startCountdown();
     await scheduler.advance(UNDO_WINDOW_MS);
     expect(provider.reply).toHaveBeenCalledWith(maya, { text: "That's beautiful, where was this?" });
+  });
+
+  it('undoes a two-finger like made after a sent reply, and leaves the reply', async () => {
+    const history = new ActionHistory();
+    const { handlers, provider, say, scheduler } = setup({ history });
+    recordLike(maya.uri, null);
+    say("reply, that's beautiful, where was this?");
+    const draft = await handlers.run('draft_reply', { text: "That's beautiful, where was this?" });
+    say('Yes.');
+    await handlers.run('publish_draft', { draftId: draftIdOf(draft.result) });
+    handlers.publisher.startCountdown();
+    await scheduler.advance(UNDO_WINDOW_MS);
+    await flush();
+    expect(provider.reply).toHaveBeenCalledTimes(1);
+    expect(await toggleLike(provider, maya, history)).toEqual({ outcome: 'liked' });
+    expect((await handlers.run('undo', {})).result).toBe("UNDONE: Removed your like on Maya's post. Confirm in a few words.");
+    expect(provider.unlike).toHaveBeenCalledWith(maya, { uri: 'at://me/like/1' });
+    expect(provider.deletePost).not.toHaveBeenCalled();
+  });
+
+  it('undoes a like made by gesture before the agent was woken', async () => {
+    const history = new ActionHistory();
+    const provider = makeProvider();
+    recordLike(maya.uri, null);
+    await toggleLike(provider, maya, history);
+    const { handlers } = setup({ provider, history });
+    expect((await handlers.run('undo', {})).result).toBe("UNDONE: Removed your like on Maya's post. Confirm in a few words.");
+    expect(likeUriOf(maya)).toBeNull();
+  });
+
+  it('brings a like back when a two-finger unlike is undone', async () => {
+    const history = new ActionHistory();
+    const { handlers, provider } = setup({ history });
+    recordLike(maya.uri, 'at://me/like/old');
+    expect(await toggleLike(provider, maya, history)).toEqual({ outcome: 'unliked' });
+    expect((await handlers.run('undo', {})).result).toBe("UNDONE: Liked Maya's post again. Confirm in a few words.");
+    expect(provider.like).toHaveBeenCalledWith(maya);
+    expect(likeUriOf(maya)).toBe('at://me/like/1');
+    recordLike(maya.uri, null);
   });
 
   it('refuses a draft that rewords what the user said', async () => {
@@ -618,7 +658,7 @@ describe('agent reads without waiting on the network', () => {
     like.resolve({ uri: 'at://me/like/1' });
     await flush();
     expect(notify).toHaveBeenCalledWith("Result of like_post: LIKED: Liked Maya's post. Confirm in a word or two.", undefined);
-    expect((await handlers.run('undo', {})).result).toMatch(/^UNDONE: Removed the like/);
+    expect((await handlers.run('undo', {})).result).toBe("UNDONE: Removed your like on Maya's post. Confirm in a few words.");
   });
 });
 

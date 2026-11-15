@@ -4,7 +4,7 @@ import { Text } from 'react-native';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { createGestureController } from 'react-native-gesture-handler/jest-utils';
 
-import { GestureSurface, HOLD_MS, useStrokeGesture } from '../GestureSurface';
+import { GestureSurface, useStrokeGesture } from '../GestureSurface';
 
 let scrollCard: () => void = () => undefined;
 
@@ -16,7 +16,7 @@ function Card() {
   return <Text>post</Text>;
 }
 
-const props = { onTapTop: jest.fn(), onTapBottom: jest.fn(), onCircle: jest.fn(), onSwipe: jest.fn(), onHold: jest.fn(), onUnrecognizedStroke: jest.fn() };
+const props = { onTapTop: jest.fn(), onTapBottom: jest.fn(), onCircle: jest.fn(), onSwipe: jest.fn(), onTwoFingerHold: jest.fn(), onTwoFingerHoldWarning: jest.fn(), onUnrecognizedStroke: jest.fn() };
 
 async function setup() {
   await render(
@@ -54,22 +54,13 @@ describe('GestureSurface', () => {
     jest.useRealTimers();
   });
 
-  it('runs a tap at once, without waiting on press and hold', async () => {
+  it('runs a tap at once, without waiting on any hold', async () => {
     const tap = createGestureController('surface-tap');
     tap.begin({ x: 196, y: 600 });
     tap.activate({ x: 196, y: 600 });
     tap.end({ x: 196, y: 600 });
     expect(props.onTapBottom).toHaveBeenCalledTimes(1);
-    expect(props.onHold).not.toHaveBeenCalled();
-  });
-
-  it('likes on press and hold', async () => {
-    const hold = createGestureController('surface-hold');
-    hold.begin({ x: 196, y: 400 });
-    jest.advanceTimersByTime(HOLD_MS);
-    hold.activate({ x: 196, y: 400 });
-    hold.end({ x: 196, y: 400 });
-    expect(props.onHold).toHaveBeenCalledTimes(1);
+    expect(props.onTwoFingerHold).not.toHaveBeenCalled();
   });
 
   it('a slow drag that scrolled the post fires nothing, not even onUnrecognizedStroke', async () => {
@@ -98,7 +89,7 @@ describe('GestureSurface', () => {
 
   it('reports a swipe as unrecognized on a surface that takes no swipes', async () => {
     await cleanup();
-    const { onSwipe, onHold, ...rest } = props;
+    const { onSwipe, onTwoFingerHold, ...rest } = props;
     await render(
       <GestureHandlerRootView>
         <GestureSurface tapsEnabled {...rest}>
@@ -108,7 +99,7 @@ describe('GestureSurface', () => {
     );
     drawStroke(vertical(620, 300), 300);
     expect(onSwipe).not.toHaveBeenCalled();
-    expect(onHold).not.toHaveBeenCalled();
+    expect(onTwoFingerHold).not.toHaveBeenCalled();
     expect(props.onUnrecognizedStroke).toHaveBeenCalledTimes(1);
   });
 

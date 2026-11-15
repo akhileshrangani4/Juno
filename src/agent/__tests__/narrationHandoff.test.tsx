@@ -10,7 +10,7 @@ import { defaultSettings } from '../settings';
 const mockPost = maya;
 const mockNarrator = { speak: jest.fn(), append: jest.fn(), stop: jest.fn(), speaking: () => false, setRate: jest.fn(), onDone: jest.fn(() => () => undefined) };
 const mockAgentCalls: { active: boolean; onExit(reason: string, message: string): void }[] = [];
-let mockSurface: { onCircle(direction: string): void; onTapTop(): void; onSwipe(direction: string): void; onHold(): Promise<void> } | null = null;
+let mockSurface: { onCircle(direction: string): void; onTapTop(): void; onSwipe(direction: string): void; onTwoFingerHold(): Promise<void> } | null = null;
 const mockAgentSay = jest.fn((_text: string) => true);
 
 jest.mock('@/narration/useNarrator', () => ({ useNarrator: () => mockNarrator }));
@@ -32,7 +32,7 @@ jest.mock('@/screens/PostCard', () => ({ PostCard: () => null }));
 jest.mock('@/gestures/GestureSurface', () => {
   const { View } = jest.requireActual('react-native');
   return {
-    GestureSurface: (props: { onCircle(direction: string): void; onTapTop(): void; onSwipe(direction: string): void; onHold(): Promise<void>; children: ReactNode }) => {
+    GestureSurface: (props: { onCircle(direction: string): void; onTapTop(): void; onSwipe(direction: string): void; onTwoFingerHold(): Promise<void>; children: ReactNode }) => {
       mockSurface = props;
       return <View>{props.children}</View>;
     },
@@ -92,7 +92,7 @@ describe('narration hand-off between the feed and the agent', () => {
     mockNarrator.speak.mockClear();
     mockAgentSay.mockClear();
 
-    await act(async () => mockSurface!.onHold());
+    await act(async () => mockSurface!.onTwoFingerHold());
     expect(mockAgentSay).toHaveBeenLastCalledWith(commentMessages.signInToLike);
     for (const direction of ['up', 'down', 'left', 'right']) await act(async () => mockSurface!.onSwipe(direction));
     expect(haptic).toHaveBeenLastCalledWith('edge');

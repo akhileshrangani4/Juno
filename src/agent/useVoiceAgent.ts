@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 
+import { actionHistory } from '@/actions/history';
 import { loadedComments, readComments } from '@/comments/commentsControl';
 import { move, type FeedState, type MoveOutcome } from '@/feed/feedState';
 import { haptic } from '@/feedback/haptics';
@@ -102,6 +103,7 @@ export function useVoiceAgent({
       cachedDescription: (target, detail) => descriptionCache.peek(target, detail),
       loadedReplies: (target) => loadedComments(target.uri),
       replies: (target) => readComments(target.uri),
+      history: actionHistory,
       settings: narrationSettings,
       memory,
       memoryOffer,

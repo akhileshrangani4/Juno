@@ -12,7 +12,7 @@ import { useNarrator } from './useNarrator';
 
 export const narrationPreferences = new PreferencesStore(secureStore);
 export const descriptionCache = new DescriptionCache(describePost);
-const earcons = createEarconPlayer();
+export const earcons = createEarconPlayer();
 const postNarrators = new Map<Narrator, PostNarrator>();
 let active: PostNarrator | null = null;
 

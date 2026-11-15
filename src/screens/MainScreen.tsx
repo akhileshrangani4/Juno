@@ -4,20 +4,21 @@ import { Platform, StyleSheet, Text, View, type AccessibilityActionEvent, type A
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { useScreenReader } from '@/accessibility/useScreenReader';
+import { actionHistory } from '@/actions/history';
 import type { AgentStatus, EndReason } from '@/agent/AgentSession';
 import { onDevWake } from '@/agent/devWake';
 import { useVoiceAgent } from '@/agent/useVoiceAgent';
 import { registerCommentsController } from '@/comments/commentsControl';
 import { useComments } from '@/comments/useComments';
 import { haptic } from '@/feedback/haptics';
-import { likeUriOf, toggleLike, useLikeLedger } from '@/feed/likes';
+import { likeUriOf, toggleLike, useLikeLedger, whose } from '@/feed/likes';
 import { useFeed } from '@/feed/useFeed';
 import type { CircleDirection } from '@/gestures/circle';
 import { createRateLimiter } from '@/gestures/rateLimit';
 import type { SwipeDirection } from '@/gestures/swipe';
 import { authorName, messages } from '@/narration/buildNarration';
-import { commentMessages, commentsEntry, replyPosition } from '@/narration/comments';
-import { useNarrationPreferences, usePostNarrator } from '@/narration/postNarration';
+import { commentMessages, commentsEntry, likeFailure, replyPosition } from '@/narration/comments';
+import { earcons, useNarrationPreferences, usePostNarrator } from '@/narration/postNarration';
 import { applyNarrationAction, isNarrationAction, narrationActions, replyScripts } from '@/narration/requests';
 import { useNarrator } from '@/narration/useNarrator';
 import { DiscoverySurface as GestureSurface } from '@/onboarding/DiscoverySurface';
@@ -183,29 +184,39 @@ export function MainScreen() {
 
   const target = thread ? reply : post;
   const liked = target ? !!likeUriOf(target) : false;
+  const focus = useRef({ mode, uri: target?.uri ?? null });
+  useEffect(() => {
+    focus.current = { mode, uri: target?.uri ?? null };
+  });
 
+  // A two-finger hold or the Like action. The haptic and sound say at once which way it went, over any narration; the
+  // result belongs to the post it was made on. A success adds the word only if that post is still in focus and
+  // nothing is being said; a failure is always said, naming the post. While the agent is awake, nothing is spoken on
+  // the device: a failure goes through the agent's voice.
   const like = async () => {
     if (!target) {
       haptic('edge');
-      return tell(thread ? commentsEntry(0) : (status ?? commentMessages.noPost));
+      return tell(thread ? (thread.status === 'loading' ? commentMessages.loading : commentsEntry(0)) : (status ?? commentMessages.noPost));
     }
-    if (pendingLikes.current.has(target.uri)) return;
+    if (!account) {
+      haptic('edge');
+      return tell(commentMessages.signInToLike);
+    }
+    if (pendingLikes.current.has(target.uri)) return haptic('edge');
+    const liking = !likeUriOf(target);
+    haptic(liking ? 'like' : 'unlike');
+    earcons.play(liking ? 'like' : 'unlike');
     pendingLikes.current.add(target.uri);
-    const result = await toggleLike(provider, target, !!account);
+    const result = await toggleLike(provider, target, actionHistory);
     pendingLikes.current.delete(target.uri);
-    switch (result.outcome) {
-      case 'liked':
-      case 'unliked':
-        haptic(result.outcome === 'liked' ? 'like' : 'unlike');
-        return confirm(result.outcome === 'liked' ? commentMessages.liked : commentMessages.unliked);
-      case 'signedOut':
-        haptic('edge');
-        return confirm(commentMessages.signInToLike);
-      case 'failed':
-        haptic('edge');
-        if (result.offline) return confirm(result.wasLiked ? commentMessages.unlikeOffline : commentMessages.likeOffline);
-        return confirm(result.wasLiked ? commentMessages.unlikeFailed : commentMessages.likeFailed);
+    const now = focus.current;
+    if (result.outcome === 'failed') {
+      haptic('edge');
+      const message = likeFailure(whose(target), result.wasLiked, result.offline);
+      return now.mode === 'agent' ? tellInAgentMode(message) : narrator.speak(message);
     }
+    if (now.mode === 'agent' || now.uri !== target.uri || postNarrator.speaking()) return;
+    narrator.speak(result.outcome === 'liked' ? commentMessages.liked : commentMessages.unliked);
   };
 
   useEffect(() =>
@@ -308,17 +319,18 @@ export function MainScreen() {
         onTapBottom={onTapBottom}
         onCircle={onCircle}
         onSwipe={onSwipe}
-        onHold={like}
+        onTwoFingerHold={like}
+        onTwoFingerHoldWarning={() => haptic('holdWarning')}
         onUnrecognizedStroke={onUnrecognizedStroke}
         accessible
         accessibilityRole={Platform.OS === 'ios' ? DIRECT_TOUCH : 'adjustable'}
         accessibilityLabel={view === 'feed' ? 'Feed' : view === 'comments' ? 'Replies' : `Voice agent, ${AGENT_STATUS[agentStatus ?? 'starting'].toLowerCase()}`}
         accessibilityHint={
           view === 'feed'
-            ? 'Tap the bottom half or swipe right for the next post, the top half or swipe left for the previous post. Swipe up for replies. Press and hold to like. Draw a clockwise circle to wake the agent.'
+            ? 'Tap the bottom half or swipe right for the next post, the top half or swipe left for the previous post. Swipe up for replies. Hold two fingers on the screen to like. Draw a clockwise circle to wake the agent.'
             : view === 'comments'
-              ? 'Tap the bottom half or swipe right for the next reply, the top half or swipe left for the previous reply. Press and hold to like. Swipe down to go back to posts.'
-              : 'Tap the top half to hear the instructions, the bottom half for account settings. Press and hold to like the post. Draw a counter-clockwise circle to go back to scrolling.'
+              ? 'Tap the bottom half or swipe right for the next reply, the top half or swipe left for the previous reply. Hold two fingers on the screen to like. Swipe down to go back to posts.'
+              : 'Tap the top half to hear the instructions, the bottom half for account settings. Hold two fingers on the screen to like the post. Draw a counter-clockwise circle to go back to scrolling.'
         }
         accessibilityValue={{ text: narration }}
         accessibilityActions={[...surfaceActions(view, Platform.OS, liked), ...(scrolling ? narrationActions(narrationPrefs, screenReader) : [])]}

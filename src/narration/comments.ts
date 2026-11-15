@@ -30,8 +30,9 @@ export const commentMessages = {
   liked: 'Liked.',
   unliked: 'Like removed.',
   signInToLike: 'You need to sign in to like posts. Draw a clockwise circle, then tap the bottom half for account settings.',
-  likeFailed: 'Could not like this. Nothing changed.',
-  unlikeFailed: 'Could not remove the like. Nothing changed.',
-  likeOffline: "Could not like this: Bluesky can't be reached. Check your connection. Nothing changed.",
-  unlikeOffline: "Could not remove the like: Bluesky can't be reached. Check your connection. Nothing changed.",
 };
+
+// A like that didn't go through, said whatever is in focus by then, so it names the post it was made on.
+export function likeFailure(whose: string, wasLiked: boolean, offline: boolean): string {
+  return `${wasLiked ? `Couldn't remove your like on ${whose}.` : `Couldn't like ${whose}.`} ${offline ? "Bluesky can't be reached. Check your connection." : 'Nothing changed.'}`;
+}

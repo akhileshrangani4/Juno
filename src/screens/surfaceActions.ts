@@ -28,6 +28,7 @@ export function surfaceActions(view: SurfaceView, platform: string, liked: boole
           ]
         : [
             { name: 'toggleAgent', label: 'Back to scrolling' },
+            like,
             { name: 'instructions', label: 'Hear the instructions' },
             { name: 'account', label: 'Account settings' },
           ];

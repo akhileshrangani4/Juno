@@ -1,5 +1,6 @@
 import type { MoveOutcome } from '@/feed/feedState';
-import { likeUriOf, recordLike } from '@/feed/likes';
+import type { ActionHistory, UndoEntry } from '@/actions/history';
+import { likePost, unlikePost } from '@/feed/likes';
 import { authorName, lateDescription, messages, type DescriptionParts, type DetailLevel } from '@/narration/buildNarration';
 import { commentMessages, commentsEntry } from '@/narration/comments';
 import type { Post, PostRef, RecordRef, ReplyParent, SocialAccount, SocialProvider } from '@/social/types';
@@ -44,6 +45,8 @@ export type AgentDeps = {
   // waiting, or null, and a fetch.
   loadedReplies(post: Post): string[] | null;
   replies(post: Post): Promise<string[]>;
+  // The app's one action history, shared with the gestures, so undo reverses the user's latest action of any kind.
+  history: ActionHistory;
   settings: SettingsStore;
   memory: MemoryClient | null;
   // Open when the agent's first words asked to keep what was saved before sign-in (memoryOffer.ts).
@@ -57,7 +60,6 @@ export type AgentDeps = {
   now(): Date;
 };
 
-type UndoEntry = { label: string; undo(): Promise<string> };
 
 // What the app does with a user utterance heard while a confirmed send is counting down or in flight.
 export type Heard = { kind: 'undone' | 'held'; speak: string; message: string };
@@ -144,7 +146,7 @@ function refusal(outcome: Extract<ConfirmOutcome, { ok: false }>, utterance: str
 }
 
 export function createToolHandlers(deps: AgentDeps) {
-  const history: UndoEntry[] = [];
+  const { history } = deps;
   let lastUndoneAt = -Infinity;
   let slow: string | null = null;
   // An old sign-in's "sign in again for memory" is said once per conversation, not on every memory call.
@@ -368,23 +370,12 @@ export function createToolHandlers(deps: AgentDeps) {
       }
       case 'like_post': {
         if (!focus) return { respond: true, result: NO_FOCUS };
-        const record: RecordRef = await deps.provider.like(focus);
-        recordLike(focus.uri, record.uri);
-        history.push({
-          label: 'like',
-          undo: async () => {
-            const removed = await deps.provider.unlike(focus, record);
-            recordLike(focus.uri, null);
-            return removed ? 'UNDONE: Removed the like.' : 'NOTHING_TO_UNDO: It was not liked.';
-          },
-        });
+        await likePost(deps.provider, focus, history);
         return { respond: true, result: `LIKED: Liked ${authorName(focus)}'s post. Confirm in a word or two.` };
       }
       case 'unlike_post': {
         if (!focus) return { respond: true, result: NO_FOCUS };
-        const known = likeUriOf(focus);
-        const removed = await deps.provider.unlike(focus, known ? { uri: known } : undefined);
-        recordLike(focus.uri, null);
+        const removed = await unlikePost(deps.provider, focus, history);
         return { respond: true, result: removed ? 'UNLIKED: Removed the like. Confirm in a few words.' : "NOT_LIKED: This post wasn't liked. Tell the user." };
       }
       case 'draft_post':
