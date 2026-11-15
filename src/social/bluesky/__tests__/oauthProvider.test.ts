@@ -2,6 +2,7 @@ import { OAuthCallbackError, TokenRefreshError } from '@atproto/oauth-client';
 
 import type { KeyValueStore } from '@/storage/keyValueStore';
 
+import { OfflineError } from '../../types';
 import { BlueskyProvider, SessionExpiredError } from '../BlueskyProvider';
 import { NetworkError } from '../oauth/createOAuthClient';
 import type { BlueskyOAuth } from '../oauth';
@@ -109,6 +110,23 @@ describe('BlueskyProvider with OAuth', () => {
     expect(requests[4].body.record.reply.parent.uri).toBe(page.posts[0].uri);
   });
 
+  it('reports a like that gets no answer as offline and keeps the user signed in', async () => {
+    const { provider, store, session } = setup();
+    await provider.signIn('maya.bsky.social');
+    const expired = jest.fn();
+    provider.onSessionExpired(expired);
+    const [post] = (await provider.getTimeline()).posts;
+    session.fetchHandler.mockRejectedValueOnce(new NetworkError('Could not reach the server', { cause: new TypeError('Network request failed') }));
+    await expect(provider.like(post)).rejects.toBeInstanceOf(OfflineError);
+    session.fetchHandler.mockRejectedValueOnce(new TypeError('Network request failed'));
+    await expect(provider.unlike(post, { uri: `at://${DID}/app.bsky.feed.like/1` })).rejects.toBeInstanceOf(OfflineError);
+    session.fetchHandler.mockRejectedValueOnce(new TypeError('Network request failed'));
+    await expect(provider.getReplies(post.uri)).rejects.toBeInstanceOf(OfflineError);
+    expect(expired).not.toHaveBeenCalled();
+    expect(store.keys()).toContain('bluesky.oauth.account');
+    expect(await provider.like(post)).toEqual({ uri: `at://${DID}/app.bsky.feed.like/1` });
+  });
+
   it('treats a dismissed sheet and a denied request as a cancel', async () => {
     const dismissed = setup();
     dismissed.openAuthSession.mockResolvedValueOnce({ type: 'cancel' } as any);
@@ -195,6 +213,7 @@ describe('BlueskyProvider with OAuth', () => {
     expect(expired).toHaveBeenCalledTimes(1);
     expect(expired).toHaveBeenCalledWith({ id: DID, handle: 'maya.bsky.social', displayName: 'Maya' });
     await expect(relaunch.provider.getTimeline()).rejects.toBeInstanceOf(SessionExpiredError);
+    await expect(relaunch.provider.getReplies('at://post/1')).rejects.toBeInstanceOf(SessionExpiredError);
     expect(relaunch.store.keys()).toEqual([]);
     expect(await relaunch.provider.signIn('maya.bsky.social')).toMatchObject({ status: 'success' });
     expect((await relaunch.provider.getTimeline()).posts).toHaveLength(2);

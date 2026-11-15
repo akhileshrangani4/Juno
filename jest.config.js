@@ -22,5 +22,6 @@ module.exports = {
   testPathIgnorePatterns: ['/node_modules/', '/dist/', '/android/', '/ios/'],
   transformIgnorePatterns: [`node_modules/(?!(${transformed.join('|')}))`],
   resolver: '<rootDir>/jest.resolver.js',
+  setupFiles: ['react-native-gesture-handler/jestSetup.js'],
   moduleNameMapper: { '^@/(.*)$': '<rootDir>/src/$1' },
 };
