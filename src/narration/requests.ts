@@ -1,8 +1,10 @@
 import type { Post } from '@/social/types';
 
 import { messages, type DetailLevel, type NarrationMode } from './buildNarration';
+import { deviceLanguages } from './deviceLanguages';
+import { languageName } from './language';
 import { activePostNarrator, narrationPreferences } from './postNarration';
-import { RATE_LIMITS, stepRate, type NarrationPreferences } from './preferences';
+import { effectiveLanguages, RATE_LIMITS, stepRate, type NarrationPreferences } from './preferences';
 
 export type { NarrationMode } from './buildNarration';
 
@@ -25,7 +27,7 @@ export const setSkipHashtags = (skipHashtags: boolean) => narrationPreferences.u
 export const setDefaultDetail = (detail: DetailLevel) => narrationPreferences.update({ detail });
 export const setEarcons = (earcons: boolean) => narrationPreferences.update({ earcons });
 
-export type NarrationAction = 'narrationMode' | 'faster' | 'slower' | 'speechRate' | 'earcons';
+export type NarrationAction = 'narrationMode' | 'faster' | 'slower' | 'speechRate' | 'earcons' | 'translation';
 
 // With a screen reader on, the screen reader speaks at its own rate and the app's rate never applies, so
 // "Speak faster" and "Speak slower" give way to one "Speech speed" action that says so.
@@ -40,10 +42,11 @@ export function narrationActions(prefs: NarrationPreferences, screenReader: bool
     { name: 'narrationMode', label: prefs.mode === 'brief' ? 'Full narration' : 'Brief narration' },
     ...rate,
     { name: 'earcons', label: prefs.earcons ? 'Turn post sounds off' : 'Turn post sounds on' },
+    { name: 'translation', label: prefs.translate ? 'Stop translating posts' : 'Translate posts' },
   ];
 }
 
-export const isNarrationAction = (name: string): name is NarrationAction => ['narrationMode', 'faster', 'slower', 'speechRate', 'earcons'].includes(name);
+export const isNarrationAction = (name: string): name is NarrationAction => ['narrationMode', 'faster', 'slower', 'speechRate', 'earcons', 'translation'].includes(name);
 
 // Applies a VoiceOver action and returns what to say about it.
 export function applyNarrationAction(action: NarrationAction, screenReader: boolean): string {
@@ -56,6 +59,10 @@ export function applyNarrationAction(action: NarrationAction, screenReader: bool
       return setNarrationMode(prefs.mode === 'brief' ? 'full' : 'brief').mode === 'brief' ? messages.briefMode : messages.fullMode;
     case 'earcons':
       return setEarcons(!prefs.earcons).earcons ? messages.earconsOn : messages.earconsOff;
+    case 'translation': {
+      const languages = effectiveLanguages(narrationPreferences.update({ translate: !prefs.translate }), deviceLanguages());
+      return languages ? messages.translationOn(languageName(languages.target)) : messages.translationOff;
+    }
     case 'faster':
     case 'slower': {
       const rate = stepRate(prefs.rate, action);

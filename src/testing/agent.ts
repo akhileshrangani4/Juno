@@ -116,6 +116,8 @@ export function setup(
     },
     description: async () => null,
     cachedDescription: () => null,
+    mayNeedTranslation: () => false,
+    translationState: () => null,
     settings,
     memory: options.memory === undefined ? makeMemory() : options.memory,
     memoryOffer: options.memoryOffer ?? null,

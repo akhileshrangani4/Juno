@@ -1,6 +1,8 @@
 import { costUsd, decideClaim, hashDevice, invalidReason, isPostUri, LIMITS, needsModel, normalizeParts, windowStart, withinLimits, type PostInput } from '../../convex/describeCache';
 import { publicHttpsOrigin, vttText } from '../../convex/describeCaptions';
-import { RESPONSE_SCHEMA, systemPrompt, userContent } from '../../convex/describePrompt';
+import { responseSchema, systemPrompt, userContent } from '../../convex/describePrompt';
+
+const RESPONSE_SCHEMA = responseSchema(null);
 
 const did = 'did:plc:abcdefghijklmnopqrstuvwx';
 const post = (overrides: Partial<PostInput> = {}): PostInput => ({
@@ -11,6 +13,9 @@ const post = (overrides: Partial<PostInput> = {}): PostInput => ({
   video: null,
   link: null,
   hashtags: [],
+  body: 'Hello',
+  languageText: 'Hello',
+  langs: [],
   ...overrides,
 });
 const parts = { images: [], video: null, hashtagTopic: null };

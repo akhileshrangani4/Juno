@@ -36,6 +36,8 @@ async function main() {
     move: () => ({ outcome: 'atEnd', post: null }),
     description: async () => null,
     cachedDescription: () => null,
+    mayNeedTranslation: () => false,
+    translationState: () => null,
     settings: settingsStore(new PreferencesStore(createMemoryStore())),
     memory: null,
     conversation,
