@@ -2,24 +2,35 @@ import { v } from 'convex/values';
 
 import { internal } from './_generated/api';
 import { action } from './_generated/server';
-import { decideClaim, hashAddress, hashDevice, invalidReason, isDeviceId, isPostUri, LIMITS, needsModel, normalizeParts, postDid, type Parts } from './describeCache';
+import { textNeedsTranslation } from '../src/narration/buildNarration';
+import { languagesKey } from '../src/narration/language';
+import { decideClaim, hashAddress, hashDevice, invalidReason, isDeviceId, isPostUri, LIMITS, needsModel, normalizeParts, postDid, requestLanguages, type Parts } from './describeCache';
 import { fetchCaptions } from './describeCaptions';
 import { DEFAULT_MODEL, describeWithOpenAI, env } from './describeOpenAI';
-import { PROMPT_VERSION, systemPrompt, userContent } from './describePrompt';
+import { PROMPT_VERSION, responseSchema, systemPrompt, userContent } from './describePrompt';
 import { fetchPost } from './describeSource';
 import { detailValidator } from './schema';
 
 type Source = 'cache' | 'model' | 'shared';
 
-// Describes a post's images, video and hashtag pile. The client names the post and nothing more; the post
-// itself is fetched from Bluesky here, and only after the fetch limits allow it. Returns null whenever there is
+// Describes a post's images, video and hashtag pile, and translates what is in a language the listener does not
+// read. The client names the post and the listener's languages and nothing more; the post itself is fetched from
+// Bluesky here, and only after the fetch limits allow it. Returns null whenever there is
 // nothing to describe or anything goes wrong; the app then keeps its deterministic narration and never tells
 // the listener about the failure.
 export const describePost = action({
-  args: { uri: v.string(), detail: detailValidator, deviceId: v.string() },
-  handler: async (ctx, { uri, detail, deviceId }): Promise<{ parts: Parts; source: Source } | null> => {
+  args: {
+    uri: v.string(),
+    detail: detailValidator,
+    deviceId: v.string(),
+    // Optional so app builds from before translation keep working: without them nothing is translated.
+    target: v.optional(v.union(v.string(), v.null())),
+    keep: v.optional(v.array(v.string())),
+  },
+  handler: async (ctx, { uri, detail, deviceId, target, keep }): Promise<{ parts: Parts; source: Source } | null> => {
     if (!isPostUri(uri) || !isDeviceId(deviceId)) return null;
-    const key = { postUri: uri, promptVersion: PROMPT_VERSION, detail };
+    const languages = requestLanguages(target, keep);
+    const key = { postUri: uri, promptVersion: PROMPT_VERSION, detail, languages: languagesKey(languages) };
 
     const waitForShared = async () => {
       const deadline = Date.now() + LIMITS.sharedWaitMs;
@@ -47,7 +58,8 @@ export const describePost = action({
     }
 
     const post = await fetchPost(uri);
-    const reason = !post ? 'post not found' : !needsModel(post) ? 'nothing to describe' : invalidReason(post);
+    const translateText = !!post && textNeedsTranslation(post, languages);
+    const reason = !post ? 'post not found' : !needsModel(post, translateText) ? 'nothing to describe' : invalidReason(post);
     if (!post || reason) {
       if (reason !== 'nothing to describe') console.warn(`describePost skipped ${uri}: ${reason}`);
       await ctx.runMutation(internal.postDescriptions.miss, { ...key, reason: reason ?? 'post not found' });
@@ -76,10 +88,11 @@ export const describePost = action({
       const result = await describeWithOpenAI({
         apiKey,
         model: env('DESCRIBE_MODEL') || DEFAULT_MODEL,
-        instructions: systemPrompt(detail),
-        content: userContent(post, captions),
+        instructions: systemPrompt(detail, languages),
+        content: userContent(post, captions, translateText),
+        schema: responseSchema(languages),
       });
-      const parts = normalizeParts(result.parsed, post);
+      const parts = normalizeParts(result.parsed, post, languages, translateText);
       const latencyMs = Date.now() - started;
       await ctx.runMutation(internal.postDescriptions.complete, { ...key, windowStart: decision.windowStart, parts, model: result.model, latencyMs, usage: result.usage });
       console.log(`described ${uri} in ${latencyMs} ms with ${result.model}, cost ${result.usage.costUsd ?? 'unknown'} USD`);

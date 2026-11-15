@@ -314,7 +314,10 @@ export function MainScreen() {
       case 'back':
         return closeComments();
       case 'reread':
-        return tell(narration);
+        return mode === 'scroll' ? narrator.speak(narration) : tellInAgentMode(narration);
+      case 'readExactly':
+        if (post && mode === 'scroll') postNarrator.focus(post, { mode: 'verbatim' });
+        return;
       case 'toggleAgent':
         return switchMode(mode === 'scroll' ? 'agent' : 'scroll');
       case 'instructions':

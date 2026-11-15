@@ -48,7 +48,7 @@ const mutation = (name: keyof typeof postDescriptions) =>
 
 const NOW = Date.UTC(2026, 10, 15, 18, 20);
 const request = { uri, detail: 'standard', deviceId: 'device-0001' };
-const key = { postUri: uri, promptVersion: PROMPT_VERSION, detail: 'standard' };
+const key = { postUri: uri, promptVersion: PROMPT_VERSION, detail: 'standard', languages: '' };
 const parts = { images: [{ description: 'Red tomatoes hang from a green vine.', beyondAlt: '' }], video: null, hashtagTopic: null };
 
 describe('describe:describePost', () => {
@@ -72,9 +72,9 @@ describe('describe:describePost', () => {
     convex.db.table('describeUsage').find((entry) => entry.key === 'global' && entry.windowStart === windowStart(NOW))?.costUsd;
   const stored = (convex: ReturnType<typeof fakeConvex>) => convex.db.table('postDescriptions')[0];
 
-  it('accepts only a post URI, a detail level and a device id from the client', () => {
+  it("accepts only a post URI, a detail level, a device id and the listener's languages from the client", () => {
     const args = JSON.parse((describePost as unknown as { exportArgs: () => string }).exportArgs());
-    expect(Object.keys(args.value).sort()).toEqual(['detail', 'deviceId', 'uri']);
+    expect(Object.keys(args.value).sort()).toEqual(['detail', 'deviceId', 'keep', 'target', 'uri']);
   });
 
   it('builds the model input from the post Bluesky returns, so a forged request cannot change what is stored', async () => {

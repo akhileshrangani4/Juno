@@ -43,7 +43,7 @@ describe('DescriptionCache', () => {
     expect(describe).toHaveBeenCalledTimes(1);
     await cache.request(post, 'detailed');
     expect(describe).toHaveBeenCalledTimes(2);
-    expect(describe).toHaveBeenLastCalledWith('at://p/1', 'detailed');
+    expect(describe).toHaveBeenLastCalledWith('at://p/1', 'detailed', null);
   });
 
   it('turns a failure into null and retries only after two minutes', async () => {

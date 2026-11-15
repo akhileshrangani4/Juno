@@ -8,6 +8,9 @@ export type NarrationSettings = {
   mode: FeedNarrationMode;
   skipHashtags: boolean;
   pictureDetail: PictureDetail;
+  translate: boolean;
+  translateInto: string | null;
+  keepLanguages: string[] | null;
 };
 
 // The feed's own range, so the agent and the feed can never disagree.
@@ -15,7 +18,15 @@ export const MIN_RATE = RATE_LIMITS.min;
 export const MAX_RATE = RATE_LIMITS.max;
 export const RATE_STEP = RATE_LIMITS.step;
 
-export const defaultSettings: NarrationSettings = { rate: 1, mode: 'full', skipHashtags: false, pictureDetail: 'short' };
+export const defaultSettings: NarrationSettings = {
+  rate: 1,
+  mode: 'full',
+  skipHashtags: false,
+  pictureDetail: 'short',
+  translate: true,
+  translateInto: null,
+  keepLanguages: null,
+};
 
 export type SettingsStore = {
   get(): NarrationSettings;
@@ -29,8 +40,8 @@ export type SettingsStore = {
 // the model's detailed level; rate bounds and persistence are the feed's.
 export function settingsStore(preferences: PreferencesStore): SettingsStore {
   const view = (): NarrationSettings => {
-    const { rate, mode, skipHashtags, detail } = preferences.get();
-    return { rate, mode, skipHashtags, pictureDetail: detail === 'detailed' ? 'long' : 'short' };
+    const { rate, mode, skipHashtags, detail, translate, translateInto, keepLanguages } = preferences.get();
+    return { rate, mode, skipHashtags, pictureDetail: detail === 'detailed' ? 'long' : 'short', translate, translateInto, keepLanguages };
   };
   return {
     get: view,

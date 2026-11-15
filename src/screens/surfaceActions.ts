@@ -2,7 +2,7 @@ export type Mode = 'scroll' | 'agent';
 
 export type SurfaceView = 'feed' | 'comments' | 'agent';
 
-export type SurfaceActionName = 'next' | 'previous' | 'like' | 'comments' | 'back' | 'reread' | 'toggleAgent' | 'instructions' | 'account' | 'increment' | 'decrement';
+export type SurfaceActionName = 'next' | 'previous' | 'like' | 'comments' | 'back' | 'reread' | 'readExactly' | 'toggleAgent' | 'instructions' | 'account' | 'increment' | 'decrement';
 
 export type SurfaceAction = { name: SurfaceActionName; label?: string };
 
@@ -16,6 +16,7 @@ export function surfaceActions(view: SurfaceView, platform: string, liked: boole
           like,
           { name: 'comments', label: 'Open comments' },
           { name: 'reread', label: 'Read this post again' },
+          { name: 'readExactly', label: 'Read exactly' },
           { name: 'toggleAgent', label: 'Wake the agent' },
         ]
       : view === 'comments'

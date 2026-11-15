@@ -28,6 +28,7 @@ describe('mapFeedItem', () => {
       replyRoot: null,
       replyTo: null,
       facets: [],
+      langs: [],
       counts: { likes: 3, reposts: 2, replies: 1 },
       likeUri: null,
     });

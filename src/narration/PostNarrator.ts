@@ -1,6 +1,18 @@
 import type { Post } from '@/social/types';
 
-import { buildPostScript, lateDescription, needsDescription, postEarcon, type NarrationMode, type ReplyPosition } from './buildNarration';
+import {
+  buildPostScript,
+  cannotPronounce,
+  lateAddition,
+  needsDescription,
+  postEarcon,
+  translatedText,
+  translationMessages,
+  type DescriptionParts,
+  type NarrationMode,
+  type ReplyPosition,
+  type TranslationState,
+} from './buildNarration';
 import type { DescriptionCache } from './descriptions';
 import type { EarconPlayer } from './earcons';
 import type { Narrator } from './Narrator';
@@ -40,28 +52,36 @@ export class PostNarrator {
     const effective = mode ?? prefs.mode;
     const detail = effective === 'detailedImage' ? 'detailed' : prefs.detail;
     const usesDescriptions = effective === 'full' || effective === 'detailedImage';
-    const parts = usesDescriptions ? descriptions.peek(post, detail) : null;
+    const translates = effective === 'full' || effective === 'brief' || effective === 'verbatim';
+    const parts = usesDescriptions || translates ? descriptions.peek(post, detail) : null;
+    const translation = translates ? descriptions.translationState(post, detail) : null;
     const now = this.deps.now?.() ?? new Date();
     const notices = this.notices.splice(0);
-    const script = [...notices, prefix, buildPostScript(post, { now, mode: effective, parts, skipHashtags: prefs.skipHashtags, reply })].filter(Boolean).join(' ');
+    const { body, language } = this.reading(post, effective, parts, translation, now, reply);
+    const script = [...notices, prefix, body].filter(Boolean).join(' ');
     this.publish(script);
 
     narrator.setRate(prefs.rate);
     const earcon = prefs.earcons && effective !== 'verbatim' ? postEarcon(post) : null;
     const lead = earcon ? earcons.play(earcon) : 0;
+    const say = (text: string) => (language ? narrator.speak(text, { language }) : narrator.speak(text));
     if (lead > 0) {
       this.timer = setTimeout(() => {
         this.timer = null;
-        narrator.speak(this.script);
+        say(this.script);
         this.queued.forEach((text) => narrator.append(text));
         this.queued = [];
       }, lead);
-    } else narrator.speak(script);
+    } else say(script);
 
-    if (usesDescriptions && !parts && needsDescription(post)) {
-      descriptions.request(post, detail).then((fetched) => {
-        if (!fetched || session !== this.session) return;
-        const late = lateDescription(post, fetched);
+    if (!parts && ((usesDescriptions && needsDescription(post)) || translation === 'pending')) {
+      descriptions.request(post, detail, { translationOnly: !usesDescriptions }).then((fetched) => {
+        if (session !== this.session) return;
+        const late = fetched
+          ? lateAddition(post, fetched, translation, { brief: effective === 'brief', media: usesDescriptions })
+          : translation === 'pending'
+            ? translationMessages.failed
+            : null;
         if (!late) return;
         this.publish(`${this.script} ${late}`);
         if (!this.timer) narrator.append(late);
@@ -70,10 +90,23 @@ export class PostNarrator {
     return script;
   }
 
+  // The script for a post, and the voice to read it in. A post in another language is read exactly in its own
+  // language's voice when one is installed, and otherwise as its labeled translation, never in the wrong voice.
+  private reading(post: Post, mode: NarrationMode, parts: DescriptionParts | null, translation: TranslationState, now: Date, reply?: ReplyPosition): { body: string; language?: string } {
+    const { narrator, preferences } = this.deps;
+    const foreign = parts?.translation?.language ?? parts?.untranslatedLanguage;
+    if (mode === 'verbatim' && foreign) {
+      if (narrator.canSpeak?.(foreign)) return { body: buildPostScript(post, { now, mode, reply }), language: foreign };
+      const translated = translatedText(parts?.translation);
+      return { body: translated ? `${cannotPronounce(foreign)} ${translated}` : translationMessages.failedIn(foreign) };
+    }
+    if (mode === 'verbatim' && translation) return { body: translationMessages[translation] };
+    return { body: buildPostScript(post, { now, mode, parts, skipHashtags: preferences.get().skipHashtags, translation, reply }) };
+  }
+
   prefetch(upcoming: Post[]): void {
     const prefs = this.deps.preferences.get();
-    if (prefs.mode === 'brief') return;
-    this.deps.descriptions.prefetch(upcoming.slice(0, UPCOMING), prefs.detail);
+    this.deps.descriptions.prefetch(upcoming.slice(0, UPCOMING), prefs.detail, { translationOnly: prefs.mode === 'brief' });
   }
 
   stop(): void {

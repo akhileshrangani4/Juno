@@ -44,6 +44,8 @@ async function main() {
       return replies.map((reply, index) => buildReplyScript(reply, index, replies.length));
     },
     history: new ActionHistory(),
+    mayNeedTranslation: () => false,
+    translationState: () => null,
     settings: settingsStore(new PreferencesStore(createMemoryStore())),
     memory: null,
     conversation,

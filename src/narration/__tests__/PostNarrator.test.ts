@@ -181,7 +181,7 @@ describe('PostNarrator', () => {
   it('fetches detailed descriptions for the detailed image request', async () => {
     const { postNarrator, describe, log, settle } = setup();
     postNarrator.focus(withImage(), { mode: 'detailedImage' });
-    expect(describe).toHaveBeenCalledWith(expect.anything(), 'detailed');
+    expect(describe).toHaveBeenCalledWith(expect.anything(), 'detailed', null);
     await settle(parts);
     expect(spoken(log)).toEqual(['speak: Alice Chen. One image, with no description yet.', 'append: About the image: A cat on a sofa.']);
   });

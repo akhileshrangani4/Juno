@@ -4,14 +4,15 @@ import { describePost } from '@/backend/convex';
 import { secureStore } from '@/storage/keyValueStore';
 
 import { DescriptionCache } from './descriptions';
+import { deviceLanguages } from './deviceLanguages';
 import { createEarconPlayer } from './earcons';
 import type { Narrator } from './Narrator';
 import { PostNarrator } from './PostNarrator';
-import { PreferencesStore, type NarrationPreferences } from './preferences';
+import { effectiveLanguages, PreferencesStore, type NarrationPreferences } from './preferences';
 import { useNarrator } from './useNarrator';
 
 export const narrationPreferences = new PreferencesStore(secureStore);
-export const descriptionCache = new DescriptionCache(describePost);
+export const descriptionCache = new DescriptionCache(describePost, Date.now, () => effectiveLanguages(narrationPreferences.get(), deviceLanguages()));
 export const earcons = createEarconPlayer();
 const postNarrators = new Map<Narrator, PostNarrator>();
 let active: PostNarrator | null = null;

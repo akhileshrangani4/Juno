@@ -812,7 +812,7 @@ describe('agent tools', () => {
     expect((await handlers.run('change_narration', { speedChange: 'faster' })).result).toMatch(/^SETTINGS_CHANGED: Now speed 1.25 times normal/);
     expect((await handlers.run('change_narration', { speed: 5 })).result).toMatch(/speed 3 times normal.*limited to 0.5 to 3/);
     await handlers.run('change_narration', { mode: 'brief', skipHashtags: true, pictureDetail: 'long' });
-    expect(settings.get()).toEqual({ rate: 3, mode: 'brief', skipHashtags: true, pictureDetail: 'long' });
+    expect(settings.get()).toMatchObject({ rate: 3, mode: 'brief', skipHashtags: true, pictureDetail: 'long' });
   });
 
   it('says which step a speed between steps was set to', async () => {
@@ -974,6 +974,132 @@ describe('agent reads without waiting on the network', () => {
 });
 
 const flush = () => new Promise<void>((resolve) => setImmediate(resolve));
+
+const spanishPost = makePost({
+  uri: 'at://did:plc:ana/app.bsky.feed.post/1',
+  author: { id: 'did:plc:ana', handle: 'ana.bsky.social', displayName: 'Ana', avatarUrl: null },
+  text: 'Hoy fuimos al mercado con mi abuela. Compramos fruta fresca.',
+  createdAt: '2026-11-15T10:00:00.000Z',
+  langs: ['es'],
+});
+const spanishParts: DescriptionParts = { images: [], video: null, hashtagTopic: null, translation: { language: 'es', text: 'Today we went to the market with my grandmother. We bought fresh fruit.' } };
+
+function foreign(cached: DescriptionParts | null = null) {
+  const context = setup({ focus: spanishPost });
+  const description = deferred<DescriptionParts | null>();
+  context.deps.description = jest.fn(() => description.promise);
+  context.deps.cachedDescription = () => cached;
+  context.deps.mayNeedTranslation = () => true;
+  context.deps.translationState = () => (cached ? null : 'pending');
+  return { ...context, description };
+}
+
+describe('agent and posts in other languages', () => {
+  it('reads at once that a post is being translated, then says the labeled translation if it is still in focus', async () => {
+    const { handlers, notify, description } = foreign();
+    expect((await handlers.run('read_post', { mode: 'full' })).speak).toBe('Ana, 2 hours ago. This post is in another language and is being translated.');
+    description.resolve(spanishParts);
+    await flush();
+    expect(notify).toHaveBeenCalledWith(expect.stringMatching(/^DESCRIBED: /), 'Translated from Spanish: Today we went to the market with my grandmother. We bought fresh fruit.');
+  });
+
+  it('says it could not translate when the translation fails', async () => {
+    const { handlers, notify, description } = foreign();
+    await handlers.run('read_post', { mode: 'brief' });
+    description.resolve(null);
+    await flush();
+    expect(notify).toHaveBeenCalledWith(expect.stringMatching(/^TRANSLATION_FAILED/), 'This post is in another language and could not be translated right now.');
+  });
+
+  it('reads a cached translation, labeled, in every reading of the text', async () => {
+    const { handlers } = foreign(spanishParts);
+    expect((await handlers.run('read_post', { mode: 'full' })).speak).toBe('Ana, 2 hours ago. Translated from Spanish: Today we went to the market with my grandmother. We bought fresh fruit.');
+    expect((await handlers.run('read_post', { mode: 'brief' })).speak).toBe('Ana. Translated from Spanish: Today we went to the market with my grandmother.');
+    expect((await handlers.run('read_post', { mode: 'exact' })).speak).toBe(
+      "Ana wrote this in Spanish. I can't pronounce Spanish well, so here is the translation. Translated from Spanish: Today we went to the market with my grandmother. We bought fresh fruit. To hear the original, draw a circle counter-clockwise to put me to sleep, then choose Read exactly from the VoiceOver actions.",
+    );
+  });
+
+  it('never reads an untranslated foreign post in the agent\'s voice, and says where the original can be heard', async () => {
+    const { handlers } = foreign({ ...spanishParts, translation: null, untranslatedLanguage: 'es' });
+    for (const mode of ['full', 'brief', 'exact', 'translation'] as const) {
+      const spoken = (await handlers.run('read_post', { mode })).speak ?? '';
+      expect(spoken).toContain('This post is in Spanish and could not be translated right now.');
+      expect(spoken).not.toMatch(/Hoy|mercado/);
+    }
+    expect((await handlers.run('read_post', { mode: 'exact' })).speak).toContain('To hear the original, draw a circle counter-clockwise');
+  });
+
+  it('waits a little when asked to translate, then says the translation is on its way', async () => {
+    const { handlers, scheduler, description, notify } = foreign();
+    const quick = handlers.run('read_post', { mode: 'translation' });
+    await scheduler.advance(PICTURE_WAIT_MS - 500);
+    description.resolve(spanishParts);
+    expect((await quick).speak).toContain('Translated from Spanish: Today we went');
+
+    const slow = foreign();
+    const asked = slow.handlers.run('read_post', { mode: 'translation' });
+    await slow.scheduler.advance(PICTURE_WAIT_MS);
+    expect((await asked).speak).toBe('Ana, 2 hours ago. This post is in another language and is being translated.');
+    slow.description.resolve(spanishParts);
+    await flush();
+    expect(slow.notify).toHaveBeenCalledWith(expect.stringMatching(/^DESCRIBED/), expect.stringContaining('Translated from Spanish'));
+    expect(notify).not.toHaveBeenCalled();
+  });
+
+  it('says there is nothing to translate for a post in the user\'s language', async () => {
+    const { handlers, deps } = setup();
+    deps.description = jest.fn(hang);
+    expect((await handlers.run('read_post', { mode: 'translation' })).result).toMatch(/^NOT_FOREIGN/);
+    expect(deps.description).not.toHaveBeenCalled();
+  });
+
+  it('reads the translation, labeled, as the snippet of a foreign post being replied to or reposted', async () => {
+    const { handlers, say } = foreign(spanishParts);
+    say('repost this');
+    expect((await handlers.run('draft_repost', {})).speak).toBe(
+      'Reposting Ana\'s post that starts, translated from Spanish, "Today we went to the market with my grandmother. We bought fresh…" to your followers. Shall I repost it?',
+    );
+    const replying = foreign(spanishParts);
+    replying.say('Qué bonito');
+    expect((await replying.handlers.run('draft_reply', { text: 'Qué bonito' })).speak).toBe(
+      'Replying to Ana\'s post that starts, translated from Spanish, "Today we went to the market with my grandmother. We bought fresh…": Qué bonito. Shall I send the reply?',
+    );
+  });
+
+  it('names a foreign post by its language, quoting none of its words, while its translation is pending or failed', async () => {
+    const failed = foreign({ ...spanishParts, translation: null, untranslatedLanguage: 'es' });
+    failed.say('repost this');
+    expect((await failed.handlers.run('draft_repost', {})).speak).toBe("Reposting Ana's post, which is in Spanish, to your followers. Shall I repost it?");
+
+    const pending = foreign();
+    pending.say('Qué bonito');
+    const reply = (await pending.handlers.run('draft_reply', { text: 'Qué bonito' })).speak ?? '';
+    expect(reply).toBe("Replying to Ana's post, which is in another language: Qué bonito. Shall I send the reply?");
+    expect(reply).not.toMatch(/Hoy|mercado/);
+  });
+
+  it(`answers every reading of a foreign post within ${TOOL_CEILING_MS} ms when the translation never comes`, async () => {
+    for (const mode of ['full', 'brief', 'exact', 'translation']) {
+      const { handlers, deps, scheduler } = foreign();
+      deps.description = jest.fn(hang);
+      let answered = false;
+      void handlers.run('read_post', { mode }).then(() => (answered = true));
+      await scheduler.advance(TOOL_CEILING_MS);
+      expect(answered).toBe(true);
+    }
+  });
+
+  it('changes what is translated by voice, and the change persists', async () => {
+    const { handlers, settings } = setup();
+    expect((await handlers.run('change_narration', { dontTranslate: 'Spanish' })).result).toMatch(/posts in other languages translated into English \(Spanish read as written\)/);
+    expect((await handlers.run('change_narration', { translateInto: 'French' })).result).toMatch(/translated into French/);
+    expect((await handlers.run('change_narration', { translation: 'off' })).result).toMatch(/posts not translated/);
+    expect((await handlers.run('change_narration', { dontTranslate: 'Klingon' })).result).toMatch(/^UNKNOWN_LANGUAGE/);
+    expect(settings.get()).toMatchObject({ translate: false, translateInto: 'fr', keepLanguages: ['fr'] });
+    expect(await settings.load()).toMatchObject({ translate: false, translateInto: 'fr' });
+  });
+});
 
 describe('usesOwnWords', () => {
   it('accepts punctuation and capitalization fixes only', () => {

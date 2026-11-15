@@ -99,11 +99,13 @@ export function useVoiceAgent({
         const outcome = go(direction);
         return { outcome, post: outcome === 'moved' ? (state.posts[index] ?? null) : null };
       },
-      description: (target, detail) => descriptionCache.request(target, detail),
+      description: (target, detail, options) => descriptionCache.request(target, detail, options),
       cachedDescription: (target, detail) => descriptionCache.peek(target, detail),
       loadedReplies: (target) => loadedComments(target.uri),
       replies: (target) => readComments(target.uri),
       history: actionHistory,
+      mayNeedTranslation: (target) => descriptionCache.mayNeedTranslation(target),
+      translationState: (target, detail) => descriptionCache.translationState(target, detail),
       settings: narrationSettings,
       memory,
       memoryOffer,

@@ -127,6 +127,8 @@ export function setup(
     loadedReplies: jest.fn(() => options.loadedReplies ?? null),
     replies: jest.fn(async () => options.replies ?? []),
     history,
+    mayNeedTranslation: () => false,
+    translationState: () => null,
     settings,
     memory: options.memory === undefined ? makeMemory() : options.memory,
     memoryOffer: options.memoryOffer ?? null,
