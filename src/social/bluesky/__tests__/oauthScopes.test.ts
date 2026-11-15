@@ -7,10 +7,11 @@ import type { BlueskyOAuth } from '../oauth';
 const DID = 'did:plc:abcdefghijklmnopqrstuvwx';
 const CID = 'bafyreie5737gdxlw5i64vzichcalba3z2v5n6icifvx5xytvske7mr3hpm';
 const APPVIEW = 'did:web:api.bsky.app%23bsky_appview';
+const DISCOVER = 'did:web:discover.bsky.app%23bsky_fg';
 const LIKE = `at://${DID}/app.bsky.feed.like/3kaaaaaaaaaaa`;
 const REPOST = `at://${DID}/app.bsky.feed.repost/3kaaaaaaaaaab`;
 
-type Request = { nsid: string; params: URLSearchParams; body: any; contentType: string | null };
+type Request = { nsid: string; params: URLSearchParams; body: any; contentType: string | null; proxy: string | null };
 
 const ORIGIN = 'https://dependable-goshawk-583.convex.site';
 const MEMORY_AUDIENCE = memoryAudience(ORIGIN);
@@ -28,6 +29,8 @@ const postView = (n: number) => ({
 const responses: Record<string, (body: any) => unknown> = {
   'app.bsky.actor.getProfile': () => ({ did: DID, handle: 'maya.bsky.social', displayName: 'Maya' }),
   'app.bsky.feed.getTimeline': () => ({ feed: [{ post: postView(1) }] }),
+  'app.bsky.feed.getFeed': () => ({ feed: [{ post: postView(3), feedContext: 'ctx-3', reqId: 'req-1' }] }),
+  'app.bsky.feed.sendInteractions': () => ({}),
   'app.bsky.feed.getAuthorFeed': () => ({ feed: [{ post: postView(2) }] }),
   'app.bsky.feed.getPosts': () => ({ posts: [postView(1)] }),
   'app.bsky.feed.getPostThread': () => ({ thread: { $type: 'app.bsky.feed.defs#threadViewPost', post: postView(1), replies: [] } }),
@@ -39,13 +42,13 @@ const responses: Record<string, (body: any) => unknown> = {
 
 // A service-auth token is granted by the rpc scope of the method and audience it is for, not by the method
 // that fetches it (https://atproto.com/specs/permission).
-function scopeFor({ nsid, params, body, contentType }: Request): string {
+function scopeFor({ nsid, params, body, contentType, proxy }: Request): string {
   if (nsid === 'com.atproto.server.getServiceAuth') return `rpc:${params.get('lxm')}?aud=${params.get('aud')}`;
   if (nsid === 'com.atproto.repo.createRecord') return `repo:${body.collection}?action=create`;
   if (nsid === 'com.atproto.repo.putRecord') return `repo:${body.collection}?action=update`;
   if (nsid === 'com.atproto.repo.deleteRecord') return `repo:${body.collection}?action=delete`;
   if (nsid === 'com.atproto.repo.uploadBlob') return `blob:${contentType}`;
-  return `rpc:${nsid}?aud=${APPVIEW}`;
+  return `rpc:${nsid}?aud=${proxy ? proxy.replace('#', '%23') : APPVIEW}`;
 }
 
 function granted(scope: string): boolean {
@@ -66,7 +69,7 @@ async function signedIn() {
       const contentType = new Headers(init.headers).get('content-type');
       const raw = init.body instanceof Uint8Array && contentType === 'application/json' ? new TextDecoder().decode(init.body) : init.body;
       const body = typeof raw === 'string' ? JSON.parse(raw) : undefined;
-      requests.push({ nsid, params: new URLSearchParams(query), body, contentType });
+      requests.push({ nsid, params: new URLSearchParams(query), body, contentType, proxy: new Headers(init.headers).get('atproto-proxy') });
       const respond = responses[nsid];
       if (!respond) throw new Error(`No fake response for ${nsid}`);
       const result = respond(body);
@@ -104,7 +107,11 @@ const everyMethod: Record<Exclude<keyof SocialProvider, 'id' | 'name'>, (provide
   signInWithAppPassword: async () => 'App-password sessions are not OAuth sessions and need no OAuth scope.',
   signOut: (provider) => provider.signOut(),
   onSessionExpired: async (provider) => provider.onSessionExpired(() => undefined)(),
-  getTimeline: (provider) => provider.getTimeline(),
+  getTimeline: async (provider) => [await provider.getTimeline({ feed: 'forYou' }), await provider.getTimeline({ feed: 'following' })],
+  sendFeedFeedback: async (provider) => {
+    const [forYou] = (await provider.getTimeline({ feed: 'forYou' })).posts;
+    return provider.sendFeedFeedback(forYou, 'more');
+  },
   createPost: (provider) => provider.createPost({ text: 'Hello' }),
   repost: (provider) => provider.repost(post),
   like: (provider) => provider.like(post),
@@ -152,6 +159,8 @@ describe('OAuth scopes', () => {
         `rpc:app.bsky.feed.getPostThread?aud=${APPVIEW}`,
         `rpc:app.bsky.feed.getPosts?aud=${APPVIEW}`,
         `rpc:app.bsky.feed.getTimeline?aud=${APPVIEW}`,
+        `rpc:app.bsky.feed.getFeed?aud=${APPVIEW}`,
+        `rpc:app.bsky.feed.sendInteractions?aud=${DISCOVER}`,
         `rpc:${MEMORY_METHOD}?aud=${MEMORY_AUDIENCE}`,
       ].sort(),
     );
@@ -189,7 +198,58 @@ describe('OAuth scopes', () => {
       `rpc:app.bsky.feed.getPosts?aud=${APPVIEW}`,
       `rpc:app.bsky.feed.getPostThread?aud=${APPVIEW}`,
       `rpc:app.bsky.actor.getProfile?aud=${APPVIEW}`,
+      `rpc:app.bsky.feed.getFeed?aud=${APPVIEW}`,
+      `rpc:app.bsky.feed.sendInteractions?aud=${DISCOVER}`,
     ]);
+  });
+});
+
+describe('the two feeds', () => {
+  it('read For You as the user, with what its feedback needs, and Following from the timeline', async () => {
+    const { provider, requests } = await signedIn();
+    requests.length = 0;
+    const forYou = await provider.getTimeline({ feed: 'forYou' });
+    const following = await provider.getTimeline({ feed: 'following' });
+    expect(requests.map((request) => request.nsid)).toEqual(['app.bsky.feed.getFeed', 'app.bsky.feed.getTimeline']);
+    expect(requests[0].params.get('feed')).toBe('at://did:plc:z72i7hdynmk6r22z27h6tvur/app.bsky.feed.generator/whats-hot');
+    expect(forYou.posts[0].feedContext).toEqual({ context: 'ctx-3', reqId: 'req-1' });
+    expect(following.posts[0].feedContext).toBeUndefined();
+  });
+
+  it('send a For You post feedback to the Discover feed, and nothing for any other post', async () => {
+    const { provider, requests } = await signedIn();
+    const [forYou] = (await provider.getTimeline({ feed: 'forYou' })).posts;
+    const [following] = (await provider.getTimeline({ feed: 'following' })).posts;
+    requests.length = 0;
+    await provider.sendFeedFeedback(forYou, 'more');
+    await provider.sendFeedFeedback(forYou, 'less');
+    await provider.sendFeedFeedback(forYou, 'like');
+    await provider.sendFeedFeedback(following, 'more');
+    expect(requests.map((request) => request.proxy)).toEqual(Array(3).fill('did:web:discover.bsky.app#bsky_fg'));
+    expect(requests.map((request) => request.body)).toEqual(
+      ['requestMore', 'requestLess', 'interactionLike'].map((event) => ({
+        feed: 'at://did:plc:z72i7hdynmk6r22z27h6tvur/app.bsky.feed.generator/whats-hot',
+        interactions: [{ item: forYou.uri, event: `app.bsky.feed.defs#${event}`, feedContext: 'ctx-3', reqId: 'req-1' }],
+      })),
+    );
+  });
+
+  it('fall back to the public Discover feed for a sign-in made before the For You permission', async () => {
+    const original = responses['app.bsky.feed.getFeed'];
+    responses['app.bsky.feed.getFeed'] = () =>
+      new Response(JSON.stringify({ error: 'ScopeMissingError', message: 'Missing required scope "rpc:app.bsky.feed.getFeed"' }), { status: 403, headers: { 'content-type': 'application/json' } });
+    const publicFetch = jest.spyOn(globalThis, 'fetch').mockImplementation(async () => new Response(JSON.stringify({ feed: [{ post: postView(4), feedContext: 'ctx-4' }] }), { status: 200, headers: { 'content-type': 'application/json' } }));
+    publicFetch.mockClear();
+    try {
+      const { provider } = await signedIn();
+      const page = await provider.getTimeline({ feed: 'forYou' });
+      expect(page.posts.map((post) => post.uri)).toEqual([postView(4).uri]);
+      expect(page.posts[0].feedContext).toBeUndefined();
+      expect((publicFetch.mock.calls[0][0] as unknown as { url: string }).url).toContain('public.api.bsky.app/xrpc/app.bsky.feed.getFeed');
+    } finally {
+      responses['app.bsky.feed.getFeed'] = original;
+      publicFetch.mockRestore();
+    }
   });
 });
 

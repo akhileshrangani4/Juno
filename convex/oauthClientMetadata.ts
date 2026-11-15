@@ -5,6 +5,8 @@ export const OAUTH_CLIENT_METADATA_PATH = '/oauth/client-metadata.json';
 export const OAUTH_REDIRECT_PATH = '/oauth/callback';
 
 const BLUESKY_APPVIEW = 'did:web:api.bsky.app%23bsky_appview';
+// Bluesky's Discover feed generator, which takes the user's feedback on their For You feed.
+const DISCOVER_FEED_SERVICE = 'did:web:discover.bsky.app%23bsky_fg';
 
 export const OAUTH_SCOPES = [
   'atproto',
@@ -20,6 +22,8 @@ export const OAUTH_SCOPES = [
   `rpc:app.bsky.feed.getPosts?aud=${BLUESKY_APPVIEW}`,
   `rpc:app.bsky.feed.getPostThread?aud=${BLUESKY_APPVIEW}`,
   `rpc:app.bsky.actor.getProfile?aud=${BLUESKY_APPVIEW}`,
+  `rpc:app.bsky.feed.getFeed?aud=${BLUESKY_APPVIEW}`,
+  `rpc:app.bsky.feed.sendInteractions?aud=${DISCOVER_FEED_SERVICE}`,
 ];
 
 // The scopes this deployment's client metadata asks for: the ones above, and the memory proof

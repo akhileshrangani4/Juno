@@ -38,7 +38,14 @@ export type Post = PostRef & {
   langs?: string[];
   counts: { likes: number; reposts: number; replies: number };
   likeUri: string | null;
+  // Set only on posts from the signed-in user's own For You feed: what Bluesky's feed needs back to learn from the
+  // user's likes and "more like this" / "less like this".
+  feedContext?: { context: string | null; reqId: string | null };
 };
+
+export type FeedName = 'forYou' | 'following';
+
+export type FeedFeedback = 'like' | 'more' | 'less';
 
 export type Reply = Post & { parentAuthor: PostAuthor | null };
 
@@ -80,7 +87,9 @@ export interface SocialProvider {
   signInWithAppPassword(identifier: string, appPassword: string): Promise<SocialAccount>;
   signOut(): Promise<void>;
   onSessionExpired(listener: (account: SocialAccount) => void): () => void;
-  getTimeline(options?: { cursor?: string; limit?: number }): Promise<TimelinePage>;
+  getTimeline(options?: { cursor?: string; limit?: number; feed?: FeedName }): Promise<TimelinePage>;
+  // Tells the For You feed what the user thinks of one of its posts. Does nothing for any other post.
+  sendFeedFeedback(post: Post, feedback: FeedFeedback): Promise<void>;
   createPost(post: NewPost): Promise<PostRef>;
   repost(post: PostRef): Promise<RecordRef>;
   like(post: PostRef): Promise<RecordRef>;

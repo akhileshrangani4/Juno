@@ -3,7 +3,7 @@ import { OAuthCallbackError, isExpectedSessionError, type OAuthSession } from '@
 
 import type { KeyValueStore } from '@/storage/keyValueStore';
 
-import { OfflineError, PermissionMissingError, type NewPost, type Post, type PostRef, type RecordRef, type ReplyParent, type Reply, type RestoreResult, type SignInResult, type SocialAccount, type SocialProvider, type TimelinePage, type UploadedImage } from '../types';
+import { OfflineError, PermissionMissingError, type FeedFeedback, type FeedName, type NewPost, type Post, type PostRef, type RecordRef, type ReplyParent, type Reply, type RestoreResult, type SignInResult, type SocialAccount, type SocialProvider, type TimelinePage, type UploadedImage } from '../types';
 import { mapFeedItem } from './mapPost';
 import { withMentionNames } from './mentionNames';
 import { isHiddenByModeration } from './moderation';
@@ -22,6 +22,15 @@ const REVOKE_TIMEOUT_MS = 5000;
 const REPLY_DEPTH = 10;
 const NO_RESPONSE = 1;
 const DEFAULT_DEMO_FEED = 'at://did:plc:z72i7hdynmk6r22z27h6tvur/app.bsky.feed.generator/whats-hot';
+// Bluesky's Discover feed, asked for as the signed-in user so it is personalized, and the feed generator service
+// that receives the user's feedback on it.
+const FOR_YOU_FEED = DEFAULT_DEMO_FEED;
+const FOR_YOU_SERVICE = 'did:web:discover.bsky.app#bsky_fg';
+const FEEDBACK_EVENTS: Record<FeedFeedback, string> = {
+  like: 'app.bsky.feed.defs#interactionLike',
+  more: 'app.bsky.feed.defs#requestMore',
+  less: 'app.bsky.feed.defs#requestLess',
+};
 
 type Options = { store: KeyValueStore; service?: string; demoFeed?: string; oauthOrigin?: string; oauth?: BlueskyOAuthFactory };
 
@@ -40,6 +49,12 @@ function isNetworkError(error: unknown): boolean {
 // XRPCError whose status is ResponseType.Unknown.
 function isUnreachable(error: unknown): boolean {
   return isNetworkError(error) || (error instanceof XRPCError && error.status === NO_RESPONSE);
+}
+
+// An OAuth grant without a call's rpc scope is refused with 403 "Missing required scope".
+function isScopeRefusal(error: unknown): boolean {
+  const refused = error as { status?: number; message?: string };
+  return refused.status === 403 || /missing required scope/i.test(refused.message ?? '');
 }
 
 async function reach<T>(call: () => Promise<T>): Promise<T> {
@@ -65,6 +80,7 @@ export class BlueskyProvider implements SocialProvider {
   private oauthClient: BlueskyOAuth | null = null;
   private signed: Signed | null = null;
   private expired = false;
+  private forYouUnpermitted = false;
   private authorizing = false;
   private lastPersistEvent: string | null = null;
   revoking: Promise<void> = Promise.resolve();
@@ -152,18 +168,36 @@ export class BlueskyProvider implements SocialProvider {
     return () => void this.expiryListeners.delete(listener);
   }
 
-  async getTimeline({ cursor, limit = 30 }: { cursor?: string; limit?: number } = {}): Promise<TimelinePage> {
+  async getTimeline({ cursor, limit = 30, feed = 'following' }: { cursor?: string; limit?: number; feed?: FeedName } = {}): Promise<TimelinePage> {
     if (this.expired) throw new SessionExpiredError('The Bluesky session has ended');
-    const agent = this.signed?.agent;
+    const signed = this.signed;
+    const agent = signed?.agent;
     let next = cursor;
     for (let attempt = 0; attempt < MAX_FILTERED_PAGES; attempt += 1) {
-      const { data } = agent
-        ? await agent.getTimeline({ cursor: next, limit })
-        : await this.publicAgent.app.bsky.feed.getFeed({ feed: this.demoFeed, cursor: next, limit });
+      let personal = !!agent && feed === 'forYou' && !this.forYouUnpermitted;
+      const page = async (from: string | undefined) => {
+        if (agent && feed === 'following') return agent.getTimeline({ cursor: from, limit });
+        if (agent && personal) {
+          try {
+            return await agent.app.bsky.feed.getFeed({ feed: FOR_YOU_FEED, cursor: from, limit });
+          } catch (error) {
+            if (signed?.kind !== 'oauth' || !isScopeRefusal(error)) throw error;
+            // A sign-in made before the app asked for its For You feed: show Discover unpersonalized until the user
+            // signs in again.
+            this.forYouUnpermitted = true;
+            personal = false;
+          }
+        }
+        return this.publicAgent.app.bsky.feed.getFeed({ feed: agent ? FOR_YOU_FEED : this.demoFeed, cursor: from, limit });
+      };
+      const { data } = await page(next);
       const posts = data.feed
         .filter((item) => !isHiddenByModeration(item.post, agent?.did))
-        .map(mapFeedItem)
-        .filter((post): post is Post => post !== null);
+        .flatMap((item) => {
+          const post = mapFeedItem(item);
+          if (!post) return [];
+          return [personal ? { ...post, feedContext: { context: item.feedContext ?? null, reqId: item.reqId ?? null } } : post];
+        });
       next = data.cursor;
       if (posts.length || !next) {
         return {
@@ -221,6 +255,18 @@ export class BlueskyProvider implements SocialProvider {
     return data.feed.filter((item) => !item.reason).map(mapFeedItem).find((post) => post?.author.id === did) ?? null;
   }
 
+  async sendFeedFeedback(post: Post, feedback: FeedFeedback): Promise<void> {
+    const signed = this.signed;
+    if (!post.feedContext || !signed || this.expired) return;
+    const { context, reqId } = post.feedContext;
+    await reach(() =>
+      signed.agent.app.bsky.feed.sendInteractions(
+        { feed: FOR_YOU_FEED, interactions: [{ item: post.uri, event: FEEDBACK_EVENTS[feedback], feedContext: context ?? undefined, reqId: reqId ?? undefined }] },
+        { headers: { 'atproto-proxy': FOR_YOU_SERVICE } },
+      ),
+    );
+  }
+
   async serviceAuth({ aud, lxm }: { aud: string; lxm: string }): Promise<string> {
     const signed = this.signed;
     if (!signed) throw new Error('Not signed in');
@@ -228,9 +274,7 @@ export class BlueskyProvider implements SocialProvider {
       const { data } = await this.agent().com.atproto.server.getServiceAuth({ aud, lxm });
       return data.token;
     } catch (error) {
-      // An OAuth grant without this rpc scope is refused with 403 "Missing required scope".
-      const refused = error as { status?: number; message?: string };
-      if (signed.kind === 'oauth' && (refused.status === 403 || /missing required scope/i.test(refused.message ?? ''))) {
+      if (signed.kind === 'oauth' && isScopeRefusal(error)) {
         throw new PermissionMissingError(`The sign-in lacks the permission for ${lxm}`, { cause: error });
       }
       throw error;
@@ -322,6 +366,7 @@ export class BlueskyProvider implements SocialProvider {
     };
     this.signed = { kind: 'oauth', account, agent: new Agent({ did: account.id, fetchHandler }) };
     this.expired = false;
+    this.forYouUnpermitted = false;
     return account;
   }
 
