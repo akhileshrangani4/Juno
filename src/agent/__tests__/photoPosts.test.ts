@@ -7,15 +7,22 @@ const draftIdOf = (result: string) => result.match(/draftId="([^"]+)"/)?.[1] ?? 
 
 function withPhoto(alt = 'A red mug with a white handle on a wooden desk.') {
   const env = setup();
-  let photo: ReturnType<CameraTools['photo']> = { uri: 'file:///upload.jpg', mimeType: 'image/jpeg', alt };
+  let photo: ReturnType<CameraTools['photo']> = { uri: 'file:///upload.jpg', mimeType: 'image/jpeg', alt, width: 1536, height: 2048 };
+  let open = false;
   const camera: jest.Mocked<CameraTools> = {
-    run: jest.fn<string, Parameters<CameraTools['run']>>(() => 'DONE: The app is doing it on the phone and tells the user. Say nothing.'),
+    run: jest.fn<ReturnType<CameraTools['run']>, Parameters<CameraTools['run']>>(() => ({ result: 'DONE: The app is doing it on the phone and tells the user. Say nothing.' })),
     photo: jest.fn(() => photo),
-    photoUsed: jest.fn(() => void (photo = null)),
+    photoUsed: jest.fn<void, [string]>((uri) => void (photo?.uri === uri && (photo = null))),
+    isOpen: jest.fn(() => open),
   };
   env.deps.camera = camera;
   env.provider.uploadImage.mockImplementation(async (_image, altText) => ({ alt: altText, handle: { blob: 'mug' } }));
-  return { ...env, camera };
+  return {
+    ...env,
+    camera,
+    keepAnother: (uri: string, altText: string) => void (photo = { uri, mimeType: 'image/jpeg', alt: altText, width: 1536, height: 2048 }),
+    setOpen: (next: boolean) => void (open = next),
+  };
 }
 
 async function publish(env: ReturnType<typeof withPhoto>, draftResult: string) {
@@ -49,9 +56,63 @@ describe('posting a photo from the camera or the library', () => {
     const draft = await env.handlers.run('draft_post', { text: 'My morning coffee.' });
     expect(env.provider.uploadImage).not.toHaveBeenCalled();
     await publish(env, draft.result);
-    expect(env.provider.uploadImage).toHaveBeenCalledWith({ uri: 'file:///upload.jpg', mimeType: 'image/jpeg' }, 'A red mug with a white handle on a wooden desk.');
+    expect(env.provider.uploadImage).toHaveBeenCalledWith({ uri: 'file:///upload.jpg', mimeType: 'image/jpeg', width: 1536, height: 2048 }, 'A red mug with a white handle on a wooden desk.');
     expect(env.provider.createPost).toHaveBeenCalledWith({ text: 'My morning coffee.', images: [{ alt: 'A red mug with a white handle on a wooden desk.', handle: { blob: 'mug' } }] });
-    expect(env.camera.photoUsed).toHaveBeenCalled();
+    expect(env.camera.photoUsed).toHaveBeenCalledWith('file:///upload.jpg');
+  });
+
+  it('throws a photo draft away when the user keeps a different photo, so "post it" never sends the replaced photo', async () => {
+    const env = withPhoto();
+    env.say('Post my morning coffee.');
+    const draft = await env.handlers.run('draft_post', { text: 'My morning coffee.' });
+    env.keepAnother('file:///second.jpg', 'A blue bicycle by a wall.');
+    env.say('Yes.');
+    const refused = await env.handlers.run('publish_draft', { draftId: draftIdOf(draft.result) });
+    expect(refused).toMatchObject({ respond: false, result: expect.stringMatching(/^PHOTO_REPLACED/) });
+    expect(refused.speak).toMatch(/new photo.*earlier draft.*Nothing was posted/);
+    expect(env.handlers.publisher.currentDraft).toBeNull();
+    env.say('Post my bike.');
+    const second = await env.handlers.run('draft_post', { text: 'My bike.' });
+    expect(second.speak).toContain('With the image description: A blue bicycle by a wall.');
+    await publish(env, second.result);
+    expect(env.provider.uploadImage).toHaveBeenCalledTimes(1);
+    expect(env.provider.uploadImage).toHaveBeenCalledWith(expect.objectContaining({ uri: 'file:///second.jpg' }), 'A blue bicycle by a wall.');
+  });
+
+  it("doesn't count a read-back heard before the camera was opened again: the draft is read back before any yes counts", async () => {
+    const env = withPhoto();
+    env.say('Post my morning coffee.');
+    const draft = await env.handlers.run('draft_post', { text: 'My morning coffee.' });
+    env.setOpen(true);
+    await env.handlers.run('camera', { action: 'describe' });
+    env.setOpen(false);
+    env.say('Yes.');
+    const outcome = await env.handlers.run('publish_draft', { draftId: draftIdOf(draft.result) });
+    expect(outcome.refused).toBe('expired');
+    expect(outcome.speak).toContain('With the image description: A red mug');
+    expect(env.provider.createPost).not.toHaveBeenCalled();
+  });
+
+  it('clears only the photo that was sent, never one kept afterwards', async () => {
+    const env = withPhoto();
+    env.say('Post my morning coffee.');
+    const draft = await env.handlers.run('draft_post', { text: 'My morning coffee.' });
+    env.say('Yes.');
+    await env.handlers.run('publish_draft', { draftId: draftIdOf(draft.result) });
+    env.handlers.publisher.startCountdown();
+    env.keepAnother('file:///second.jpg', 'A blue bicycle.');
+    await env.scheduler.advance(UNDO_WINDOW_MS);
+    expect(env.camera.photoUsed).toHaveBeenCalledWith('file:///upload.jpg');
+    expect(env.camera.photo()?.uri).toBe('file:///second.jpg');
+  });
+
+  it('removes the image description by voice and reads the draft back without one', async () => {
+    const env = withPhoto();
+    env.say('Post my morning coffee.');
+    await env.handlers.run('draft_post', { text: 'My morning coffee.' });
+    env.say('Remove the image description.');
+    const removed = await env.handlers.run('edit_image_description', { text: '' });
+    expect(removed.speak).toContain('The image has no description yet.');
   });
 
   it('changes the image description by voice, in the user\'s own words, and reads the draft back again', async () => {
@@ -87,7 +148,7 @@ describe('posting a photo from the camera or the library', () => {
     await env.handlers.run('draft_post', { text: 'My coffee.' });
     const discarded = await env.handlers.run('discard_draft', {});
     expect(discarded.result).toContain('and the photo with it');
-    expect(env.camera.photoUsed).toHaveBeenCalled();
+    expect(env.camera.photoUsed).toHaveBeenCalledWith('file:///upload.jpg');
   });
 
   it('still needs a draft with words or a photo', async () => {
@@ -102,5 +163,11 @@ describe('posting a photo from the camera or the library', () => {
     const outcome = await env.handlers.run('camera', { action: 'check', subject: ' my dog ' });
     expect(env.camera.run).toHaveBeenCalledWith('check', 'my dog');
     expect(outcome).toMatchObject({ respond: false, result: expect.stringMatching(/^DONE/) });
+  });
+
+  it("speaks the camera tool's own answer in the app's voice", async () => {
+    const env = withPhoto();
+    env.camera.run.mockReturnValueOnce({ result: 'CAMERA_CLOSED: The app told the user. Say nothing.', speak: "The camera isn't open." });
+    expect(await env.handlers.run('camera', { action: 'flip' })).toEqual({ respond: false, speak: "The camera isn't open.", result: 'CAMERA_CLOSED: The app told the user. Say nothing.' });
   });
 });

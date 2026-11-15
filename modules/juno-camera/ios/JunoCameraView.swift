@@ -128,6 +128,8 @@ final class JunoCameraView: ExpoView, AVCaptureVideoDataOutputSampleBufferDelega
     lastAnalysis = now
     var result = analyzer.analyze(pixelBuffer: pixelBuffer)
     result["timestamp"] = now * 1000
+    let source = connection.inputPorts.first?.input as? AVCaptureDeviceInput
+    result["facing"] = source?.device.position == .front ? "front" : "back"
     emit(onAnalysis, result)
   }
 

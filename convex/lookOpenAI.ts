@@ -13,23 +13,33 @@ export const DECISION_DETAIL = 'low';
 // The person is waiting with the camera raised; an answer later than this is no longer useful.
 const TIMEOUT_MS = 20_000;
 
-// Never thrown: a failure carries a short error class for the log (never content) and any usage the response
-// reported, so the spend counter can record what OpenAI billed.
+// Neither call ever throws, whatever comes back: a failure carries a short error class for the log (never
+// content) and any usage the response reported, so the action always settles its reservation and the spend
+// counter can record what OpenAI billed. Every field of a response is checked before it is read.
 export type Outcome<T> = ({ ok: true; usage: Usage; model: string } & T) | { ok: false; error: string; usage: Usage | null };
 
-function usageOf(body: Record<string, any>, model: string, billsOutput: boolean): Usage | null {
-  if (typeof body?.usage?.input_tokens !== 'number') return null;
-  const details = body.usage.input_tokens_details ?? {};
+type Body = Record<string, unknown>;
+const isObject = (value: unknown): value is Body => typeof value === 'object' && value !== null && !Array.isArray(value);
+const count = (value: unknown) => (typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : null);
+
+function usageOf(body: Body | null, model: string, billsOutput: boolean): Usage | null {
+  const usage = isObject(body?.usage) ? body.usage : null;
+  const inputTokens = count(usage?.input_tokens);
+  if (!usage || inputTokens === null) return null;
+  const details = isObject(usage.input_tokens_details) ? usage.input_tokens_details : {};
   const tokens = {
-    inputTokens: body.usage.input_tokens,
-    cachedTokens: details.cached_tokens ?? 0,
-    cacheWriteTokens: details.cache_write_tokens ?? 0,
-    outputTokens: billsOutput ? (body.usage.output_tokens ?? 0) : 0,
+    inputTokens,
+    cachedTokens: count(details.cached_tokens) ?? 0,
+    cacheWriteTokens: count(details.cache_write_tokens) ?? 0,
+    outputTokens: billsOutput ? (count(usage.output_tokens) ?? 0) : 0,
   };
   return { ...tokens, costUsd: costUsd(model, tokens) };
 }
 
-async function post(path: string, apiKey: string, payload: unknown): Promise<{ status: number; body: Record<string, any> } | { error: string }> {
+const modelOf = (body: Body, model: string) => (typeof body.model === 'string' && body.model ? body.model : model);
+
+// The body is null when the response's JSON is not an object (null, a number, an array).
+async function post(path: string, apiKey: string, payload: unknown): Promise<{ status: number; body: Body | null } | { error: string }> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
   try {
@@ -39,7 +49,8 @@ async function post(path: string, apiKey: string, payload: unknown): Promise<{ s
       headers: { 'content-type': 'application/json', authorization: `Bearer ${apiKey}` },
       body: JSON.stringify(payload),
     });
-    return { status: response.status, body: (await response.json()) as Record<string, any> };
+    const body: unknown = await response.json();
+    return { status: response.status, body: isObject(body) ? body : null };
   } catch (error) {
     return { error: controller.signal.aborted ? 'timeout' : error instanceof SyntaxError ? 'unparseable' : 'network' };
   } finally {
@@ -64,16 +75,21 @@ export async function describeImageWithOpenAI({ apiKey, model, image, purpose }:
   const { status, body } = reply;
   const usage = usageOf(body, model, true);
   if (status !== 200) return { ok: false, error: `http_${status}`, usage };
-  if (body.status !== 'completed') return { ok: false, error: `incomplete_${body.incomplete_details?.reason ?? body.status}`, usage };
-  const message = (Array.isArray(body.output) ? body.output : []).find((item: any) => item?.type === 'message');
-  const part = message?.content?.find((item: any) => item?.type === 'output_text' || item?.type === 'refusal');
+  if (!body) return { ok: false, error: 'unparseable', usage };
+  if (body.status !== 'completed') {
+    const reason = isObject(body.incomplete_details) ? body.incomplete_details.reason : null;
+    return { ok: false, error: typeof reason === 'string' ? `incomplete_${reason}` : typeof body.status === 'string' ? `incomplete_${body.status}` : 'unparseable', usage };
+  }
+  const message = (Array.isArray(body.output) ? body.output : []).find((item) => isObject(item) && item.type === 'message');
+  const content: unknown[] = Array.isArray(message?.content) ? message.content : [];
+  const part = content.find((item): item is Body => isObject(item) && (item.type === 'output_text' || item.type === 'refusal'));
   if (!part || part.type === 'refusal') return { ok: false, error: part ? 'refusal' : 'no_output', usage };
   let text: LookText | null = null;
   try {
-    text = lookText(JSON.parse(part.text), purpose);
+    text = typeof part.text === 'string' ? lookText(JSON.parse(part.text), purpose) : null;
   } catch {}
   if (!text || !usage) return { ok: false, error: 'unparseable', usage };
-  return { ok: true, ...text, usage, model: body.model ?? model };
+  return { ok: true, ...text, usage, model: modelOf(body, model) };
 }
 
 export async function decideWithOpenAI({
@@ -101,7 +117,7 @@ export async function decideWithOpenAI({
   const { status, body } = reply;
   const usage = usageOf(body, model, false);
   if (status !== 200) return { ok: false, error: `http_${status}`, usage };
-  const answers = decisionAnswers(body);
-  if (!answers || !usage) return { ok: false, error: 'unparseable', usage };
-  return { ok: true, answers, usage, model: body.model ?? model };
+  const answers = body && decisionAnswers(body);
+  if (!body || !answers || !usage) return { ok: false, error: 'unparseable', usage };
+  return { ok: true, answers, usage, model: modelOf(body, model) };
 }

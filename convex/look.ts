@@ -4,7 +4,7 @@ import { internal } from './_generated/api';
 import { action, type ActionCtx } from './_generated/server';
 import { isDeviceId } from './describeCache';
 import { env } from './describeOpenAI';
-import { decideProblem, imageProblem, lookChecks, lookHash, reservationUsd, type LookAction } from './lookLimits';
+import { decideProblem, imageProblem, lookChecks, lookHash, lookSpends, reservationUsd, type LookAction } from './lookLimits';
 import { DEFAULT_DECISION_MODEL, DEFAULT_LOOK_MODEL, decideWithOpenAI, describeImageWithOpenAI } from './lookOpenAI';
 import type { Edge } from './lookPrompt';
 
@@ -20,12 +20,13 @@ export type DecideResult =
   | { ok: true; inView: number | null; cutOff: Edge | null; tooDark: number | null; tooBlurry: number | null; latencyMs: number; costUsd: number | null; model: string }
   | Failure;
 
-// Limits are taken before any outbound call: every call-count window and the spend reservation, in one
-// transaction, or none of them.
+// Limits are taken before any outbound call: every call-count window and the spend reservations (the
+// deployment's and the caller address's), in one transaction, or none of them. Known limit, as in describe.ts:
+// a request whose metadata has no ip gets only the device and deployment limits.
 async function reserve(ctx: ActionCtx, action: LookAction, deviceId: string, reserveUsd: number) {
   const { ip } = await ctx.meta.getRequestMetadata();
-  const checks = lookChecks(action, await lookHash('device', deviceId), ip ? await lookHash('address', ip) : null);
-  return ctx.runMutation(internal.lookUsage.reserve, { checks, reserveUsd });
+  const address = ip ? await lookHash('address', ip) : null;
+  return ctx.runMutation(internal.lookUsage.reserve, { checks: lookChecks(action, await lookHash('device', deviceId), address), spends: lookSpends(address), reserveUsd });
 }
 
 export const describeImage = action({
@@ -47,7 +48,7 @@ export const describeImage = action({
     const started = Date.now();
     const result = await describeImageWithOpenAI({ apiKey, model, image, purpose });
     const latencyMs = Date.now() - started;
-    await ctx.runMutation(internal.lookUsage.settle, { windowStart: reserved.windowStart, reserveUsd, costUsd: result.usage?.costUsd ?? null });
+    await ctx.runMutation(internal.lookUsage.settle, { windowStart: reserved.windowStart, spendKeys: reserved.spendKeys, reserveUsd, costUsd: result.usage?.costUsd ?? null });
     if (!result.ok) {
       console.error(`look.describeImage failed (${result.error}) after ${latencyMs} ms with ${model}, cost ${result.usage?.costUsd ?? 'none'} USD`);
       return { ok: false, reason: 'failed' };
@@ -81,7 +82,7 @@ export const decide = action({
     const started = Date.now();
     const result = await decideWithOpenAI({ apiKey, model, image, subject, checks });
     const latencyMs = Date.now() - started;
-    await ctx.runMutation(internal.lookUsage.settle, { windowStart: reserved.windowStart, reserveUsd, costUsd: result.usage?.costUsd ?? null });
+    await ctx.runMutation(internal.lookUsage.settle, { windowStart: reserved.windowStart, spendKeys: reserved.spendKeys, reserveUsd, costUsd: result.usage?.costUsd ?? null });
     if (!result.ok) {
       console.error(`look.decide failed (${result.error}) after ${latencyMs} ms with ${model}, cost ${result.usage?.costUsd ?? 'none'} USD`);
       return { ok: false, reason: 'failed' };

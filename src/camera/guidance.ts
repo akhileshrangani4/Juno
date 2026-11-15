@@ -7,7 +7,8 @@
 
 export type Box = { x: number; y: number; width: number; height: number };
 
-export type Analysis = { faces: Box[]; salient: Box | null; sharpness: number; brightness: number; motion: number; signature: number[]; at: number };
+// facing: the camera that produced the frame, so frames still in flight from before a switch can be dropped.
+export type Analysis = { faces: Box[]; salient: Box | null; sharpness: number; brightness: number; motion: number; signature: number[]; at: number; facing?: Facing };
 
 export type Facing = 'back' | 'front';
 
@@ -65,6 +66,7 @@ export type GuidanceState = {
   noSubjectSince: number | null;
   noSubjectAnnounced: boolean;
   lastSpokenAt: number;
+  lastSpoken: CueKind | null;
   spokenAt: Partial<Record<CueKind, number>>;
 };
 
@@ -77,6 +79,7 @@ export const initialGuidance = (): GuidanceState => ({
   noSubjectSince: null,
   noSubjectAnnounced: false,
   lastSpokenAt: -Infinity,
+  lastSpoken: null,
   spokenAt: {},
 });
 
@@ -178,11 +181,13 @@ export function guide(
   if (kind !== 'ready' && kind !== 'noSubject' && now - state.candidateSince < GUIDANCE.settleMs) return silent;
   if ((kind === 'ready' && state.readyAnnounced) || (kind === 'noSubject' && state.noSubjectAnnounced)) return silent;
   if (now - state.lastSpokenAt < GUIDANCE.gapMs) return silent;
-  if (now - (state.spokenAt[kind] ?? -Infinity) < GUIDANCE.repeatMs) return silent;
+  // The repeat interval holds back only the cue just spoken: after an overshoot, the new direction is said at once.
+  if (kind === state.lastSpoken && now - (state.spokenAt[kind] ?? -Infinity) < GUIDANCE.repeatMs) return silent;
   return {
     state: {
       ...state,
       lastSpokenAt: now,
+      lastSpoken: kind,
       spokenAt: { ...state.spokenAt, [kind]: now },
       readyAnnounced: state.readyAnnounced || kind === 'ready',
       noSubjectAnnounced: state.noSubjectAnnounced || kind === 'noSubject',

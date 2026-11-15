@@ -21,7 +21,11 @@ const HOUR = 60 * 60_000;
 //   300 per 10 minutes is five minutes of continuous questions in every ten.
 // - per caller address (the request's IP, stored only as a hash): twice the device numbers, so two people
 //   behind one home router both get a full allowance, while inventing new device ids from one place gets
-//   no further than two devices' worth.
+//   no further than two devices' worth. These windows alone do not stop one address from using up the
+//   hourly budget: priced at the reservations below, 240 describes and 600 decides per 10 minutes are
+//   $0.336 per window, or up to $2 an hour. Sizing them to a third of the budget would leave one person
+//   describing every 8 seconds ($0.35 an hour of reservations) no room at all, so one address's spend is
+//   capped separately (LOOK_ADDRESS_BUDGET_USD_PER_HOUR).
 // - for the whole deployment: a ceiling on calls whatever addresses are used (describe 3,000 an hour is
 //   25 devices at their full describe rate; decide 10,000 an hour is about 33 people asking without pause).
 //   It also bounds what can be spent on calls the spend cap never hears about (see docs/camera.md).
@@ -45,6 +49,17 @@ export const LOOK_LIMITS = {
 // several people at once and bounds the recorded spend at $24 a day.
 // Reaching it turns the camera's descriptions and checks off for everyone until the clock hour ends.
 export const LOOK_BUDGET_USD_PER_HOUR = 1;
+
+// One caller address may spend at most a third of that hourly budget, kept like the budget itself: in a
+// describeUsage row keyed "look:address:<digest>" for the clock hour, reserved in the same transaction and
+// settled to the reported cost. So one address can never turn the camera off for everyone; it takes at least
+// three. Ordinary use by one person (a description every 8 seconds while the camera is open, about $0.09 an
+// hour at the measured cost, plus a check a second while asking, about $0.05 an hour for ten 45-second
+// questions) is under half of it, so two people behind one router both fit. One person at every device limit
+// without pause ($0.34 an hour) reaches it only in the hour's last minute or two. A request with no address
+// (getRequestMetadata gives no ip) has no address cap, as in describe.ts: only the device windows, the
+// deployment windows and the hourly budget apply.
+export const LOOK_ADDRESS_BUDGET_USD_PER_HOUR = LOOK_BUDGET_USD_PER_HOUR / 3;
 
 // Images arrive downscaled by the phone: describe frames with a long side of at most 768 pixels, decide frames
 // at most 512. The byte caps are generous for JPEGs of those sizes and are checked on the base64 string before
@@ -94,20 +109,31 @@ export function lookChecks(action: LookAction, deviceHash: string, addressHash: 
   ];
 }
 
-export type ReservePlan = { refused: Refusal } | { refused: null; buckets: Bucket[]; spentUsd: number };
+// The hourly spend counters a call reserves against, as describeUsage keys: the whole deployment's, and the
+// caller address's when the request has one.
+export type SpendCheck = { key: string; limitUsd: number };
+
+export function lookSpends(addressHash: string | null): SpendCheck[] {
+  return [
+    { key: 'look:global', limitUsd: LOOK_BUDGET_USD_PER_HOUR },
+    ...(addressHash ? [{ key: `look:address:${addressHash}`, limitUsd: LOOK_ADDRESS_BUDGET_USD_PER_HOUR }] : []),
+  ];
+}
+
+export type ReservePlan = { refused: Refusal } | { refused: null; buckets: Bucket[]; spentUsd: number[] };
 
 // What the reserve mutation does in one transaction: take one call from every window and add the reservation
-// to the hour's spend, or change nothing when any window is used up or the reservation would pass the budget.
-// The reservation of this call counts, so concurrent calls can never together overshoot the budget.
-export function planReserve(rows: (Bucket | null)[], checks: RateCheck[], spentUsd: number, reserveUsd: number, now: number): ReservePlan {
+// to every spend counter, or change nothing when any window is used up or the reservation would pass any
+// spend limit. The reservation of this call counts, so concurrent calls can never together overshoot.
+export function planReserve(rows: (Bucket | null)[], checks: RateCheck[], spends: SpendCheck[], spentUsd: number[], reserveUsd: number, now: number): ReservePlan {
   const buckets: Bucket[] = [];
   for (const [i, check] of checks.entries()) {
     const next = takeOne(rows[i] ?? null, check, now);
     if (!next) return { refused: 'limited' };
     buckets.push(next);
   }
-  if (spentUsd + reserveUsd > LOOK_BUDGET_USD_PER_HOUR) return { refused: 'budget' };
-  return { refused: null, buckets, spentUsd: spentUsd + reserveUsd };
+  if (spends.some((spend, i) => (spentUsd[i] ?? 0) + reserveUsd > spend.limitUsd)) return { refused: 'budget' };
+  return { refused: null, buckets, spentUsd: spends.map((_, i) => (spentUsd[i] ?? 0) + reserveUsd) };
 }
 
 // After the call the reservation is swapped for what the response reported, or released entirely when there

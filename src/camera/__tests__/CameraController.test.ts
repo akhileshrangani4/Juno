@@ -47,10 +47,13 @@ function setup({ camera = 'granted', consent = 'yes' as Consent, live = false, l
     takePhoto: jest.fn(async () => ({ uri: 'file:///photo.jpg', width: 3024, height: 4032 })),
   };
   const source: LibrarySource = {
-    recent: async () => [
-      { id: 'a', uri: 'ph://a', takenAt: new Date(2026, 10, 14, 15).getTime(), width: 4000, height: 3000 },
-      { id: 'b', uri: 'ph://b', takenAt: new Date(2026, 10, 11, 19).getTime(), width: 4000, height: 3000 },
-    ],
+    page: async () => ({
+      photos: [
+        { id: 'a', uri: 'ph://a', takenAt: new Date(2026, 10, 14, 15).getTime(), width: 4000, height: 3000 },
+        { id: 'b', uri: 'ph://b', takenAt: new Date(2026, 10, 11, 19).getTime(), width: 4000, height: 3000 },
+      ],
+      next: null,
+    }),
     image: async (photo) => `jpeg-${photo.id}`,
   };
   const order: string[] = [];
@@ -104,10 +107,13 @@ function setup({ camera = 'granted', consent = 'yes' as Consent, live = false, l
   return { controller, deps, look, frames, spoken, said, order, consentStore, advance, finishSpeech, feed, now: () => now };
 }
 
+// Lets every spoken line finish and time pass (up to a minute, in call the agent's speech is timed) until run settles.
 const settle = async (env: ReturnType<typeof setup>, run: Promise<unknown>) => {
-  for (let i = 0; i < 20; i++) {
+  let done = false;
+  void run.finally(() => (done = true));
+  for (let i = 0; i < 20 || (!done && i < 600); i++) {
     env.finishSpeech();
-    await env.advance(10);
+    await env.advance(i < 20 ? 10 : 100);
   }
   await run;
 };
@@ -144,7 +150,7 @@ describe('entering the camera', () => {
     await settle(env, Promise.resolve());
     expect(env.controller.snapshot.phase).toBe('consent');
     expect(env.spoken).toContain(messages.consent);
-    env.controller.tapTop();
+    env.controller.answerConsent('no');
     await settle(env, started);
     expect(env.consentStore.set).toHaveBeenCalledWith('no');
     expect(env.controller.snapshot.phase).toBe('aiming');
@@ -166,7 +172,90 @@ describe('entering the camera', () => {
   });
 });
 
+describe('consent and the entry line', () => {
+  it('is never given by a tap or a double tap: those repeat the question', async () => {
+    const env = setup({ consent: null });
+    const started = env.controller.start();
+    await settle(env, Promise.resolve());
+    env.controller.tapTop();
+    env.controller.tapBottom();
+    await settle(env, Promise.resolve());
+    expect(env.controller.snapshot.phase).toBe('consent');
+    expect(env.consentStore.set).not.toHaveBeenCalled();
+    expect(env.spoken.filter((line) => line === messages.consent)).toHaveLength(3);
+    env.controller.answerConsent('yes');
+    await settle(env, started);
+    expect(env.consentStore.set).toHaveBeenCalledWith('yes');
+    expect(env.controller.snapshot).toMatchObject({ phase: 'aiming', descriptionsOn: true });
+  });
+
+  it('names OpenAI, how long it may keep pictures, and no training, in the question', () => {
+    expect(messages.consent).toMatch(/OpenAI.*30 days.*train/);
+    expect(messages.consentInCall).toMatch(/OpenAI.*30 days.*train/);
+    expect(messages.consent).toContain('Allow descriptions');
+  });
+
+  it('lets the entry line finish before anything else is said', async () => {
+    const env = setup();
+    const started = env.controller.start();
+    await env.advance(1000);
+    expect(env.spoken).toEqual([messages.enter]);
+    await settle(env, started);
+    expect(env.spoken.slice(0, 2)).toEqual([messages.enter, messages.controls]);
+  });
+
+  it('turning descriptions off drops a description on its way, stops speech, and deletes saved descriptions', async () => {
+    const env = setup();
+    await settle(env, env.controller.start());
+    let answer: (value: Awaited<ReturnType<LookClient['describe']>>) => void = () => undefined;
+    env.look.describe.mockImplementationOnce(() => new Promise((resolve) => (answer = resolve)));
+    const forget = jest.spyOn(env.deps.library, 'forget');
+    const stop = jest.spyOn(env.deps.voice, 'stop');
+    env.controller.askWhatIsInView();
+    await env.advance(10);
+    env.controller.answerConsent('no');
+    answer({ description: 'A person at a desk.', altText: '', visibleText: [], latencyMs: 900, costUsd: 0.0002 });
+    await settle(env, Promise.resolve());
+    expect(env.spoken).not.toContain('A person at a desk.');
+    expect(env.spoken).toContain(messages.descriptionsStopped);
+    expect(stop).toHaveBeenCalled();
+    expect(forget).toHaveBeenCalled();
+    expect(env.consentStore.set).toHaveBeenLastCalledWith('no');
+  });
+});
+
 describe('aiming', () => {
+  it('ignores a frame from the other camera while switching', async () => {
+    const env = setup();
+    await settle(env, env.controller.start());
+    await env.feed(frame({ faces: [box(0.9, 0.5)], facing: 'front' }), 3000);
+    expect(env.spoken).not.toContain('Move right.');
+    expect(env.controller.snapshot.cue).toBe('');
+  });
+
+  it('keeps the large cue on screen current with every frame, even when nothing is spoken', async () => {
+    const env = setup();
+    await settle(env, env.controller.start());
+    await env.feed(frame({ faces: [box(0.9, 0.5)] }), 2000);
+    expect(env.controller.snapshot.cue).toBe('Move right.');
+    env.controller.onAnalysis(frame({ faces: [box(0.1, 0.5)] }));
+    expect(env.controller.snapshot.cue).toBe('Move left.');
+  });
+
+  it('stops the ticks and says so once when frames stop coming', async () => {
+    const env = setup();
+    await settle(env, env.controller.start());
+    await env.feed(frame({ faces: [box(0.9, 0.5)] }), 1000);
+    const tick = env.deps.feedback.tick as jest.Mock;
+    await settle(env, Promise.resolve());
+    await env.advance(5000);
+    const ticks = tick.mock.calls.length;
+    await env.advance(5000);
+    expect(tick.mock.calls.length).toBe(ticks);
+    expect(env.spoken.filter((line) => line === messages.cameraStopped)).toHaveLength(1);
+    expect(env.controller.snapshot.cue).toBe('The camera stopped');
+  });
+
   it('describes the view on entering, then not again while it stays the same', async () => {
     const env = setup();
     await settle(env, env.controller.start());
@@ -264,6 +353,23 @@ describe('the shutter, keep or take another', () => {
     expect(env.controller.snapshot.phase).toBe('closed');
   });
 
+  it('keeping before the description is back waits for it, so the post gets its alt text', async () => {
+    const env = setup();
+    await settle(env, env.controller.start());
+    let answer: (value: Awaited<ReturnType<LookClient['describe']>>) => void = () => undefined;
+    env.look.describe.mockImplementationOnce(() => new Promise((resolve) => (answer = resolve)));
+    const shot = env.controller.shutter();
+    await settle(env, Promise.resolve());
+    expect(env.controller.snapshot.phase).toBe('reviewing');
+    const kept = env.controller.keep();
+    await settle(env, Promise.resolve());
+    expect(env.spoken).toContain(messages.stillDescribing);
+    expect(env.deps.onKeep).not.toHaveBeenCalled();
+    answer({ description: 'A blue bicycle.', altText: 'A blue bicycle by a wall.', visibleText: [], latencyMs: 900, costUsd: 0.0002 });
+    await settle(env, Promise.all([shot, kept]));
+    expect(env.deps.onKeep).toHaveBeenCalledWith(expect.objectContaining({ altText: 'A blue bicycle by a wall.' }));
+  });
+
   it('takes another: back to aiming with nothing kept', async () => {
     const env = setup();
     await settle(env, env.controller.start());
@@ -336,6 +442,36 @@ describe('the photo library', () => {
     env.controller.tapTop();
     expect(env.spoken).toContain(messages.newest);
     expect(env.deps.feedback.edge).toHaveBeenCalled();
+  });
+
+  it('says when Juno sees only the photos the user selected, and what to do when none are', async () => {
+    const env = setup({ library: 'limited' });
+    await settle(env, env.controller.start({ library: true }));
+    expect(env.spoken.some((line) => line.includes(messages.libraryLimited))).toBe(true);
+    const empty = setup({ library: 'limited' });
+    jest.spyOn(empty.deps.library, 'load').mockResolvedValue(0);
+    await settle(empty, empty.controller.start({ library: true }));
+    expect(empty.spoken).toContain(messages.libraryLimitedEmpty);
+  });
+
+  it('with descriptions off, says once that only dates are read, and offers to turn them on', async () => {
+    const env = setup({ consent: 'no' });
+    await settle(env, env.controller.start({ library: true }));
+    expect(env.spoken.filter((line) => line.includes(messages.libraryNoDescriptions))).toHaveLength(1);
+    expect(env.look.describe).not.toHaveBeenCalled();
+    env.controller.close();
+    await settle(env, env.controller.start({ library: true }));
+    expect(env.spoken.filter((line) => line.includes(messages.libraryNoDescriptions))).toHaveLength(1);
+  });
+
+  it('says so at the oldest photo', async () => {
+    const env = setup();
+    await settle(env, env.controller.start({ library: true }));
+    env.controller.tapBottom();
+    await settle(env, Promise.resolve());
+    env.controller.tapBottom();
+    await settle(env, Promise.resolve());
+    expect(env.spoken).toContain(messages.oldest);
   });
 
   it('explains a denial and how to fix it', async () => {

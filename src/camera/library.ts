@@ -2,51 +2,61 @@ import type { KeyValueStore } from '@/storage/keyValueStore';
 
 import type { LookDescription } from './lookClient';
 
-// Walking the photo library one photo at a time, newest first. Each photo is described when the user reaches
-// it, and the next two in the background, so moving on rarely waits. Descriptions are cached on the phone by
-// the photo's identifier, in memory and in local storage, so a photo is never described twice; the server keeps
-// nothing.
+// Walking the photo library one photo at a time, newest first, a page at a time. Each photo is described when the
+// user reaches it, and the next two in the background, so moving on rarely waits. Descriptions are cached on the
+// phone by the photo's identifier, in memory and in a file in the app's cache directory (which iOS leaves out of
+// backups), so a photo is never described twice; the server keeps nothing. Text read from a photo (visibleText) is
+// never cached, and the cache is cleared when the user turns descriptions off or signs out.
 
 // uri is the library's own (ph://) address, only for showing the photo on screen.
 export type LibraryPhoto = { id: string; uri: string; takenAt: number; width: number; height: number };
 
 export type LibrarySource = {
-  recent(count: number): Promise<LibraryPhoto[]>;
+  // Newest first, count photos after the cursor (null for the newest); next is null after the oldest.
+  page(after: string | null, count: number): Promise<{ photos: LibraryPhoto[]; next: string | null }>;
   // A downscaled base64 JPEG of the photo, ready to be described.
   image(photo: LibraryPhoto): Promise<string | null>;
 };
 
 export type Described = Pick<LookDescription, 'description' | 'altText' | 'visibleText'>;
+type Cached = Pick<Described, 'description' | 'altText'>;
 
 export const LIBRARY = { pageSize: 60, prefetch: 2, cacheEntries: 300, cacheKey: 'camera.libraryDescriptions' };
 
 export class DescriptionStore {
-  private entries: Map<string, Described> | null = null;
-  private loading: Promise<Map<string, Described>> | null = null;
+  private entries: Map<string, Cached> | null = null;
+  private loading: Promise<Map<string, Cached>> | null = null;
 
   constructor(private readonly store: KeyValueStore) {}
 
   async get(id: string): Promise<Described | null> {
-    return (await this.load()).get(id) ?? null;
+    const cached = (await this.load()).get(id);
+    return cached ? { ...cached, visibleText: [] } : null;
   }
 
-  async set(id: string, described: Described): Promise<void> {
+  async set(id: string, { description, altText }: Described): Promise<void> {
     const entries = await this.load();
     entries.delete(id);
-    entries.set(id, described);
+    entries.set(id, { description, altText });
     while (entries.size > LIBRARY.cacheEntries) entries.delete(entries.keys().next().value as string);
     await this.store.set(LIBRARY.cacheKey, JSON.stringify([...entries])).catch(() => undefined);
   }
 
-  private load(): Promise<Map<string, Described>> {
+  async clear(): Promise<void> {
+    this.entries = new Map();
+    this.loading = null;
+    await this.store.remove(LIBRARY.cacheKey).catch(() => undefined);
+  }
+
+  private load(): Promise<Map<string, Cached>> {
     if (this.entries) return Promise.resolve(this.entries);
     this.loading ??= this.store
       .get(LIBRARY.cacheKey)
       .catch(() => null)
       .then((raw) => {
-        let parsed: [string, Described][] = [];
+        let parsed: [string, Cached][] = [];
         try {
-          parsed = raw ? (JSON.parse(raw) as [string, Described][]) : [];
+          parsed = raw ? (JSON.parse(raw) as [string, Cached][]).map(([id, { description, altText }]) => [id, { description, altText }]) : [];
         } catch {
           parsed = [];
         }
@@ -61,6 +71,7 @@ export type Move = 'moved' | 'atStart' | 'atEnd';
 
 export class LibraryWalk {
   private photos: LibraryPhoto[] = [];
+  private next: string | null = null;
   private index = 0;
   private readonly inflight = new Map<string, Promise<Described | null>>();
 
@@ -75,9 +86,30 @@ export class LibraryWalk {
   ) {}
 
   async load(): Promise<number> {
-    this.photos = await this.deps.source.recent(LIBRARY.pageSize);
+    const { photos, next } = await this.deps.source.page(null, LIBRARY.pageSize);
+    this.photos = photos;
+    this.next = next;
     this.index = 0;
     return this.photos.length;
+  }
+
+  // Older photos than those loaded so far exist.
+  get hasMore(): boolean {
+    return this.next !== null;
+  }
+
+  // Loads the next page of older photos; false when there were none.
+  async more(): Promise<boolean> {
+    if (this.next === null) return false;
+    const { photos, next } = await this.deps.source.page(this.next, LIBRARY.pageSize);
+    this.photos = [...this.photos, ...photos.filter((photo) => !this.photos.some((known) => known.id === photo.id))];
+    this.next = next;
+    return photos.length > 0;
+  }
+
+  // Descriptions were turned off: everything cached on the phone goes.
+  forget(): Promise<void> {
+    return this.deps.store.clear();
   }
 
   get count(): number {
@@ -121,7 +153,8 @@ export class LibraryWalk {
       if (cached || !this.deps.allowed()) return cached;
       const image = await this.deps.source.image(photo);
       const described = image ? await this.deps.describe(image).catch(() => null) : null;
-      if (described) await this.deps.store.set(photo.id, described);
+      if (!described || !this.deps.allowed()) return null;
+      await this.deps.store.set(photo.id, described);
       return described;
     })().finally(() => this.inflight.delete(photo.id));
     this.inflight.set(photo.id, request);

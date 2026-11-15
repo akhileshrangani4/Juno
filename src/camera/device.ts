@@ -89,9 +89,12 @@ async function localPhoto(id: string): Promise<Photo | null> {
 }
 
 export const mediaLibrary: LibrarySource & { file(id: string): Promise<Photo | null> } = {
-  async recent(count) {
-    const page = await getAssetsAsync({ first: count, mediaType: MediaType.photo, sortBy: [[SortBy.creationTime, false]] });
-    return page.assets.map((asset): LibraryPhoto => ({ id: asset.id, uri: asset.uri, takenAt: asset.creationTime, width: asset.width, height: asset.height }));
+  async page(after, count) {
+    const page = await getAssetsAsync({ first: count, after: after ?? undefined, mediaType: MediaType.photo, sortBy: [[SortBy.creationTime, false]] });
+    return {
+      photos: page.assets.map((asset): LibraryPhoto => ({ id: asset.id, uri: asset.uri, takenAt: asset.creationTime, width: asset.width, height: asset.height })),
+      next: page.hasNextPage ? page.endCursor : null,
+    };
   },
   async image(photo) {
     const file = await localPhoto(photo.id);

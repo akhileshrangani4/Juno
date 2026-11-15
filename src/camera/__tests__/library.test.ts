@@ -5,7 +5,10 @@ import { DescriptionStore, LIBRARY, LibraryWalk, type LibraryPhoto, type Library
 const photos: LibraryPhoto[] = Array.from({ length: 6 }, (_, i) => ({ id: `p${i}`, uri: `ph://p${i}`, takenAt: 1_000 - i, width: 4000, height: 3000 }));
 
 function setup({ allowed = true, store = createMemoryStore() } = {}) {
-  const source: jest.Mocked<LibrarySource> = { recent: jest.fn<Promise<LibraryPhoto[]>, [number]>(async () => photos), image: jest.fn(async (photo) => `jpeg-of-${photo.id}`) };
+  const source: jest.Mocked<LibrarySource> = {
+    page: jest.fn<ReturnType<LibrarySource['page']>, Parameters<LibrarySource['page']>>(async () => ({ photos, next: null })),
+    image: jest.fn(async (photo) => `jpeg-of-${photo.id}`),
+  };
   const describe = jest.fn(async (image: string) => ({ description: `Described ${image}`, altText: `Alt ${image}`, visibleText: [] }));
   const walk = new LibraryWalk({ source, store: new DescriptionStore(store), describe, allowed: () => allowed });
   return { walk, source, describe, store };
@@ -67,6 +70,62 @@ describe('walking the photo library', () => {
     expect(await walk.describeCurrent()).toBeNull();
     expect(describe).not.toHaveBeenCalled();
     expect(source.image).not.toHaveBeenCalled();
+  });
+
+  it('pages in older photos past the first sixty, without repeats, and says when there are no more', async () => {
+    const all: LibraryPhoto[] = Array.from({ length: 130 }, (_, i) => ({ id: `q${i}`, uri: `ph://q${i}`, takenAt: 10_000 - i, width: 4000, height: 3000 }));
+    const { walk, source } = setup();
+    source.page.mockImplementation(async (after, count) => {
+      const start = after === null ? 0 : Number(after);
+      const end = Math.min(start + count, all.length);
+      return { photos: all.slice(Math.max(0, start - 1), end), next: end < all.length ? String(end) : null };
+    });
+    expect(await walk.load()).toBe(LIBRARY.pageSize);
+    expect(walk.hasMore).toBe(true);
+    for (let i = 1; i < LIBRARY.pageSize; i++) walk.move('older');
+    expect(walk.move('older')).toBe('atEnd');
+    expect(await walk.more()).toBe(true);
+    expect(walk.move('older')).toBe('moved');
+    expect(walk.current()?.id).toBe('q60');
+    expect(await walk.more()).toBe(true);
+    expect(walk.count).toBe(130);
+    while (walk.move('older') === 'moved');
+    expect(walk.current()?.id).toBe('q129');
+    expect(walk.hasMore).toBe(false);
+    expect(await walk.more()).toBe(false);
+  });
+
+  it('never keeps text read from a photo, and keeps nothing once descriptions are off', async () => {
+    let allowed = true;
+    const store = createMemoryStore();
+    const describe = jest.fn(async () => ({ description: 'A sign.', altText: 'A sign reading Main Street.', visibleText: ['MAIN ST'] }));
+    const source: LibrarySource = { page: async () => ({ photos, next: null }), image: async (photo) => `jpeg-of-${photo.id}` };
+    const walk = new LibraryWalk({ source, store: new DescriptionStore(store), describe, allowed: () => allowed });
+    await walk.load();
+    expect((await walk.describeCurrent())?.visibleText).toEqual(['MAIN ST']);
+    await flush();
+    expect(await store.get(LIBRARY.cacheKey)).not.toContain('MAIN ST');
+    expect((await walk.cached(photos[0]))?.visibleText).toEqual([]);
+    allowed = false;
+    await walk.forget();
+    expect(await store.get(LIBRARY.cacheKey)).toBeNull();
+    expect(await walk.cached(photos[0])).toBeNull();
+  });
+
+  it('drops a description that lands after descriptions were turned off', async () => {
+    let allowed = true;
+    let answer: (value: { description: string; altText: string; visibleText: string[] }) => void = () => undefined;
+    const store = createMemoryStore();
+    const describe = jest.fn(() => new Promise<{ description: string; altText: string; visibleText: string[] }>((resolve) => (answer = resolve)));
+    const source: LibrarySource = { page: async () => ({ photos: photos.slice(0, 1), next: null }), image: async (photo) => `jpeg-of-${photo.id}` };
+    const walk = new LibraryWalk({ source, store: new DescriptionStore(store), describe, allowed: () => allowed });
+    await walk.load();
+    const pending = walk.describeCurrent();
+    await flush();
+    allowed = false;
+    answer({ description: 'A dog.', altText: 'A dog.', visibleText: [] });
+    expect(await pending).toBeNull();
+    expect(await store.get(LIBRARY.cacheKey)).toBeNull();
   });
 
   it('asks only once for a photo already on its way', async () => {

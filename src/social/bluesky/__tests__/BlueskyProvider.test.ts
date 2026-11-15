@@ -171,6 +171,16 @@ describe('BlueskyProvider', () => {
     );
   });
 
+  it('gives the image its aspect ratio, so Bluesky shows it uncropped', async () => {
+    const { provider, agent } = setup();
+    globalThis.fetch = jest.fn(async () => ({ arrayBuffer: async () => new ArrayBuffer(4) })) as any;
+    const image = await provider.uploadImage({ uri: 'file:///photo.jpg', mimeType: 'image/jpeg', width: 1536, height: 2048 }, 'A mug');
+    await provider.createPost({ text: '', images: [image] });
+    expect(agent.post).toHaveBeenCalledWith(
+      expect.objectContaining({ embed: { $type: 'app.bsky.embed.images', images: [{ alt: 'A mug', image: { ref: 'blob' }, aspectRatio: { width: 1536, height: 2048 } }] } }),
+    );
+  });
+
   it('replies under the thread root, likes and reposts', async () => {
     const { provider, agent } = setup();
     const parent = (await provider.getTimeline()).posts[0];

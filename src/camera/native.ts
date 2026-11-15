@@ -12,13 +12,15 @@ export type PermissionStatus = 'granted' | 'denied' | 'restricted' | 'undetermin
 export type Snapshot = { base64: string; width: number; height: number };
 export type Photo = { uri: string; width: number; height: number };
 
-type RawAnalysis = { faces: Box[]; salient: Box | null; sharpness: number; brightness: number; motion: number; signature: number[]; width: number; height: number; timestamp: number };
+type RawAnalysis = { faces: Box[]; salient: Box | null; sharpness: number; brightness: number; motion: number; signature: number[]; width: number; height: number; timestamp: number; facing?: 'back' | 'front' };
 
 type NativeModule = {
   cameraPermission(): PermissionStatus;
   requestCameraPermission(): Promise<boolean>;
   allowHapticsDuringRecording(allow: boolean): void;
-  analyzeImage(uri: string): Promise<RawAnalysis>;
+  // Only in simulator builds (see JunoCameraModule.swift): a build for a phone has neither.
+  devFramesSupported?: boolean;
+  analyzeImage?(uri: string): Promise<RawAnalysis>;
 };
 
 export type CameraViewHandle = {
@@ -47,4 +49,5 @@ export const toAnalysis = (raw: RawAnalysis): Analysis => ({
   motion: raw.motion,
   signature: raw.signature,
   at: raw.timestamp,
+  facing: raw.facing,
 });

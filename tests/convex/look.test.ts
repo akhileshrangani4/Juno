@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 import type { Bucket, RateCheck } from '../../src/agent/memoryRateLimits';
-import { costUsd, isDeviceId } from '../../convex/describeCache';
+import { costUsd, isDeviceId, windowStart } from '../../convex/describeCache';
 import { systemPrompt } from '../../convex/describePrompt';
 import {
   cleanSubject,
@@ -11,10 +11,12 @@ import {
   imageProblem,
   IMAGE_LIMITS,
   jpegSize,
+  LOOK_ADDRESS_BUDGET_USD_PER_HOUR,
   LOOK_BUDGET_USD_PER_HOUR,
   LOOK_LIMITS,
   lookChecks,
   lookHash,
+  lookSpends,
   MAX_SUBJECT,
   planReserve,
   reservationUsd,
@@ -22,6 +24,7 @@ import {
   WORST_CASE_TOKENS,
   type Check,
   type LookAction,
+  type SpendCheck,
 } from '../../convex/lookLimits';
 import { decideWithOpenAI, describeImageWithOpenAI } from '../../convex/lookOpenAI';
 import { decisionAnswers, decisionInput, decisionQuestions, EDGES, LOOK_INSTRUCTIONS, LOOK_RESPONSE_SCHEMA, lookText, SHARED_RULES } from '../../convex/lookPrompt';
@@ -82,23 +85,26 @@ describe('decide arguments', () => {
   });
 });
 
-// A stand-in for the reserve and settle mutations' tables, running the same pure transaction logic.
+// A stand-in for the reserve and settle mutations' tables, running the same pure transaction logic. Spend
+// counters are kept per key and clock hour, as in describeUsage.
 function deployment() {
   const buckets = new Map<string, Bucket>();
-  let spentUsd = 0;
+  const spend = new Map<string, number>();
+  const hour = (key: string, now: number) => `${key}@${windowStart(now)}`;
   return {
-    reserve(checks: RateCheck[], reserveUsd: number, now: number) {
-      const plan = planReserve(checks.map((check) => buckets.get(check.key) ?? null), checks, spentUsd, reserveUsd, now);
+    reserve(checks: RateCheck[], reserveUsd: number, now: number, spends: SpendCheck[] = lookSpends(null)) {
+      const spent = spends.map((entry) => spend.get(hour(entry.key, now)) ?? 0);
+      const plan = planReserve(checks.map((check) => buckets.get(check.key) ?? null), checks, spends, spent, reserveUsd, now);
       if (plan.refused) return plan.refused;
       plan.buckets.forEach((bucket, i) => buckets.set(checks[i].key, bucket));
-      spentUsd = plan.spentUsd;
+      spends.forEach((entry, i) => spend.set(hour(entry.key, now), plan.spentUsd[i]));
       return 'ok';
     },
-    settle(reserveUsd: number, cost: number | null) {
-      spentUsd = settledSpend(spentUsd, reserveUsd, cost);
+    settle(reserveUsd: number, cost: number | null, now = 1_000_000, spends: SpendCheck[] = lookSpends(null)) {
+      for (const entry of spends) spend.set(hour(entry.key, now), settledSpend(spend.get(hour(entry.key, now)) ?? 0, reserveUsd, cost));
     },
     count: (key: string) => buckets.get(key)?.count ?? 0,
-    spent: () => spentUsd,
+    spent: (key = 'look:global', now = 1_000_000) => spend.get(hour(key, now)) ?? 0,
   };
 }
 
@@ -143,8 +149,21 @@ describe('spend cap', () => {
   const reserve = reservationUsd('gpt-6-luna', 'describe')!;
 
   it('counts the reservation of the call itself against the hourly budget', () => {
-    expect(planReserve([null, null, null], checks, LOOK_BUDGET_USD_PER_HOUR - reserve, reserve, now).refused).toBeNull();
-    expect(planReserve([null, null, null], checks, LOOK_BUDGET_USD_PER_HOUR - reserve / 2, reserve, now).refused).toBe('budget');
+    expect(planReserve([null, null, null], checks, lookSpends(null), [LOOK_BUDGET_USD_PER_HOUR - reserve], reserve, now).refused).toBeNull();
+    expect(planReserve([null, null, null], checks, lookSpends(null), [LOOK_BUDGET_USD_PER_HOUR - reserve / 2], reserve, now).refused).toBe('budget');
+  });
+
+  it('counts it against the third kept for the caller address as well, and takes nothing when refusing', () => {
+    expect(LOOK_ADDRESS_BUDGET_USD_PER_HOUR).toBeCloseTo(LOOK_BUDGET_USD_PER_HOUR / 3, 10);
+    expect(lookSpends('a')).toEqual([
+      { key: 'look:global', limitUsd: LOOK_BUDGET_USD_PER_HOUR },
+      { key: 'look:address:a', limitUsd: LOOK_ADDRESS_BUDGET_USD_PER_HOUR },
+    ]);
+    expect(lookSpends(null)).toEqual([{ key: 'look:global', limitUsd: LOOK_BUDGET_USD_PER_HOUR }]);
+    const ok = planReserve([null, null, null], checks, lookSpends('a'), [0.5, LOOK_ADDRESS_BUDGET_USD_PER_HOUR - reserve], reserve, now);
+    expect(ok.refused).toBeNull();
+    if (!ok.refused) expect(ok.spentUsd).toEqual([0.5 + reserve, LOOK_ADDRESS_BUDGET_USD_PER_HOUR]);
+    expect(planReserve([null, null, null], checks, lookSpends('a'), [0.5, LOOK_ADDRESS_BUDGET_USD_PER_HOUR - reserve / 2], reserve, now)).toEqual({ refused: 'budget' });
   });
 
   it('stops calls once reservations in flight fill the budget, and frees room as calls settle cheaper', () => {
@@ -164,6 +183,67 @@ describe('spend cap', () => {
     expect(db.reserve(checks, reserve, now)).toBe('ok');
     db.settle(reserve, null);
     expect(db.spent()).toBe(0);
+  });
+});
+
+describe('one caller address', () => {
+  const HOUR_START = Date.UTC(2026, 10, 15, 18);
+  const reserves = { describe: reservationUsd('gpt-6-luna', 'describe')!, decide: reservationUsd('gpt-6-luna', 'decide')! };
+  // Mean measured costs (docs/camera.md), for ordinary use.
+  const measured = { describe: 0.00019, decide: 0.000113 };
+
+  // One call from the address, settled at the given cost; returns the refusal or 'ok'.
+  const call = (db: ReturnType<typeof deployment>, action: LookAction, device: string, address: string, now: number, cost: number) => {
+    const spends = lookSpends(address);
+    const outcome = db.reserve(lookChecks(action, device, address), reserves[action], now, spends);
+    if (outcome === 'ok') db.settle(reserves[action], cost, now, spends);
+    return outcome;
+  };
+
+  it('cannot spend more than a third of the hourly budget with describe and decide together, whatever device ids it invents', () => {
+    const db = deployment();
+    const refusals = new Set<string>();
+    // Every second of the hour, a describe and a decide from a new device id, each billed at its full reservation.
+    for (let second = 0; second < 3600; second++) {
+      const now = HOUR_START + second * 1000;
+      for (const action of ['describe', 'decide'] as const) {
+        const outcome = call(db, action, `device-${second}`, 'address-a', now, reserves[action]);
+        if (outcome !== 'ok') refusals.add(outcome);
+      }
+    }
+    expect(refusals).toContain('budget');
+    expect(db.spent('look:address:address-a', HOUR_START)).toBeLessThanOrEqual(LOOK_ADDRESS_BUDGET_USD_PER_HOUR + 1e-12);
+    expect(db.spent('look:global', HOUR_START)).toBeLessThanOrEqual(LOOK_ADDRESS_BUDGET_USD_PER_HOUR + 1e-12);
+    expect(db.spent('look:address:address-a', HOUR_START)).toBeGreaterThan(LOOK_ADDRESS_BUDGET_USD_PER_HOUR - reserves.describe);
+    // Everyone else still has two thirds of the hour's budget, and the address is served again next hour.
+    expect(call(db, 'describe', 'device-b', 'address-b', HOUR_START + 3_599_000, reserves.describe)).toBe('ok');
+    expect(call(db, 'describe', 'device-x', 'address-a', HOUR_START + 3_599_000, reserves.describe)).toBe('budget');
+    expect(call(db, 'describe', 'device-x', 'address-a', HOUR_START + 3_600_000, reserves.describe)).toBe('ok');
+  });
+
+  it('is capped even when the calls it holds in flight never settle', () => {
+    const db = deployment();
+    const spends = lookSpends('address-a');
+    let held = 0;
+    for (let i = 0; i < 2000; i++) {
+      const action = i % 2 ? 'decide' : 'describe';
+      if (db.reserve(lookChecks(action, `device-${i}`, 'address-a'), reserves[action], HOUR_START + i * 1000, spends) === 'ok') held += reserves[action];
+    }
+    expect(held).toBeLessThanOrEqual(LOOK_ADDRESS_BUDGET_USD_PER_HOUR + 1e-12);
+    expect(held).toBeGreaterThan(LOOK_ADDRESS_BUDGET_USD_PER_HOUR - reserves.describe);
+  });
+
+  it('leaves room for two people behind one router at ordinary use all hour', () => {
+    const db = deployment();
+    // Each person: a description every 8 seconds, and a check every second for 45 seconds in every 6 minutes.
+    for (let second = 0; second < 3600; second++) {
+      const now = HOUR_START + second * 1000;
+      for (const person of ['phone-1', 'phone-2']) {
+        if (second % 8 === 0) expect(call(db, 'describe', person, 'home', now, measured.describe)).toBe('ok');
+        if (second % 360 < 45) expect(call(db, 'decide', person, 'home', now, measured.decide)).toBe('ok');
+      }
+    }
+    expect(db.spent('look:address:home', HOUR_START)).toBeLessThan(LOOK_ADDRESS_BUDGET_USD_PER_HOUR);
   });
 });
 
@@ -331,6 +411,82 @@ describe('OpenAI calls', () => {
     const pending = decideWithOpenAI({ apiKey: 'k', model: 'gpt-6-luna', image: 'abcd', subject: null, checks: ['quality'] });
     jest.advanceTimersByTime(20_000);
     expect(await pending).toEqual({ ok: false, error: 'timeout', usage: null });
+  });
+
+  it('fails a malformed description response without throwing, keeping any usage it could read', async () => {
+    const text = JSON.stringify({ visible_text: [], description: 'A red mug.', alt_text: '' });
+    const ok = message(text);
+    const malformed: unknown[] = [
+      null,
+      'completed',
+      42,
+      [],
+      {},
+      { status: 'completed' },
+      { status: 'incomplete', incomplete_details: 'max_output_tokens' },
+      { status: 7, usage },
+      { ...ok, output: null },
+      { ...ok, output: 'message' },
+      { ...ok, output: [null, 3, 'x'] },
+      { ...ok, output: [{ type: 'message', content: null }] },
+      { ...ok, output: [{ type: 'message', content: 'output_text' }] },
+      { ...ok, output: [{ type: 'message', content: { type: 'output_text', text } }] },
+      { ...ok, output: [{ type: 'message', content: [null, { type: 'output_text', text: 42 }] }] },
+      { ...ok, output: [{ type: 'message', content: [{ type: 'output_text', text: '[1]' }] }] },
+      { ...ok, usage: undefined },
+      { ...ok, usage: null },
+      { ...ok, usage: 'lots' },
+      { ...ok, usage: { input_tokens: '1500', output_tokens: 100 } },
+      { ...ok, usage: { input_tokens: Number.NaN } },
+      { ...ok, usage: { input_tokens: -1 } },
+    ];
+    for (const body of malformed) {
+      reply(200, body);
+      const result = await describeImageWithOpenAI(describeArgs);
+      expect(result.ok).toBe(false);
+      if (result.usage) expect(Number.isFinite(result.usage.costUsd)).toBe(true);
+    }
+    reply(200, { ...ok, status: 'incomplete', incomplete_details: { reason: 'max_output_tokens' } });
+    expect(await describeImageWithOpenAI(describeArgs)).toMatchObject({ ok: false, error: 'incomplete_max_output_tokens', usage: { inputTokens: 1500 } });
+    reply(200, null);
+    expect(await describeImageWithOpenAI(describeArgs)).toEqual({ ok: false, error: 'unparseable', usage: null });
+    reply(200, { ...ok, model: 42, usage: { input_tokens: 1500, input_tokens_details: 'x', output_tokens: null } });
+    expect(await describeImageWithOpenAI(describeArgs)).toMatchObject({ ok: true, model: 'gpt-6-luna', usage: { inputTokens: 1500, cachedTokens: 0, outputTokens: 0, costUsd: 0.00015 } });
+  });
+
+  it('fails a malformed decision response without throwing', async () => {
+    const answers = [{ type: 'predicate', name: 'too_dark', probability: 0.9 }];
+    const malformed: unknown[] = [
+      null,
+      'answers',
+      [],
+      {},
+      { usage },
+      { usage, answers: null },
+      { usage, answers: 'yes' },
+      { usage, answers: { too_dark: 0.9 } },
+      { answers },
+      { answers, usage: null },
+      { answers, usage: { input_tokens: '1500' } },
+    ];
+    for (const body of malformed) {
+      reply(200, body);
+      const result = await decideWithOpenAI({ apiKey: 'k', model: 'gpt-6-luna', image: 'abcd', subject: null, checks: ['quality'] });
+      expect(result).toMatchObject({ ok: false, error: 'unparseable' });
+    }
+    reply(200, { usage, model: null, answers: [null, 'x', { name: 'too_dark' }, { type: 'predicate', name: 'too_blurry', probability: '0.5' }] });
+    expect(await decideWithOpenAI({ apiKey: 'k', model: 'gpt-6-luna', image: 'abcd', subject: null, checks: ['quality'] })).toMatchObject({
+      ok: true,
+      model: 'gpt-6-luna',
+      answers: { inView: null, cutOff: null, tooDark: null, tooBlurry: null },
+    });
+  });
+
+  it('fails a body that is not JSON, or that cannot be read, without throwing', async () => {
+    global.fetch = jest.fn(async () => ({ status: 200, json: async () => JSON.parse('{oops') })) as unknown as typeof fetch;
+    expect(await describeImageWithOpenAI(describeArgs)).toEqual({ ok: false, error: 'unparseable', usage: null });
+    global.fetch = jest.fn(async () => ({ status: 200, json: async () => Promise.reject(new TypeError('body used')) })) as unknown as typeof fetch;
+    expect(await decideWithOpenAI({ apiKey: 'k', model: 'gpt-6-luna', image: 'abcd', subject: null, checks: ['quality'] })).toEqual({ ok: false, error: 'network', usage: null });
   });
 
   it('prices decisions on input tokens only', async () => {

@@ -107,6 +107,14 @@ describe('throttling', () => {
     expect(second.cues[0].at - first.cues[0].at).toBeGreaterThanOrEqual(GUIDANCE.gapMs);
   });
 
+  it('says a change of direction at once after an overshoot, even back to a direction said a moment ago', () => {
+    const right = run(face(0.9, 0.5), { to: 400 });
+    const left = run(face(0.1, 0.5), { from: 500, to: 2000, state: right.state });
+    const back = run(face(0.9, 0.5), { from: 2100, to: 3600, state: left.state });
+    expect([...right.cues, ...left.cues, ...back.cues].map((cue) => cue.text)).toEqual(['Move right.', 'Move left.', 'Move right.']);
+    expect(back.cues[0].at - right.cues[0].at).toBeLessThan(GUIDANCE.repeatMs);
+  });
+
   it('never starts a cue while something is being spoken', () => {
     expect(run(face(0.9, 0.5), { busy: true }).cues).toEqual([]);
   });

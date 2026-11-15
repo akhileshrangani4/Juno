@@ -16,7 +16,8 @@ export const UNDO_WINDOW_MS = 5000;
 export type DraftKind = 'post' | 'reply' | 'repost' | 'delete';
 
 // A photo attached to a new post, with the alt text other people's screen readers will speak.
-export type DraftImage = { uri: string; mimeType: string; alt: string };
+// uri identifies the photo: each kept or chosen photo is a new file, so a draft is bound to exactly one photo.
+export type DraftImage = { uri: string; mimeType: string; alt: string; width?: number; height?: number };
 
 export type Draft = {
   id: string;

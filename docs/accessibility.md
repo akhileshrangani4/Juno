@@ -150,15 +150,19 @@ The camera is its own screen, opened with the feed's Open the camera action or b
 | --- | --- | --- |
 | Camera opens | none | "Camera. Draw a counter-clockwise circle to go back to your feed." (in a call: "Say close the camera…"), then the controls |
 | Camera access, first time | none | explained by voice before iOS asks; if it is off, how to turn it on in Settings |
-| Descriptions, first time | none | asks whether pictures may be sent to be described; "no" keeps every picture on the phone and still gives framing help |
+| Descriptions, first time | none | says that pictures go to OpenAI, that Juno doesn't keep them, that OpenAI may keep them up to 30 days to check for misuse and doesn't train on them, and asks. Only the actions Allow descriptions or Keep pictures on my phone (in a call, a clear spoken yes or no) answer; a tap or double tap repeats the question. "No" keeps every picture on the phone and still gives framing help |
+| Descriptions turned off later | none | "Descriptions are off. Pictures stay on your phone, and the photo descriptions saved on it are deleted." Anything still on its way is dropped |
 | Subject off center | selection ticks, slow when far, faster as it nears the center, none once centered and steady | "Move left.", "Tilt up.", "Move closer.", "Hold steady." (left and right are flipped for the front camera, so they always mean the user's own left and right) |
 | Subject centered and steady | ticks stop | "The face is centered. Take the picture now." or "It's centered. Take the picture now." |
 | Nothing to aim at, or too dark | none | "I can't find anything to frame. Move the phone slowly." or "It's very dark. Find more light." |
 | Shutter | heavy tap and the shutter earcon (the earcon is skipped during a call) | then a description of the photo and "Keep it or take another?" |
-| Keep, retake, switch camera, choose a photo | light tap | "Keeping it.", "Okay. Take another.", "Front camera.", "Choosing this photo." |
-| First or last photo in the library | warning buzz | "That's the newest photo." or "That's the last photo." |
+| Keep, retake, switch camera, choose a photo | light tap | "Keeping it.", "Okay. Take another.", "Front camera.", "Choosing this photo." Keeping a photo before its description is back says "Still describing it. One moment." and waits, so the post gets its alt text |
+| Frames stop coming (a phone call, Siri, an error) | ticks stop | "The camera stopped. Close the camera and open it again.", once |
+| First or last photo in the library | warning buzz | "That's the newest photo." or "That's the oldest photo." Older photos load 60 at a time as the user reaches the end |
+| Limited photo access | none | "Juno can see only the photos you selected…", with how to choose more in Settings, or that none are selected |
+| Library with descriptions off | none | once: only when each photo was taken is read, and how to turn descriptions on |
 | A description or check that fails | none | "I couldn't describe it just now." Framing help keeps working without the network |
-| Back to the feed | none | "Back to your feed." The feed stays silent while the camera is open, and the discovery hints stop with it (the feed's stuck and idle hints only run while the feed screen is focused) |
+| Back to the feed | none | "Back to your feed." The edge swipe back is turned off on the camera screen, so a stray swipe can't leave it; if the screen goes away any other way, the feed speaks again The feed stays silent while the camera is open, and the discovery hints stop with it (the feed's stuck and idle hints only run while the feed screen is focused) |
 
 Speech in the camera goes through the narrator, which never talks over VoiceOver. During a voice call it goes through the agent instead, so the two voices never overlap: the app sends the line for the agent to say, keeps only the cues that matter (centered, nothing in view, too dark, closer, farther), and drops the fine left-and-right cues until the agent has had time to finish.
 

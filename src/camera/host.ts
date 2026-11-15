@@ -17,6 +17,9 @@ export type CameraHost = {
   keep(photo: KeptPhoto): void;
   // Leaving the camera without a photo; the feed says where the user is.
   closed(): void;
+  // The camera screen went away without closed() or keep() (a route change the camera didn't make): the feed
+  // speaks again, without navigating.
+  left(): void;
 };
 
 let host: CameraHost | null = null;

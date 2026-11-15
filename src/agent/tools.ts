@@ -66,7 +66,7 @@ const definitions: { name: string; description: string; parameters: Schema }[] =
   {
     name: 'edit_image_description',
     description:
-      'Change the description of the photo in the draft, which is what other people\'s screen readers will say. Pass text for a whole new description in the user\'s words, or find and replace to change part of it. The app reads the draft back.',
+      'Change the description of the photo in the draft, which is what other people\'s screen readers will say. Pass text for a whole new description in the user\'s words, or find and replace to change part of it. To remove the description, pass text as an empty string. The app reads the draft back.',
     parameters: {
       type: 'object',
       properties: {

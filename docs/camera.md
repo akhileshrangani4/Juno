@@ -8,7 +8,13 @@ The camera works in three layers, and only the second and third use the network.
 2. **Quick checks, `look:decide`.** While the user is asking about something ("is the mug in the picture?"), the app sends a 512 px frame about once a second and gets back in view, cut off and too dark or blurry. Each photo taken gets the same check, so a dark, blurred or cut-off photo is said before "Keep it or take another?".
 3. **Descriptions, `look:describeImage`.** At most every 8 seconds while aiming, and only once the view has changed and settled (`sceneGate.ts` compares an 8x8 signature from the module, so an unchanged view costs nothing), after the shutter, and for each photo in the library walk, the app sends a 768 px frame. The photo's alt text becomes the post's image description, read back before posting and editable by voice.
 
-Nothing is sent before the user answers the descriptions question once (stored on the phone as `camera.sendPictures`). Library descriptions are cached on the phone only (AsyncStorage, keyed by the photo's asset id, the newest 300).
+Nothing is sent before the user answers the descriptions question once (stored on the phone as `camera.sendPictures`). The question says, in plain words, what happens to a picture: Juno sends it to OpenAI; Juno doesn't keep it; OpenAI may keep it for up to 30 days to check for misuse, then deletes it, and doesn't use it to train its models; and framing help works either way. That follows OpenAI's [API data controls](https://developers.openai.com/api/docs/guides/your-data): API data isn't used for training unless the customer opts in, and abuse-monitoring logs are kept for up to 30 days unless the law requires longer. Juno has no zero-data-retention agreement, so the question doesn't claim one.
+
+Only a deliberate answer counts: the actions Allow descriptions or Keep pictures on my phone, or during a call a clear spoken yes or no right after the question. A tap, VoiceOver's double tap, a swipe or silence only repeat the question. The answer is remembered and can be changed at any time with the action Turn descriptions on or off, or by asking the agent. Turning descriptions off stops what is on its way: a description or check that arrives afterwards is dropped unspoken, speech stops, and the saved library descriptions are deleted.
+
+Library descriptions are cached on the phone only, in a file in the app's cache directory (`cacheFileStore.ts`), which iOS leaves out of iCloud and computer backups. Entries are keyed by the photo's asset id, the newest 300, and hold the description and alt text but never text read from the photo. The cache is cleared when descriptions are turned off and when the user signs out.
+
+**The dev log.** Test builds made with `EXPO_PUBLIC_DEV_FRAME_SOURCE=1` print `[camera]` lines with every description and alt text. Treat that log as personal data: never paste it into an issue, a pull request or a shared drive.
 
 **Why an Expo module.** Expo's own `expo-camera` gives frames to JavaScript only as pictures, too slow for a tick rate, and offers no Vision analysis. A frame-processor library would add a second camera stack and a worklet runtime for what is a few hundred lines of Swift. A local Expo module is autolinked by the existing prebuild, needs no change to the build script, and compiles with the same Xcode as the rest of the app.
 
@@ -23,7 +29,7 @@ Two public Convex actions in `convex/look.ts` serve the camera and the photo lib
 | `look:describeImage` | `image` (base64 JPEG, no `data:` prefix, long side at most 768 px), `deviceId`, `purpose` (`view`, `photo` or `library`) | Describes the picture through the Responses API with a strict JSON schema: `description`, `altText` (empty for `view`), `visibleText` |
 | `look:decide` | `image` (long side at most 512 px), `deviceId`, `subject` (the user's words, or null), `checks` (`inView`, `cutOff`, `quality`) | Answers every check in one call to OpenAI's Decisions API: `inView` (probability), `cutOff` (`none`, `left`, `right`, `top`, `bottom` or `several`, the edge of the image as sent), `tooDark` and `tooBlurry` (probabilities). A field is null when its check was not asked or the model refused it |
 
-Both return `{ ok: false, reason }` instead of throwing. `invalid` means bad arguments, `limited` means a call-count limit refused, `budget` means the hourly spend cap refused, `unavailable` means `OPENAI_API_KEY` is not set or the model has no price, and `failed` means the model call failed, timed out, refused, or returned output that could not be parsed. A success also carries `latencyMs`, `costUsd` and `model`.
+Both return `{ ok: false, reason }` instead of throwing. `invalid` means bad arguments, `limited` means a call-count limit refused, `budget` means the hourly spend cap or the caller address's share of it refused, `unavailable` means `OPENAI_API_KEY` is not set or the model has no price, and `failed` means the model call failed, timed out, refused, or returned output that could not be parsed. A success also carries `latencyMs`, `costUsd` and `model`.
 
 ### Order of work
 
@@ -33,10 +39,12 @@ Both return `{ ok: false, reason }` instead of throwing. `invalid` means bad arg
    - The decoded bytes must start with `FF D8 FF`, and the JPEG frame header must give a long side of at most 768 px (describe) or 512 px (decide).
    - For decide, `checks` must be non-empty with no repeats, `inView` and `cutOff` need a subject, and the subject must be at most 80 characters after trimming and collapsing whitespace.
 2. **Model check.** The model must be in the price table in `convex/describeCache.ts`, because the reservation is computed from its price. An unpriced model is refused as `unavailable` and never called.
-3. **Limits.** One mutation (`lookUsage:reserve`) takes every call-count window and the spend reservation in a single serializable transaction, or nothing when any of them is used up. Only then is OpenAI called.
-4. **Settle.** `lookUsage:settle` swaps the reservation for the cost the response reported. When no usage was reported (an error, or this deployment's own 20-second timeout), it releases the reservation entirely. The counter never goes below zero.
+3. **Limits.** One mutation (`lookUsage:reserve`) takes every call-count window and the spend reservations (the deployment's and the caller address's) in a single serializable transaction, or nothing when any of them is used up. Only then is OpenAI called.
+4. **Settle.** `lookUsage:settle` swaps the reservation for the cost the response reported, on every spend counter the call reserved against. When no usage was reported (an HTTP error, a network error, this deployment's own 20-second timeout, or a response body that could not be read), it releases the reservation entirely. The counters never go below zero. The OpenAI calls never throw, whatever the response holds: every field is checked before it is read, so settle always runs.
 
 The caller's address comes from the request metadata (`ctx.meta.getRequestMetadata().ip`), never from the client. The device id and address are stored only as SHA-256 digests with a `look-device:` or `look-address:` prefix.
+
+Known limit, as in post descriptions: when the request metadata has no ip, the call gets only the device windows, the deployment windows and the hourly budget. There is no address window and no address spend cap for it.
 
 ### Call-count limits
 
@@ -45,14 +53,24 @@ Each action has its own three windows in the `memoryRateLimits` table, keyed `lo
 | Window | describe | decide | Why |
 | --- | --- | --- | --- |
 | Per device | 120 per 10 minutes | 300 per 10 minutes | Describe: while the camera is open the app describes what it sees at most once every 8 seconds (75 per 10 minutes). The user also asks for descriptions, and the library walk needs one per photo reached plus two prefetched. 120 covers all of that at a steady pace. Decide: about one check a second, only while the user has asked a question (the app stops each question after 45 seconds), plus one before each shutter press. 300 is five minutes of continuous questions in every ten. A client stuck in a loop stops within minutes. |
-| Per address | 240 per 10 minutes | 600 per 10 minutes | Twice the device numbers, so two people behind one home router both get a full allowance. Someone inventing device ids from one address gets no further than two devices' worth. |
+| Per address | 240 per 10 minutes | 600 per 10 minutes | Twice the device numbers, so two people behind one home router both get a full allowance. Someone inventing device ids from one address gets no further than two devices' worth. These windows do not bound one address's spend on their own (see the address cap below). |
 | Whole deployment | 3,000 per hour | 10,000 per hour | A ceiling on calls whatever devices and addresses are used. That is 25 devices describing at their full rate, or about 33 people asking questions without pause. It also bounds the spend the counter cannot see (see the worst case below). |
 
 ### Spend cap and reservations
 
 The look actions share one budget of **$1 per clock hour** of recorded model spend. It is kept in the `describeUsage` row with key `look:global`, separate from post descriptions' own $2 an hour. Measured costs are a mean of $0.00019 per described frame and $0.00011 per decision check (eval below). So one person at every device limit without pause would spend about $0.34 an hour, and ordinary use far less. $1 an hour serves several people using the camera at once and caps recorded spend at **$24 a day**.
 
-Each call reserves its worst-case cost in the same transaction as the limits. A call is refused when the hour's spend plus its own reservation would pass $1, so calls in flight already count and concurrent calls cannot overshoot. The reservation is the worst case in tokens, priced at the model's own rates, with every input token at the dearer of the uncached and the cache-write rate. On `gpt-6-luna` that is $0.10 uncached, $0.125 cache write and $0.50 output per million tokens.
+Each call reserves its worst-case cost in the same transaction as the limits. A call is refused when the hour's spend plus its own reservation would pass $1, so calls in flight already count and concurrent calls cannot overshoot.
+
+**One address may spend at most a third of the budget, $0.33 per clock hour**, kept the same way in a `describeUsage` row keyed `look:address:<digest>`. Each call reserves against both rows in the same transaction and settles both. So one address can never turn the camera off for everyone: it takes at least three. The call-count windows alone could not do this. Priced at the reservations below, an address's 240 describes and 600 decides per 10 minutes are $0.336 a window, up to $2 an hour. Shrinking those windows to a third of the budget would leave too little: one person describing every 8 seconds while the camera is open already reserves $0.35 an hour. The spend cap counts what calls actually cost once they settle, so ordinary use fits easily:
+
+| Use from one address | Measured cost an hour | Share of the address cap |
+| --- | --- | --- |
+| One person: a description every 8 seconds all hour (450), and ten 45-second questions checked once a second (450) | $0.086 + $0.051 = $0.14 | 41% |
+| Two people behind one router, both as above | $0.27 | 82% |
+| One device at every device limit without pause (720 describes, 1,800 decides) | $0.34 | reaches the cap in the last minute or two of the hour |
+
+When an address reaches its cap, only that address gets `budget` until the clock hour ends; everyone else keeps the remaining two thirds. The reservation is the worst case in tokens, priced at the model's own rates, with every input token at the dearer of the uncached and the cache-write rate. On `gpt-6-luna` that is $0.10 uncached, $0.125 cache write and $0.50 output per million tokens.
 
 | | describe | decide |
 | --- | --- | --- |
@@ -66,7 +84,7 @@ Image tokens grow with pixel area, which is why the server refuses frames above 
 
 ### True worst case
 
-- **Recorded spend** can never pass **$1 in a clock hour, or $24 a day**, whatever device ids or addresses a caller invents. Every call that gets a response settles at the cost OpenAI reported, which is never more than its reservation.
+- **Recorded spend** can never pass **$1 in a clock hour, or $24 a day**, whatever device ids or addresses a caller invents, and one address's can never pass **$0.33 in a clock hour**. Every call that gets a response settles at the cost OpenAI reported, which is never more than its reservation.
 - **Spend the counter cannot see** comes only from a call this deployment abandons at its 20-second timeout, or whose connection drops, that OpenAI still bills. Its reservation is released, so the hour's budget no longer counts it.
 - **Hard ceiling.** Abandoned calls are still bounded by the deployment windows: at most 3,000 describe calls at $0.000614 and 10,000 decide calls at $0.000157 per window, or $3.41.
   - A clock hour can overlap two windows of each action, so the absolute ceiling is **$6.82 in one clock hour**.
@@ -79,6 +97,7 @@ Image tokens grow with pixel area, which is why the server refuses frames above 
 | --- | --- | --- |
 | Per device | only that device | until its 10-minute window ends |
 | Per address | everyone calling from that address | until its 10-minute window ends |
+| Address spend cap ($0.33 an hour) | everyone calling from that address, for both actions | until the clock hour ends |
 | Deployment window | everyone, for that action only | until the window ends, at most an hour |
 | Hourly budget | everyone, for both actions | until the clock hour ends. Post descriptions are unaffected, because they have their own budget |
 
@@ -91,7 +110,7 @@ The app gets `limited` or `budget` and says so; nothing is retried on the server
 - No description, alt text, visible text or subject is stored or logged. Logs carry only the action name, latency, model, cost and an error class (for example `timeout` or `http_500`).
 - The database holds only counters:
   - one row per hashed device id and per hashed address in `memoryRateLimits`, for each action;
-  - one spend row per hour in `describeUsage`, with past hours pruned.
+  - one spend row per hour in `describeUsage` for the deployment, and one per hour for each hashed address that called, with past hours pruned.
 
 ### Prompt
 

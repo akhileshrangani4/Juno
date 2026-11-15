@@ -52,7 +52,7 @@ export type RestoreResult =
   | { status: 'invalid'; account: SocialAccount | null }
   | { status: 'unreachable' };
 
-export type UploadedImage = { alt: string; handle: unknown };
+export type UploadedImage = { alt: string; handle: unknown; aspectRatio?: { width: number; height: number } };
 
 export type NewPost = { text: string; images?: UploadedImage[] };
 
@@ -76,7 +76,7 @@ export interface SocialProvider {
   repost(post: PostRef): Promise<RecordRef>;
   like(post: PostRef): Promise<RecordRef>;
   reply(parent: ReplyParent, post: NewPost): Promise<PostRef>;
-  uploadImage(image: { uri: string; mimeType: string }, alt: string): Promise<UploadedImage>;
+  uploadImage(image: { uri: string; mimeType: string; width?: number; height?: number }, alt: string): Promise<UploadedImage>;
   unlike(post: PostRef, like?: RecordRef): Promise<boolean>;
   unrepost(post: PostRef, repost?: RecordRef): Promise<boolean>;
   deletePost(post: PostRef): Promise<void>;

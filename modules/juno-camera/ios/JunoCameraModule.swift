@@ -25,6 +25,10 @@ public final class JunoCameraModule: Module {
       try? AVAudioSession.sharedInstance().setAllowHapticsAndSystemSoundsDuringRecording(allow)
     }
 
+    // The development frame source runs only in simulator builds; a build for a phone has no analyzeImage at all.
+    #if targetEnvironment(simulator)
+    Constant("devFramesSupported") { true }
+
     // The same measurements as live frames, for a still image (the development frame source on a simulator).
     AsyncFunction("analyzeImage") { (uri: URL, promise: Promise) in
       DispatchQueue.global(qos: .userInitiated).async {
@@ -36,6 +40,7 @@ public final class JunoCameraModule: Module {
         promise.resolve(result)
       }
     }
+    #endif
 
     View(JunoCameraView.self) {
       Events("onAnalysis", "onReady", "onCameraError")

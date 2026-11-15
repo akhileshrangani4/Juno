@@ -13,7 +13,8 @@ import { colors, type } from '@/theme';
 import { cameraActions, cameraHalves, cameraHint, type CameraActionName } from './actions';
 import { CameraController, type FrameSource, type Phase } from './CameraController';
 import { DEV_FRAME_MS, devFramesEnabled, loadDevFrames, type DevFrame } from './devFrames';
-import { cameraFeedback, consentStore, localStore, mediaLibrary, permissions } from './device';
+import { cacheFileStore } from './cacheFileStore';
+import { cameraFeedback, consentStore, mediaLibrary, permissions } from './device';
 import { cameraHost, setActiveCamera } from './host';
 import { DescriptionStore, LibraryWalk } from './library';
 import { convexLook, downscaled, forUpload } from './lookClient';
@@ -52,7 +53,7 @@ function createController(narrator: Narrator): CameraController {
   const holder: { controller: CameraController | null } = { controller: null };
   const library = new LibraryWalk({
     source: mediaLibrary,
-    store: new DescriptionStore(localStore),
+    store: new DescriptionStore(cacheFileStore),
     describe: (image) => convexLook.describe(image, 'library'),
     allowed: () => holder.controller?.snapshot.descriptionsOn ?? false,
   });
@@ -159,8 +160,10 @@ export function CameraScreen({ start }: { start: 'camera' | 'library' }) {
     cameraModule?.allowHapticsDuringRecording(true);
     void controller.start({ library: start === 'library' });
     return () => {
+      const left = controller.snapshot.phase !== 'closed';
       controller.stop();
       setActiveCamera(null);
+      if (left) cameraHost()?.left();
     };
   }, [controller, start]);
 
@@ -180,6 +183,7 @@ export function CameraScreen({ start }: { start: 'camera' | 'library' }) {
       else controller.close();
       return;
     }
+    narrator.stop();
     host?.wakeAgent();
   };
 
@@ -241,8 +245,9 @@ export function CameraScreen({ start }: { start: 'camera' | 'library' }) {
         onAccessibilityEscape={() => controller.close()}
         onMagicTap={() => {
           const host = cameraHost();
-          if (host?.agentLive()) host.sleepAgent();
-          else host?.wakeAgent();
+          if (host?.agentLive()) return host.sleepAgent();
+          narrator.stop();
+          host?.wakeAgent();
         }}>
         <View style={StyleSheet.absoluteFill} pointerEvents="none">
           {useDev && devFrame && live ? <Image source={{ uri: devFrame.uri }} style={StyleSheet.absoluteFill} contentFit="cover" /> : null}

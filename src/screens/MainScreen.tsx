@@ -167,6 +167,12 @@ export function MainScreen() {
           else prefix.current = cameraMessages.backToFeed;
           router.back();
         },
+        left: () => {
+          covered.current = false;
+          const { agentLive: live, agent: current } = latest.current;
+          if (live) current.say(cameraMessages.backToFeed);
+          else prefix.current = cameraMessages.backToFeed;
+        },
       }),
     [postNarrator],
   );

@@ -44,6 +44,7 @@ export function cameraActions(phase: Phase, descriptionsOn: boolean, hasCamera: 
         { name: 'previous', label: 'Previous photo' },
         { name: 'choose', label: 'Choose this photo' },
         { name: 'describe', label: 'Describe this photo again' },
+        descriptionsOn ? { name: 'descriptionsOff', label: 'Turn descriptions off' } : { name: 'descriptionsOn', label: 'Turn descriptions on' },
         ...(hasCamera ? [{ name: 'backToCamera', label: 'Back to the camera' } as const] : []),
         close,
       ];
@@ -66,7 +67,7 @@ export function cameraHalves(phase: Phase): { top: string; bottom: string } | nu
     case 'library':
       return { top: 'go to the previous photo', bottom: 'go to the next photo' };
     case 'consent':
-      return { top: 'keep pictures on your phone', bottom: 'allow descriptions' };
+      return { top: 'hear the question again', bottom: 'hear the question again' };
     case 'unavailable':
       return { top: 'hear this again', bottom: 'choose from your photos' };
     default:
@@ -78,5 +79,6 @@ export function cameraHint(phase: Phase, inCall: boolean): string {
   const halves = cameraHalves(phase);
   const leave = inCall ? 'Say close the camera to go back to your feed.' : 'Draw a counter-clockwise circle to go back to your feed.';
   const hold = phase === 'library' ? ' Press and hold to choose this photo.' : '';
+  if (phase === 'consent') return `Use the action Allow descriptions or Keep pictures on my phone to answer. A tap repeats the question. ${leave}`;
   return halves ? `Tap the bottom half to ${halves.bottom}, the top half to ${halves.top}.${hold} ${leave}` : leave;
 }
