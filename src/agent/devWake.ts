@@ -1,6 +1,7 @@
 // Development and test builds only: lets a cloud phone (which cannot draw a circle) wake the agent with
-// the deep link consumerhack://dev-agent. EXPO_PUBLIC_DEV_AGENT_LINK is inlined at build time, so in a build
-// without it every branch below is dead code and the link does nothing.
+// the deep link juno://dev-agent (or the older consumerhack://dev-agent; both schemes stay registered).
+// EXPO_PUBLIC_DEV_AGENT_LINK is inlined at build time, so in a build without it every branch below is dead
+// code and the link does nothing.
 
 let pending = false;
 let listener: (() => void) | null = null;

@@ -1,3 +1,4 @@
+import { APP_NAME } from '../appName';
 import type { Post, PostImage, PostMedia } from '../social/types';
 
 export type NarrationMode = 'full' | 'brief' | 'verbatim' | 'hashtags' | 'detailedImage';
@@ -429,8 +430,6 @@ export function lateDescription(post: Post, parts: DescriptionParts): string | n
 
 const GESTURES =
   'Tap the bottom half of the screen for the next post. Tap the top half for the previous post. Draw a circle clockwise anywhere on the screen to wake the voice agent. Draw a circle counter-clockwise to put it to sleep and go back to scrolling.';
-
-export const APP_NAME = 'Juno';
 
 export const INTRO_SUMMARY = `Welcome to ${APP_NAME}. It reads your social feed aloud, one post at a time.`;
 

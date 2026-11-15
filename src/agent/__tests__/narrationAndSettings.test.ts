@@ -102,6 +102,7 @@ describe('dev wake link', () => {
 
   it('does nothing unless the build enables it', () => {
     delete process.env.EXPO_PUBLIC_DEV_AGENT_LINK;
+    expect(isDevAgentLink('juno://dev-agent')).toBe(false);
     expect(isDevAgentLink('consumerhack://dev-agent')).toBe(false);
     const wake = jest.fn();
     onDevWake(wake)();
@@ -111,6 +112,7 @@ describe('dev wake link', () => {
 
   it('wakes the agent now, or when the feed mounts', () => {
     process.env.EXPO_PUBLIC_DEV_AGENT_LINK = '1';
+    expect(isDevAgentLink('juno://dev-agent')).toBe(true);
     expect(isDevAgentLink('consumerhack://dev-agent')).toBe(true);
     expect(isDevAgentLink('/dev-agent')).toBe(true);
     expect(isDevAgentLink('/sign-in')).toBe(false);

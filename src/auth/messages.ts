@@ -1,15 +1,16 @@
 import { Platform } from 'react-native';
 
+import { APP_NAME } from '@/appName';
 import type { SocialAccount } from '@/social/types';
 
 import { spellHandle } from './handle';
 
 const act = (screenReader: boolean) => (screenReader ? 'Double tap' : 'Tap');
 
-export const SYSTEM_SIGN_IN_PROMPT = Platform.OS === 'ios' ? ' First, iPhone asks whether this app may use a website, usually bsky.social, to sign in. Choose Continue.' : '';
+export const SYSTEM_SIGN_IN_PROMPT = Platform.OS === 'ios' ? ` First, iPhone asks whether ${APP_NAME} may use a website, usually bsky.social, to sign in. Choose Continue.` : '';
 
 export const authMessages = {
-  choices: 'Welcome to Juno. You can sign in with your Bluesky handle, create a new Bluesky account, or listen to a public feed without signing in.',
+  choices: `Welcome to ${APP_NAME}. You can sign in with your Bluesky handle, create a new Bluesky account, or listen to a public feed without signing in.`,
   expired: 'Your Bluesky sign-in has ended. Sign in again to pick up where you left off.',
   unreachable:
     "Bluesky couldn't be reached, so your timeline can't load yet. You're still signed in. Check your connection, then choose Retry, or listen to a public feed without signing in.",

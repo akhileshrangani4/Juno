@@ -1,18 +1,21 @@
 {
   "expo": {
-    "name": "consumerhack",
+    "name": "Juno",
     "slug": "consumerhack",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
-    "scheme": "consumerhack",
+    "scheme": [
+      "juno",
+      "consumerhack"
+    ],
     "userInterfaceStyle": "dark",
     "ios": {
       "icon": "./assets/expo.icon",
       "bundleIdentifier": "com.akhileshrangani.consumerhack",
       "supportsTablet": false,
       "infoPlist": {
-        "NSMicrophoneUsageDescription": "The voice agent listens through the microphone only while it is awake, after you draw a clockwise circle.",
+        "NSMicrophoneUsageDescription": "Juno's voice agent listens through the microphone only while it is awake, after you draw a clockwise circle.",
         "UIBackgroundModes": [
           "audio"
         ]
@@ -47,15 +50,15 @@
       [
         "expo-audio",
         {
-          "microphonePermission": "The voice agent listens through the microphone only while it is awake, after you draw a clockwise circle.",
+          "microphonePermission": "Juno's voice agent listens through the microphone only while it is awake, after you draw a clockwise circle.",
           "enableBackgroundPlayback": false
         }
       ],
       [
         "@config-plugins/react-native-webrtc",
         {
-          "microphonePermission": "The voice agent listens through the microphone only while it is awake, after you draw a clockwise circle.",
-          "cameraPermission": "The camera is used only when you ask the app to describe what is in front of you."
+          "microphonePermission": "Juno's voice agent listens through the microphone only while it is awake, after you draw a clockwise circle.",
+          "cameraPermission": "Juno uses the camera only when you ask it to describe what is in front of you."
         }
       ],
       [
@@ -64,7 +67,7 @@
           "enableCamera": false,
           "enableMicrophone": true,
           "enableScreenShare": false,
-          "microphonePermission": "The voice agent listens through the microphone only while it is awake, after you draw a clockwise circle."
+          "microphonePermission": "Juno's voice agent listens through the microphone only while it is awake, after you draw a clockwise circle."
         }
       ]
     ],

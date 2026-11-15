@@ -1,3 +1,4 @@
+import { APP_NAME } from '@/appName';
 import { authMessages } from '@/auth/messages';
 import { AuthButton, AuthScreen, Heading, Status, useStatus } from '@/screens/auth/AuthControls';
 import { useSession } from '@/session/SessionContext';
@@ -20,7 +21,7 @@ export function SessionUnreachable() {
       />
       <AuthButton
         label="Listen without signing in"
-        hint="Plays a public feed for now. You stay signed in, and Juno tries your timeline again the next time it opens."
+        hint={`Plays a public feed for now. You stay signed in, and ${APP_NAME} tries your timeline again the next time it opens.`}
         onPress={listenForNow}
         busy={retrying}
       />

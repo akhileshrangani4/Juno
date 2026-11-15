@@ -8,8 +8,8 @@ const account = { id: 'did:plc:maya', handle: 'maya.bsky.social', displayName: '
 
 describe('the iPhone sign-in prompt', () => {
   it('is announced before sign-in and sign-up open Bluesky', () => {
-    expect(authMessages.opening).toContain('First, iPhone asks whether this app may use a website, usually bsky.social, to sign in. Choose Continue.');
-    expect(authMessages.createAccount).toMatch(/^Bluesky's sign-up page will open\. First, iPhone asks whether this app may use a website, usually bsky\.social, to sign in\. Choose Continue\. The page asks/);
+    expect(authMessages.opening).toContain('First, iPhone asks whether Juno may use a website, usually bsky.social, to sign in. Choose Continue.');
+    expect(authMessages.createAccount).toMatch(/^Bluesky's sign-up page will open\. First, iPhone asks whether Juno may use a website, usually bsky\.social, to sign in\. Choose Continue\. The page asks/);
   });
 
   it('is left out where the system shows no such prompt', () => {
@@ -37,7 +37,7 @@ describe('sign in flow', () => {
     expect(opening).toMatchObject({
       step: 'opening',
       message:
-        "Bluesky's sign-in page will open. First, iPhone asks whether this app may use a website, usually bsky.social, to sign in. Choose Continue. Then enter your password on Bluesky's page. You'll come back here when you're done.",
+        "Bluesky's sign-in page will open. First, iPhone asks whether Juno may use a website, usually bsky.social, to sign in. Choose Continue. Then enter your password on Bluesky's page. You'll come back here when you're done.",
     });
     expect(nextSignIn(opening, { type: 'result', result: { status: 'success', account } }, true)).toEqual({ step: 'signedIn', account, message: 'Signed in as Maya.' });
   });

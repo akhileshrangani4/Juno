@@ -21,6 +21,7 @@ import type { ToolOutcome } from '../toolHandlers';
 type ToolCall = { id: string; function: { name: string; arguments: string } };
 type Message = { role: string; content?: string | null; tool_calls?: ToolCall[]; tool_call_id?: string };
 
+// The agent answers to the app's name and gives it when asked: the two utterances after the first check that.
 // The brief's utterances, with the accepting confirmations spread across them, then the refusing ones: a hedge
 // right after a read-back, a yes two turns after it, a yes with a change attached, a verb that doesn't fit the
 // draft, a question of the agent's own between the read-back and the yes, and a yes split in two by speech
@@ -29,6 +30,8 @@ type Step = string | { say: string; thenDuringCountdown: true } | { agentAsks: s
 
 const SCRIPT: Step[] = [
   'read that again',
+  'Juno, read that again',
+  "what's your name?",
   'next',
   'like this',
   'repost this',
@@ -195,4 +198,7 @@ it('drives the assistant through the scripted utterances', async () => {
     `Backend: ${backend === 'openai' ? `${assistant.model.model} via OpenAI (stand-in for Vapi chat)` : 'Vapi chat API'}\n\n## Tool calls per utterance\n\n| Utterance | Tools called | Agent said |\n| --- | --- | --- |\n${summary}\n\n## Full transcript\n\n${log.join('\n')}\n`,
   );
   console.log(summary);
+  const reply = (utterance: string) => calls.find((call) => call.utterance === utterance);
+  if (reply('Juno, read that again')) expect(reply('Juno, read that again')!.tools).toEqual(['read_post']);
+  if (reply("what's your name?")) expect(reply("what's your name?")!.reply).toMatch(/Juno/);
 });

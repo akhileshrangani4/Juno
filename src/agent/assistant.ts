@@ -1,3 +1,5 @@
+import { APP_NAME } from '@/appName';
+
 import { buildSystemPrompt, type PromptContext } from './systemPrompt';
 import { vapiTools } from './tools';
 
@@ -14,7 +16,7 @@ export const clientMessages = ['tool-calls', 'transcript', 'status-update', 'spe
 
 export function buildAssistant(context: PromptContext) {
   return {
-    name: 'Juno voice agent',
+    name: `${APP_NAME} voice agent`,
     firstMessage: FIRST_MESSAGE,
     firstMessageMode: 'assistant-speaks-first' as const,
     model: {
