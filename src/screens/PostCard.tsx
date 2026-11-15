@@ -1,6 +1,8 @@
 import { Image } from 'expo-image';
-import { ScrollView, StyleSheet, Text, View } from 'react-native';
+import { StyleSheet, Text, View } from 'react-native';
+import { ScrollView } from 'react-native-gesture-handler';
 
+import { useStrokeGesture } from '@/gestures/GestureSurface';
 import { authorName, formatAge } from '@/narration/buildNarration';
 import type { Post, PostMedia } from '@/social/types';
 import { colors, type } from '@/theme';
@@ -22,6 +24,7 @@ function mediaLine(media: PostMedia): string {
 }
 
 export function PostCard({ post, position }: { post: Post; position: string }) {
+  const stroke = useStrokeGesture();
   const image = post.media.flatMap((media) => (media.kind === 'images' ? media.images : []))[0];
   return (
     <View style={styles.card}>
@@ -32,7 +35,7 @@ export function PostCard({ post, position }: { post: Post; position: string }) {
       <Text style={styles.meta} numberOfLines={1} maxFontSizeMultiplier={type.maxScale}>
         @{post.author.handle} · {formatAge(post.createdAt, new Date())}
       </Text>
-      <ScrollView key={post.uri} style={styles.scroll} contentContainerStyle={styles.scrollContent} indicatorStyle="white" persistentScrollbar>
+      <ScrollView key={post.uri} simultaneousWith={stroke} style={styles.scroll} contentContainerStyle={styles.scrollContent} indicatorStyle="white" persistentScrollbar>
         {post.text ? (
           <Text style={styles.body} maxFontSizeMultiplier={type.maxScale}>
             {post.text}

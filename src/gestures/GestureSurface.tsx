@@ -1,6 +1,6 @@
-import { useRef, type ReactNode } from 'react';
+import { createContext, use, useRef, type ReactNode } from 'react';
 import { View, type ViewProps } from 'react-native';
-import { GestureDetector, useCompetingGestures, usePanGesture, useTapGesture } from 'react-native-gesture-handler';
+import { GestureDetector, useCompetingGestures, usePanGesture, useTapGesture, type PanGesture } from 'react-native-gesture-handler';
 
 import { recognizeCircle, type CircleDirection, type Point } from './circle';
 
@@ -12,6 +12,12 @@ type Props = ViewProps & {
   onUnrecognizedStroke?: (points: Point[]) => void;
   children: ReactNode;
 };
+
+const StrokeGestureContext = createContext<PanGesture | null>(null);
+
+export function useStrokeGesture(): PanGesture | undefined {
+  return use(StrokeGestureContext) ?? undefined;
+}
 
 export function GestureSurface({ tapsEnabled, onTapTop, onTapBottom, onCircle, onUnrecognizedStroke, children, ...viewProps }: Props) {
   const stroke = useRef<Point[]>([]);
@@ -56,7 +62,7 @@ export function GestureSurface({ tapsEnabled, onTapTop, onTapBottom, onCircle, o
         onLayout={(event) => {
           height.current = event.nativeEvent.layout.height;
         }}>
-        {children}
+        <StrokeGestureContext value={pan}>{children}</StrokeGestureContext>
       </View>
     </GestureDetector>
   );
