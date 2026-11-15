@@ -4,10 +4,11 @@ import type { Post, PostRef, RecordRef, ReplyParent, SocialAccount, SocialProvid
 
 import { agentMessages } from './agentMessages';
 import { memoryRejection, MemorySignInNeededError, MemoryUnavailableError, type MemoryClient } from './memoryClient';
+import type { ListeningMode } from './listeningMode';
 import type { MemoryOffer } from './memoryOffer';
 import { detailFor, narrateForFeed, narratePost, usesDescriptions, type ReadMode } from './narrationAdapter';
 import { describeFocus } from './postContext';
-import { isAffirmative, Publisher, type ConfirmOutcome, type Draft, type DraftOutcome } from './publisher';
+import { isAffirmative, Publisher, withoutVocative, type ConfirmOutcome, type Draft, type DraftOutcome } from './publisher';
 import { MAX_FACTS } from './memoryRateLimits';
 import { MAX_RATE, MIN_RATE, RATE_STEP, type NarrationSettings, type SettingsStore } from './settings';
 import type { ToolName } from './tools';
@@ -43,6 +44,8 @@ export type AgentDeps = {
   // Open when the agent's first words asked to keep what was saved before sign-in (memoryOffer.ts).
   memoryOffer?: MemoryOffer | null;
   conversation: Conversation;
+  // The listening mode in force, and the user's choice of one (saved on the phone and in memory).
+  listening: { get(): ListeningMode; choose(mode: ListeningMode): void };
   // Tells the model something happened outside a tool call, e.g. a post finished sending. With speak, the app
   // says those words itself and the model is told not to answer.
   notify(text: string, speak?: string): void;
@@ -62,7 +65,7 @@ export const TOOL_CEILING_MS = 3000;
 // An explicit "describe the picture" waits this long for a description it doesn't have yet.
 export const PICTURE_WAIT_MS = 2500;
 // Tools that neither wait on the network nor touch the undo history, so they still run while a slow call finishes.
-const FREE_WHILE_SLOW = new Set<string>(['read_post', 'go_to_post', 'change_narration', 'gesture_help', 'open_sign_in', 'end_conversation']);
+const FREE_WHILE_SLOW = new Set<string>(['read_post', 'go_to_post', 'change_narration', 'gesture_help', 'set_listening_mode', 'open_sign_in', 'end_conversation']);
 
 const UNDO_WORDS = /\b(undo|stop|cancel|wait|don'?t|no)\b/i;
 
@@ -138,6 +141,8 @@ export function createToolHandlers(deps: AgentDeps) {
   let slow: string | null = null;
   // An old sign-in's "sign in again for memory" is said once per conversation, not on every memory call.
   let toldSignInForMemory = false;
+  // In push to talk the first countdown of a conversation says to hold the screen to be heard saying undo.
+  let toldHoldToUndo = false;
 
   const within = <T,>(promise: Promise<T>, ms: number) =>
     new Promise<{ done: true; value: T } | { done: false }>((resolve) => {
@@ -367,11 +372,13 @@ export function createToolHandlers(deps: AgentDeps) {
         return { respond: true, result: publisher.discard() ? 'DISCARDED: The draft is gone and nothing was published. Confirm briefly.' : 'NO_DRAFT: There was no draft.' };
       case 'publish_draft': {
         const utterance = deps.conversation.lastUtterance();
-        const outcome = publisher.confirm(typeof args.draftId === 'string' ? args.draftId : '', turn, utterance);
+        const holdToUndo = deps.listening.get() === 'pushToTalk' && !toldHoldToUndo;
+        const outcome = publisher.confirm(typeof args.draftId === 'string' ? args.draftId : '', turn, utterance, holdToUndo);
         if (!outcome.ok && (outcome.reason === 'expired' || outcome.reason === 'wrongVerb')) {
           return { speak: outcome.readBack, respond: false, result: refusal(outcome, utterance), refused: outcome.reason };
         }
         if (!outcome.ok) return { respond: true, result: refusal(outcome, utterance), refused: outcome.reason };
+        if (holdToUndo) toldHoldToUndo = true;
         return {
           speak: outcome.announcement,
           respond: false,
@@ -410,6 +417,15 @@ export function createToolHandlers(deps: AgentDeps) {
               ? ` The speed is limited to ${MIN_RATE} to ${MAX_RATE} times normal.`
               : ` Speeds go in steps of ${RATE_STEP}, so ${asked} was set to ${next.rate}, the nearest step. Tell the user the speed you set.`;
         return { respond: true, result: `SETTINGS_CHANGED: Now ${settingsSummary(next)}.${speedNote} Confirm in a few words.` };
+      }
+      case 'set_listening_mode': {
+        const mode: ListeningMode = args.mode === 'push_to_talk' ? 'pushToTalk' : 'handsFree';
+        deps.listening.choose(mode);
+        return {
+          speak: mode === 'pushToTalk' ? agentMessages.pushToTalkOn : agentMessages.handsFreeOn,
+          respond: false,
+          result: `LISTENING_MODE_SET (${args.mode === 'push_to_talk' ? 'push_to_talk' : 'hands_free'}): The app told the user how it works now. Say nothing.`,
+        };
       }
       case 'gesture_help':
         return { speak: messages.gestures, respond: false, result: "GESTURES_READ: The app read the gestures aloud. Don't repeat them." };
@@ -528,13 +544,24 @@ export function createToolHandlers(deps: AgentDeps) {
         history.push(ALREADY_REMOVED);
         return { kind: 'undone', speak: agentMessages.undone, message: 'The user said undo during the five seconds. The app stopped it, nothing was sent, and it told them. Say nothing.' };
       }
-      if (isAffirmative(utterance, busy.kind) || ACKNOWLEDGEMENT.test(utterance)) return null;
+      if (isAffirmative(utterance, busy.kind) || ACKNOWLEDGEMENT.test(withoutVocative(utterance))) return null;
       const held = publisher.hold(deps.conversation.turn());
       if (!held) return null;
       return {
         kind: 'held',
         speak: `${agentMessages.held} ${held.readBack}`,
         message: `HELD draftId="${held.draft.id}": The user said "${utterance}" during the five seconds, so nothing was sent and the app read the draft aloud again. If they asked for a change, make it with edit_draft, which reads the new draft back. Otherwise say nothing, and if their next reply is a yes, call publish_draft with this draftId.`,
+      };
+    },
+    // In push to talk the user was heard speaking while holding during the five seconds, but no words came through.
+    // That isn't a yes, so the send is held as for any other answer.
+    heardUnclear(): Heard | null {
+      const held = publisher.hold(deps.conversation.turn());
+      if (!held) return null;
+      return {
+        kind: 'held',
+        speak: `${agentMessages.held} ${held.readBack}`,
+        message: `HELD draftId="${held.draft.id}": The user spoke during the five seconds but the words didn't come through, so nothing was sent and the app read the draft aloud again. Say nothing, and if their next reply is a yes, call publish_draft with this draftId.`,
       };
     },
     // The assistant said something of its own (not the app's words), which voids a read-back the user hasn't answered.

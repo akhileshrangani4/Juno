@@ -33,7 +33,15 @@ export function createVoiceCall(publicKey: string): VoiceCall {
         );
       }),
     stop: () => vapi.stop(),
-    say: (text) => vapi.say(text, false, true),
+    say: (text, interrupt) => vapi.say(text, false, true, interrupt),
+    setMuted: (muted) => {
+      try {
+        vapi.setMuted(muted);
+      } catch {
+        listener?.onError(new Error('Could not change the microphone'));
+      }
+    },
+    muteAssistant: (muted) => vapi.send({ type: 'control', control: muted ? 'mute-assistant' : 'unmute-assistant' }),
     addMessage: (content, triggerResponse) =>
       vapi.send({ type: 'add-message', message: { role: 'system', content }, triggerResponseEnabled: triggerResponse } as Parameters<Vapi['send']>[0]),
   };

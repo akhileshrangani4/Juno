@@ -13,8 +13,12 @@ export interface VoiceCall {
   // Resolves when the phone has joined the call; rejects if it cannot connect.
   start(assistant: object, listener: CallListener): Promise<void>;
   stop(): void;
-  // Speaks the text word for word in the agent's voice.
-  say(text: string): void;
+  // Speaks the text word for word in the agent's voice; interrupt drops whatever the agent is saying or about to say.
+  say(text: string, interrupt?: boolean): void;
   // Adds a system message to the conversation; triggerResponse asks the model to answer it.
   addMessage(content: string, triggerResponse: boolean): void;
+  // Mutes or unmutes the phone's microphone in the call. Muted, nothing the user says reaches Vapi.
+  setMuted(muted: boolean): void;
+  // Silences or restores the agent's voice at once, for a press while it is speaking.
+  muteAssistant(muted: boolean): void;
 }

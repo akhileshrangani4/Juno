@@ -1,5 +1,6 @@
 import { countGraphemes } from 'unicode-segmenter/grapheme';
 
+import { APP_NAME } from '@/appName';
 import { analyzeText, authorName, formatAge, tagList } from '@/narration/buildNarration';
 import type { Post } from '@/social/types';
 
@@ -63,10 +64,17 @@ const FITTING_VERBS: Record<DraftKind, string[]> = {
   delete: ['delete', 'remove'],
 };
 
+// The app's name said to the agent as a form of address, at the start or end or set off by commas: "Juno, yes",
+// "yes Juno", "okay, Juno, post it". It is dropped before the check, so those count as their bare forms, while
+// "yes, Juno, but change it" is still more than assent and "Juno?" alone is still a question.
+const VOCATIVE = new RegExp(`^\s*${APP_NAME}\b[\s,.!]*|[\s,]*\b${APP_NAME}[\s.!]*$|,\s*${APP_NAME}\s*(?=,)`, 'gi');
+
+export const withoutVocative = (utterance: string) => utterance.replace(VOCATIVE, ' ').trim();
+
 // The verbs in an utterance made only of assent, or null when it is anything more than assent.
 function assentVerbs(utterance: string): string[] | null {
   if (utterance.includes('?')) return null;
-  const said = utterance
+  const said = withoutVocative(utterance)
     .toLowerCase()
     .replace(/[’]/g, "'")
     .replace(/[^a-z' ]+/g, ' ')
@@ -152,13 +160,18 @@ export function readBackOf(draft: Draft, now = new Date()): string {
   }
 }
 
-export function announcementOf(draft: Draft): string {
-  return `${VERBS[draft.kind].doing} in five seconds. Say undo to stop it.`;
+// holdToUndo: in push to talk the user has to hold the screen to be heard, so the first announcement says so.
+export function announcementOf(draft: Draft, holdToUndo = false): string {
+  return `${VERBS[draft.kind].doing} in five seconds. ${holdToUndo ? 'Hold the screen and say undo' : 'Say undo'} to stop it.`;
 }
+
+// A confirmed send waiting out its five seconds. The countdown starts once the announcement has been spoken and
+// stands still while paused (a finger is held down in push to talk), keeping the time it had left.
+type Pending = { draft: Draft; cancel: (() => void) | null; started: boolean; paused: boolean; remaining: number; resumedAt: number };
 
 export class Publisher {
   private draft: Draft | null = null;
-  private pending: { draft: Draft; cancel: (() => void) | null } | null = null;
+  private pending: Pending | null = null;
   private sending: { draft: Draft; undoRequested: boolean } | null = null;
 
   constructor(private readonly deps: Deps) {}
@@ -240,7 +253,7 @@ export class Publisher {
     return { draft, readBack: this.readBackAgain(draft, turn) };
   }
 
-  confirm(draftId: string, turn: number, utterance: string): ConfirmOutcome {
+  confirm(draftId: string, turn: number, utterance: string, holdToUndo = false): ConfirmOutcome {
     if (this.busy) return { ok: false, reason: 'alreadyPending' };
     const draft = this.draft;
     if (!draft) return { ok: false, reason: 'noDraft' };
@@ -251,13 +264,47 @@ export class Publisher {
     if (!isAffirmative(utterance)) return { ok: false, reason: 'notAffirmative' };
     if (!isAffirmative(utterance, draft.kind)) return { ok: false, reason: 'wrongVerb', readBack: this.readBackAgain(draft, turn) };
     this.draft = null;
-    this.pending = { draft, cancel: null };
-    return { ok: true, draft, announcement: announcementOf(draft) };
+    this.pending = { draft, cancel: null, started: false, paused: false, remaining: UNDO_WINDOW_MS, resumedAt: 0 };
+    return { ok: true, draft, announcement: announcementOf(draft, holdToUndo) };
   }
 
   startCountdown(): void {
     const pending = this.pending;
-    if (!pending || pending.cancel) return;
+    if (!pending || pending.started) return;
+    pending.started = true;
+    if (!pending.paused) this.runCountdown(pending);
+  }
+
+  // Stops the clock on a confirmed send that hasn't gone out, keeping the time left. False when there is none.
+  pauseCountdown(): boolean {
+    const pending = this.pending;
+    if (!pending || pending.paused) return false;
+    pending.paused = true;
+    if (pending.cancel) {
+      pending.cancel();
+      pending.cancel = null;
+      pending.remaining = Math.max(0, pending.remaining - (this.clock() - pending.resumedAt));
+    }
+    return true;
+  }
+
+  resumeCountdown(): void {
+    const pending = this.pending;
+    if (!pending?.paused) return;
+    pending.paused = false;
+    if (pending.started) this.runCountdown(pending);
+  }
+
+  get countdownPaused(): boolean {
+    return this.pending?.paused === true;
+  }
+
+  private clock(): number {
+    return (this.deps.now?.() ?? new Date()).getTime();
+  }
+
+  private runCountdown(pending: Pending): void {
+    pending.resumedAt = this.clock();
     pending.cancel = this.deps.schedule(() => {
       if (this.pending !== pending) return;
       this.pending = null;
@@ -268,7 +315,7 @@ export class Publisher {
         .finally(() => {
           if (this.sending === sending) this.sending = null;
         });
-    }, UNDO_WINDOW_MS);
+    }, pending.remaining);
   }
 
   // Undo always targets what the user just confirmed, whether it is counting down or already being sent.
