@@ -101,6 +101,7 @@ export function setup(
     replies?: string[];
     loadedReplies?: string[];
     history?: ActionHistory;
+    readBacksHeard?: boolean;
   } = {},
 ) {
   if (!options.history) forgetLikes();
@@ -136,6 +137,13 @@ export function setup(
     now: () => new Date(Date.parse('2026-11-15T12:00:00.000Z') + scheduler.now()),
   };
   const handlers = createToolHandlers(deps);
+  // Stands in for the agent's voice, which hears each read-back played to the end, unless the test says it was cut off.
+  const run = handlers.run;
+  handlers.run = async (name, args) => {
+    const outcome = await run(name, args);
+    if (outcome.readBack && options.readBacksHeard !== false) handlers.readBackHeard(outcome.readBack);
+    return outcome;
+  };
   const say = (utterance: string) => conversation.add(utterance);
   const setFocus = (post: Post | null) => {
     focus = post;

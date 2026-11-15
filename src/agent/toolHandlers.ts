@@ -10,10 +10,10 @@ import { memoryRejection, MemorySignInNeededError, MemoryUnavailableError, type 
 import type { MemoryOffer } from './memoryOffer';
 import { detailFor, narrateForFeed, narratePost, usesDescriptions, type ReadMode } from './narrationAdapter';
 import { describeFocus } from './postContext';
-import { isAffirmative, Publisher, type ConfirmOutcome, type Draft, type DraftOutcome } from './publisher';
+import { droppedOf, isAffirmative, isCommand, Publisher, withoutVocative, type ConfirmOutcome, type Draft, type DraftOutcome } from './publisher';
 import { MAX_FACTS } from './memoryRateLimits';
 import { MAX_RATE, MIN_RATE, RATE_STEP, type NarrationSettings, type SettingsStore } from './settings';
-import type { ToolName } from './tools';
+import { answersReadBack, type ToolName } from './tools';
 
 export type ToolOutcome = {
   // Sent back to the model as a system message: "Result of <tool>: <result>".
@@ -25,12 +25,15 @@ export type ToolOutcome = {
   after?: 'end' | 'signIn' | 'countdown';
   // Why publish_draft was refused, for the device log.
   refused?: string;
+  // The draft id when speak is that draft's read-back, so the app hears back once it has been spoken to the end.
+  readBack?: string;
 };
 
 export type Conversation = {
   turn(): number;
   lastUtterance(): string;
   recentUtterances(): string[];
+  onUtterance(listener: () => void): () => void;
 };
 
 export type AgentDeps = {
@@ -62,7 +65,7 @@ export type AgentDeps = {
 
 
 // What the app does with a user utterance heard while a confirmed send is counting down or in flight.
-export type Heard = { kind: 'undone' | 'held'; speak: string; message: string };
+export type Heard = { kind: 'undone' | 'held'; speak: string; message: string; readBack?: string };
 
 // The model hears nothing while a tool runs, so no tool call waits on the network longer than this. A slower
 // one answers "still working", and its result reaches the model when it lands.
@@ -71,6 +74,8 @@ export const TOOL_CEILING_MS = 3000;
 export const PICTURE_WAIT_MS = 2500;
 // Reading or summing up the replies waits this long for replies the phone doesn't have yet.
 export const REPLIES_WAIT_MS = 2500;
+// How long a tool called right after a read-back waits for the user's words when it arrives before their transcript.
+export const TRANSCRIPT_WAIT_MS = 1500;
 // Tools that neither wait on the network nor touch the undo history, so they still run while a slow call finishes.
 const FREE_WHILE_SLOW = new Set<string>(['read_post', 'go_to_post', 'change_narration', 'gesture_help', 'open_sign_in', 'end_conversation']);
 
@@ -95,6 +100,11 @@ const NO_FOCUS = 'NO_POST: No post is in focus. Tell the user there is no post t
 const REPLIES_FAILED: ToolOutcome = { respond: true, result: "FAILED: The replies couldn't be loaded. Nothing changed. Tell the user it didn't work and they can try again." };
 const MAX_READ_REPLIES = 10;
 const MAX_SUMMARY_REPLIES = 40;
+// A tool not marked answersReadBack (tools.ts) that the model calls on its own before the user has said anything
+// after a read-back is refused, and doesn't cost the user their yes: the model doesn't always obey "say nothing".
+const WAITING_FOR_ANSWER =
+  "WAITING_FOR_ANSWER: The app just read a draft back and is waiting for the user's answer, so nothing was done. Say nothing, and wait for the user.";
+
 const ACCOUNT_TOOLS = new Set<ToolName>(['like_post', 'unlike_post', 'draft_post', 'draft_reply', 'draft_repost', 'draft_delete_my_last_post', 'publish_draft']);
 
 const normalized = (text: string) =>
@@ -124,23 +134,33 @@ const UNDO_WHILE_SENDING =
 const REWORDED =
   "REWORDED: The draft must use the user's own words, with only punctuation and capitalization fixed. Call the draft tool again with exactly what they said, or ask them to say it again.";
 
-function refusal(outcome: Extract<ConfirmOutcome, { ok: false }>, utterance: string): string {
+function refusal(outcome: Extract<ConfirmOutcome, { ok: false }>, utterance: string, currentId = ''): string {
   switch (outcome.reason) {
     case 'noDraft':
     case 'notReadBack':
       return 'REFUSED: There is no draft that was read back. Call a draft tool first.';
     case 'staleDraft':
-      return 'REFUSED: That draft id is out of date. Use the draft id from the most recent draft result.';
+      return `REFUSED: That draft id is out of date. The current draft is draftId="${currentId}". If the user's last words were a yes or a command to send it, call publish_draft with that draftId now; otherwise say nothing.`;
     case 'sameTurn':
-      return "REFUSED: The user hasn't answered the read-back yet. Wait for their answer.";
+      return "REFUSED: The user hasn't answered the read-back yet. Say nothing, and wait for their answer.";
     case 'notAffirmative':
       return `REFUSED: The user's reply to the read-back was not a plain yes ("${utterance}"), so nothing was published and the draft is unchanged. If they asked for a change, make it with edit_draft, which reads the new draft back. Otherwise ask whether to go ahead.`;
     case 'expired':
-      return "REREAD: The user's yes did not come right after the read-back, so the app read the draft aloud again and asked for a yes. Say nothing now. If the user's next reply is yes, call publish_draft again with the same draftId.";
     case 'wrongVerb':
-      return `REREAD: "${utterance}" doesn't fit this draft (for example "delete it" for a post), so nothing was published and the app read the draft aloud again. Say nothing now. If the user's next reply is a yes, call publish_draft again with the same draftId; if they want to throw it away, call discard_draft.`;
+    case 'notHeard': {
+      const why =
+        outcome.reason === 'expired'
+          ? "the yes didn't come right after a read-back"
+          : outcome.reason === 'notHeard'
+            ? "the user hadn't heard the whole read-back"
+            : `"${utterance}" doesn't fit this draft (for example "delete it" for a post)`;
+      if (outcome.then === 'keep') {
+        return `DRAFT_KEPT: Nothing was published, because ${why}. The app ${outcome.reread ? 'read the draft aloud again and ' : ''}told the user it keeps the draft and stops asking. Say nothing, and don't ask about the draft again. If they later say "post it" or "send it", call publish_draft with the same draftId.`;
+      }
+      return `${outcome.reread ? 'REREAD' : 'NOT_SENT_YET'}: Nothing was published, because ${why}. The app ${outcome.reread ? 'read the draft aloud again and ' : ''}told the user what to say to send it. Say nothing now. If they say "post it", "send it" or another command to send it, or yes, call publish_draft again with the same draftId; "cancel" means discard_draft.`;
+    }
     case 'alreadyPending':
-      return 'REFUSED: Something is already about to be sent. Wait five seconds or let the user say undo.';
+      return 'ALREADY_CONFIRMED: Something is already about to be sent, and the app told the user. Say nothing. If they say undo or stop, call undo.';
   }
 }
 
@@ -159,6 +179,19 @@ export function createToolHandlers(deps: AgentDeps) {
         cancel();
         resolve({ done: true, value });
       });
+    });
+
+  // Vapi can send a tool call before the final transcript of the words that prompted it; a confirmation waits a
+  // moment for them rather than being refused as said before the read-back.
+  const nextUtterance = (ms: number) =>
+    new Promise<void>((resolve) => {
+      const done = () => {
+        cancel();
+        off();
+        resolve();
+      };
+      const cancel = deps.schedule(done, ms);
+      const off = deps.conversation.onUtterance(done);
     });
 
   const request = (post: Post, detail: DetailLevel) => deps.description(post, detail).catch(() => null);
@@ -331,7 +364,7 @@ export function createToolHandlers(deps: AgentDeps) {
     history.touch(drafting.entry);
   };
 
-  const confirmed = (draft: Draft) => {
+  const confirmedDraft = (draft: Draft) => {
     const life = drafting ?? newLifecycle();
     drafting = null;
     life.sending = draft;
@@ -409,12 +442,38 @@ export function createToolHandlers(deps: AgentDeps) {
     const what = draft.kind === 'reply' && draft.target ? `reply to ${authorName(draft.target)}` : draft.kind;
     return ` Also tell them their ${what} is still waiting: they can say post it, or cancel.`;
   };
+  const confirmed = (announcement: string): ToolOutcome => ({
+    speak: announcement,
+    respond: false,
+    after: 'countdown',
+    result: "WAITING: The app told the user it sends in five seconds. Nothing has gone out yet. Say nothing. If they say undo or stop, call undo. The app will tell you when it is sent; until then, never say it was sent.",
+  });
+
+  // A refused confirmation, from publish_draft or from the user's own words.
+  const refusedOutcome = (outcome: Extract<ConfirmOutcome, { ok: false }>, utterance: string, draftId: string): ToolOutcome => {
+    if ('speak' in outcome) return { speak: outcome.speak, readBack: outcome.reread ? draftId : undefined, respond: false, result: refusal(outcome, utterance), refused: outcome.reason };
+    return { respond: outcome.reason !== 'alreadyPending' && outcome.reason !== 'sameTurn', result: refusal(outcome, utterance, publisher.currentDraft?.id), refused: outcome.reason };
+  };
+
+  // A reply or repost drafted on a post that is no longer in focus is dropped before anything can confirm it.
+  const leave = (post: Post | null) => {
+    const dropped = publisher.contextChanged('focus', post?.uri ?? null);
+    return dropped ? droppedOf(dropped) : null;
+  };
+  const droppedOutcome = (speak: string): ToolOutcome => ({
+    speak,
+    respond: false,
+    refused: 'leftTarget',
+    result:
+      'DROPPED: The pending reply or repost was for a post that is no longer in focus, so the app dropped it, sent nothing and told the user. If the user asked to reply to or repost the post in focus now, call the draft tool for that post; otherwise say nothing.',
+  });
 
   function draftResult(outcome: DraftOutcome): ToolOutcome {
     drafted();
     if (outcome.ok) {
       return {
         speak: outcome.readBack,
+        readBack: outcome.draft.id,
         respond: false,
         result: `DRAFT_READ_BACK draftId="${outcome.draft.id}": The app read the draft aloud and asked for a yes. Say nothing now. If the user's next reply is yes, call publish_draft with this draftId. If they want changes, use edit_draft or discard_draft.`,
       };
@@ -442,9 +501,14 @@ export function createToolHandlers(deps: AgentDeps) {
   async function run(name: string, args: Record<string, unknown>): Promise<ToolOutcome> {
     const tool = name as ToolName;
     if (ACCOUNT_TOOLS.has(tool) && !deps.account()) return { respond: true, result: NOT_SIGNED_IN };
+    // Vapi can send a tool call before the final transcript of the words that prompted it, so a call right after a
+    // read-back waits a moment for them rather than being taken for the model acting on its own.
+    const readBackTurn = publisher.currentDraft?.readBackTurn;
+    if (readBackTurn != null && deps.conversation.turn() <= readBackTurn) await nextUtterance(TRANSCRIPT_WAIT_MS);
     const focus = deps.focused();
     const turn = deps.conversation.turn();
     const text = typeof args.text === 'string' ? args.text : '';
+    if (!answersReadBack.has(tool) && publisher.awaitingAnswer && publisher.currentDraft?.readBackTurn === turn) return { respond: false, result: WAITING_FOR_ANSWER, refused: 'awaitingAnswer' };
     if (tool !== 'publish_draft') publisher.interrupt();
 
     switch (tool) {
@@ -477,8 +541,11 @@ export function createToolHandlers(deps: AgentDeps) {
           return { speak, respond: false, result: `NOT_MOVED (${outcome}): The app told the user. Focus did not change.` };
         }
         const settings = deps.settings.get();
+        const dropped = leave(post);
+        const kept = !dropped && publisher.currentDraft?.readBackTurn === turn - 1 ? agentMessages.draftKept : null;
+        const before = dropped ?? kept;
         return {
-          speak: narrateForFeed(post, settings, usesDescriptions(settings.mode) ? partsNow(post, detailFor(settings.mode, settings)) : null, deps.now()),
+          speak: (before ? `${before} ` : '') + narrateForFeed(post, settings, usesDescriptions(settings.mode) ? partsNow(post, detailFor(settings.mode, settings)) : null, deps.now()),
           respond: false,
           result: `MOVED: The app read the new post aloud. Don't repeat it. The post in focus is now: ${describeFocus(post, null, deps.now())}`,
         };
@@ -538,19 +605,14 @@ export function createToolHandlers(deps: AgentDeps) {
         drafting = null;
         return { respond: true, result: publisher.discard() ? 'DISCARDED: The draft is gone and nothing was published. Confirm briefly.' : 'NO_DRAFT: There was no draft.' };
       case 'publish_draft': {
+        const dropped = leave(focus);
+        if (dropped) return droppedOutcome(dropped);
         const utterance = deps.conversation.lastUtterance();
-        const outcome = publisher.confirm(typeof args.draftId === 'string' ? args.draftId : '', turn, utterance);
-        if (!outcome.ok && (outcome.reason === 'expired' || outcome.reason === 'wrongVerb')) {
-          return { speak: outcome.readBack, respond: false, result: refusal(outcome, utterance), refused: outcome.reason };
-        }
-        if (!outcome.ok) return { respond: true, result: refusal(outcome, utterance), refused: outcome.reason };
-        confirmed(outcome.draft);
-        return {
-          speak: outcome.announcement,
-          respond: false,
-          after: 'countdown',
-          result: 'WAITING: The app told the user it sends in five seconds. Say nothing. If they say undo or stop, call undo. The app will tell you when it is sent.',
-        };
+        const draftId = typeof args.draftId === 'string' ? args.draftId : '';
+        const outcome = publisher.confirm(draftId, turn, utterance);
+        if (!outcome.ok) return refusedOutcome(outcome, utterance, draftId);
+        confirmedDraft(outcome.draft);
+        return confirmed(outcome.announcement);
       }
       case 'undo': {
         if (turn === undoneTurn) return { respond: false, result: 'ALREADY_UNDONE: The app already handled that undo and tells the user what happened. Say nothing.' };
@@ -728,7 +790,7 @@ export function createToolHandlers(deps: AgentDeps) {
         }
         return { kind: 'undone', speak: undone.speak ?? agentMessages.undone, message: 'The user said undo during the five seconds. The app stopped it, nothing was sent, and it told them, including anything newer that is still there. Say nothing.' };
       }
-      if (isAffirmative(utterance, busy.kind) || ACKNOWLEDGEMENT.test(utterance)) return null;
+      if (isAffirmative(utterance, busy.kind) || isCommand(utterance, busy.kind) || ACKNOWLEDGEMENT.test(withoutVocative(utterance))) return null;
       const held = publisher.hold(deps.conversation.turn());
       if (!held) return null;
       const slot = slots.get(held.draft);
@@ -741,8 +803,40 @@ export function createToolHandlers(deps: AgentDeps) {
       return {
         kind: 'held',
         speak: `${agentMessages.held} ${held.readBack}`,
+        readBack: held.draft.id,
         message: `HELD draftId="${held.draft.id}": The user said "${utterance}" during the five seconds, so nothing was sent and the app read the draft aloud again. If they asked for a change, make it with edit_draft, which reads the new draft back. Otherwise say nothing, and if their next reply is a yes, call publish_draft with this draftId.`,
       };
+    },
+    // Every final user transcript, already added to the conversation. When it confirms the current draft (a yes right
+    // after its read-back, or a command once it has been heard in full), the app confirms it itself rather than
+    // waiting for the model to call publish_draft, which on a real call it didn't always do, while saying it had.
+    // A yes over a read-back that was cut off gets it read again, from here too.
+    confirmFromWords(utterance: string): ToolOutcome | null {
+      if (publisher.busy) return null;
+      const dropped = leave(deps.focused());
+      if (dropped) return droppedOutcome(dropped);
+      const draft = publisher.currentDraft;
+      if (!draft) return null;
+      const turn = deps.conversation.turn();
+      const answers = publisher.awaitingAnswer && draft.readBackTurn === turn - 1 && isAffirmative(utterance, draft.kind);
+      const commands = draft.heardAt != null && turn > draft.heardAt && isCommand(utterance, draft.kind);
+      if (!answers && !commands) return null;
+      const outcome = publisher.confirm(draft.id, turn, utterance);
+      if (!outcome.ok) return 'speak' in outcome ? refusedOutcome(outcome, utterance, draft.id) : null;
+      confirmedDraft(outcome.draft);
+      return { ...confirmed(outcome.announcement), result: `CONFIRMED draftId="${draft.id}": The user's words confirmed it, so the app told them it sends in five seconds. Nothing has gone out yet. Say nothing, and don't call publish_draft. If they say undo or stop, call undo. The app will tell you when it is sent; until then, never say it was sent.` };
+    },
+    // Focus moved to this post (a swipe, or go_to_post). What to tell the user when a reply or repost was dropped.
+    focusMoved(post: Post | null): string | null {
+      return leave(post);
+    },
+    // The conversation is over: see Publisher.close.
+    close() {
+      return publisher.close();
+    },
+    // The agent's voice spoke this draft's read-back to the end.
+    readBackHeard(draftId: string): void {
+      publisher.readBackHeard(draftId, deps.conversation.turn());
     },
     // The assistant said something of its own (not the app's words), which voids a read-back the user hasn't answered.
     assistantSaid(): boolean {
