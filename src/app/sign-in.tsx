@@ -1,163 +1,151 @@
-import { useEffect, useRef, useState, type ComponentRef } from 'react';
-import { KeyboardAvoidingView, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { useCallback, useState } from 'react';
 
-import { useScreenReader } from '@/accessibility/useScreenReader';
+import { authMessages } from '@/auth/messages';
 import { haptic } from '@/feedback/haptics';
 import { useNarrator } from '@/narration/useNarrator';
+import { AppPasswordSignIn } from '@/screens/auth/AppPasswordSignIn';
+import { AuthButton, AuthScreen, Heading, Status, afterSpeech, useStatus } from '@/screens/auth/AuthControls';
+import { HandleSignIn } from '@/screens/auth/HandleSignIn';
 import { returnToFeed } from '@/session/returnToFeed';
 import { useSession } from '@/session/SessionContext';
-import { colors, type } from '@/theme';
+import type { SignInResult, SocialAccount } from '@/social/types';
 
-const SPOKEN_INTRO =
-  'Sign in to Bluesky. There are two text fields, your handle and your app password, followed by a sign in button and a button to continue without signing in. Turn on VoiceOver or TalkBack to fill in the fields.';
+type Mode = 'choices' | 'handle' | 'appPassword' | 'create' | 'account' | 'confirmSignOut';
 
-export default function SignIn() {
-  const { account, provider, signIn, signOut, continueAsGuest } = useSession();
+const SIGNED_IN_SPEECH_MAX_MS = 4000;
+
+export default function SignInScreen() {
+  const { account, expiredAccount, createAccount, continueAsGuest, signOut } = useSession();
   const narrator = useNarrator();
-  const screenReader = useScreenReader();
-  const passwordInput = useRef<ComponentRef<typeof TextInput>>(null);
-  const [handle, setHandle] = useState('');
-  const [password, setPassword] = useState('');
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [mode, setMode] = useState<Mode>(() => (account && !expiredAccount ? 'account' : 'choices'));
+  const [handle, setHandle] = useState(expiredAccount?.handle ?? '');
+  const [notice, setNotice] = useState(expiredAccount ? authMessages.expired : '');
+  const [createStatus, setCreateStatus] = useState({ message: authMessages.createAccount, error: false, busy: false });
 
-  useEffect(() => {
-    if (!account) narrator.speak(screenReader ? `Sign in to ${provider.name}.` : SPOKEN_INTRO);
-    return () => narrator.stop();
-  }, [narrator, screenReader, account, provider]);
-
-  const fail = (message: string) => {
-    haptic('edge');
-    setError(message);
-    narrator.speak(message);
-  };
-
-  const submit = async () => {
-    if (busy) return;
-    if (!handle.trim() || !password) return fail('Enter your handle and your app password.');
-    setBusy(true);
-    setError(null);
-    try {
-      await signIn(handle, password);
+  const finish = useCallback(
+    async (_account: SocialAccount, message: string) => {
       haptic('next');
+      narrator.speak(message);
+      await afterSpeech(narrator, SIGNED_IN_SPEECH_MAX_MS);
       returnToFeed();
-    } catch {
-      fail(`Could not sign in to ${provider.name}. Check your handle and app password, then try again.`);
-    } finally {
-      setBusy(false);
-    }
+    },
+    [narrator],
+  );
+
+  const message =
+    mode === 'choices'
+      ? `${notice} ${authMessages.choices}`.trim()
+      : mode === 'create'
+        ? createStatus.message
+        : mode === 'account' && account
+          ? authMessages.signedIn(account)
+          : mode === 'confirmSignOut'
+            ? authMessages.confirmSignOut
+            : '';
+  const statusRef = useStatus(message, { key: mode });
+
+  if (mode === 'handle') {
+    return (
+      <HandleSignIn
+        initialHandle={handle}
+        onSignedIn={finish}
+        onAppPassword={(entered) => {
+          setHandle(entered);
+          setMode('appPassword');
+        }}
+        onBack={() => setMode('choices')}
+      />
+    );
+  }
+
+  if (mode === 'appPassword') return <AppPasswordSignIn initialHandle={handle} onSignedIn={finish} onBack={() => setMode('handle')} />;
+
+  const openSignUp = async () => {
+    setCreateStatus((current) => ({ ...current, busy: true }));
+    const result: SignInResult = await createAccount();
+    if (result.status === 'success') return finish(result.account, authMessages.signedIn(result.account));
+    haptic('edge');
+    setCreateStatus({
+      busy: false,
+      error: result.status === 'failed',
+      message:
+        result.status === 'cancelled'
+          ? authMessages.createCancelled
+          : result.reason === 'network'
+            ? authMessages.createNetworkFailure
+            : authMessages.createServerFailure,
+    });
   };
 
-  const leave = (action?: () => void | Promise<void>) => async () => {
-    haptic('next');
-    await action?.();
-    returnToFeed();
-  };
+  if (mode === 'create') {
+    return (
+      <AuthScreen onEscape={() => setMode('choices')}>
+        <Heading>Create an account</Heading>
+        <Status message={createStatus.message} error={createStatus.error} statusRef={statusRef} />
+        <AuthButton
+          label={createStatus.busy ? 'Opening Bluesky' : 'Open Bluesky sign-up'}
+          hint="Opens Bluesky's own sign-up page in a secure sheet. You come back here signed in."
+          onPress={openSignUp}
+          busy={createStatus.busy}
+          primary
+        />
+        <AuthButton label="Back" hint="Returns to the first screen." onPress={() => setMode('choices')} />
+      </AuthScreen>
+    );
+  }
+
+  if (mode === 'account' && account) {
+    return (
+      <AuthScreen onEscape={returnToFeed}>
+        <Heading>Account</Heading>
+        <Status message={message} statusRef={statusRef} />
+        <AuthButton label="Back to the feed" hint="Returns to your timeline." onPress={returnToFeed} primary />
+        <AuthButton label="Sign out" hint="Asks before signing you out of Bluesky on this device." onPress={() => setMode('confirmSignOut')} />
+      </AuthScreen>
+    );
+  }
+
+  if (mode === 'confirmSignOut') {
+    return (
+      <AuthScreen onEscape={() => setMode('account')}>
+        <Heading>Sign out?</Heading>
+        <Status message={message} statusRef={statusRef} />
+        <AuthButton
+          label="Sign out"
+          hint="Removes your Bluesky sign-in and its keys from this device."
+          onPress={async () => {
+            await signOut();
+            haptic('next');
+            setNotice(authMessages.signedOut);
+            setMode('choices');
+          }}
+          primary
+        />
+        <AuthButton label="Cancel" hint="Keeps you signed in." onPress={() => setMode('account')} />
+      </AuthScreen>
+    );
+  }
 
   return (
-    <SafeAreaView style={styles.screen}>
-      <KeyboardAvoidingView style={styles.screen} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
-        <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
-          <Text style={styles.title} accessibilityRole="header">
-            {account ? 'Account' : `Sign in to ${provider.name}`}
-          </Text>
-          {account ? (
-            <>
-              <Text style={styles.body}>Signed in as @{account.handle}</Text>
-              <Button label="Back to the feed" hint="Returns to your timeline." onPress={leave()} primary />
-              <Button label="Sign out" hint={`Signs out of ${provider.name} on this device.`} onPress={leave(signOut)} />
-            </>
-          ) : (
-            <>
-              <Text style={styles.label} nativeID="handle-label">
-                Handle
-              </Text>
-              <TextInput
-                style={styles.input}
-                value={handle}
-                onChangeText={setHandle}
-                accessibilityLabel="Handle"
-                accessibilityHint="Your Bluesky handle, for example alice dot bsky dot social."
-                accessibilityLabelledBy="handle-label"
-                placeholder="alice.bsky.social"
-                placeholderTextColor={colors.muted}
-                autoCapitalize="none"
-                autoCorrect={false}
-                autoComplete="username"
-                textContentType="username"
-                keyboardType="email-address"
-                returnKeyType="next"
-                onSubmitEditing={() => passwordInput.current?.focus()}
-                maxFontSizeMultiplier={type.maxScale}
-              />
-              <Text style={styles.label} nativeID="password-label">
-                App password
-              </Text>
-              <TextInput
-                ref={passwordInput}
-                style={styles.input}
-                value={password}
-                onChangeText={setPassword}
-                accessibilityLabel="App password"
-                accessibilityHint="An app password created in Bluesky settings under Privacy and security. Not your main password."
-                accessibilityLabelledBy="password-label"
-                placeholder="xxxx-xxxx-xxxx-xxxx"
-                placeholderTextColor={colors.muted}
-                secureTextEntry
-                autoCapitalize="none"
-                autoCorrect={false}
-                autoComplete="current-password"
-                textContentType="password"
-                returnKeyType="go"
-                onSubmitEditing={submit}
-                maxFontSizeMultiplier={type.maxScale}
-              />
-              {error ? (
-                <Text style={styles.error} accessibilityRole="alert" accessibilityLiveRegion="assertive">
-                  {error}
-                </Text>
-              ) : null}
-              <Button label={busy ? 'Signing in' : 'Sign in'} hint="Signs in and opens your timeline." onPress={submit} disabled={busy} primary />
-              <Button
-                label="Continue without signing in"
-                hint="Opens a public demo feed. You can sign in later from the agent screen."
-                onPress={leave(continueAsGuest)}
-              />
-            </>
-          )}
-        </ScrollView>
-      </KeyboardAvoidingView>
-    </SafeAreaView>
+    <AuthScreen>
+      <Heading>Welcome to Juno</Heading>
+      <Status message={message} statusRef={statusRef} />
+      <AuthButton
+        label="Sign in"
+        hint="Sign in with your Bluesky handle. You enter your password on Bluesky's own page, never in Juno."
+        onPress={() => setMode('handle')}
+        primary
+      />
+      <AuthButton label="Create an account" hint="Explains what Bluesky's sign-up asks for, then opens it." onPress={() => setMode('create')} />
+      <AuthButton
+        label="Listen without signing in"
+        hint="Plays a public feed. You can sign in later from the agent screen."
+        onPress={async () => {
+          haptic('next');
+          await continueAsGuest();
+          returnToFeed();
+        }}
+      />
+    </AuthScreen>
   );
 }
-
-function Button({ label, hint, onPress, primary, disabled }: { label: string; hint: string; onPress(): void; primary?: boolean; disabled?: boolean }) {
-  return (
-    <Pressable
-      style={[styles.button, primary && styles.primary]}
-      accessibilityRole="button"
-      accessibilityLabel={label}
-      accessibilityHint={hint}
-      accessibilityState={{ disabled: !!disabled, busy: !!disabled }}
-      disabled={disabled}
-      onPress={onPress}>
-      <Text style={[styles.buttonText, primary && { color: colors.onFocus }]} maxFontSizeMultiplier={type.maxScale}>
-        {label}
-      </Text>
-    </Pressable>
-  );
-}
-
-const styles = StyleSheet.create({
-  screen: { flex: 1, backgroundColor: colors.background },
-  content: { padding: 20, gap: 14, flexGrow: 1, justifyContent: 'center' },
-  title: { color: colors.focus, fontSize: 36, fontWeight: '800', marginBottom: 8 },
-  body: { color: colors.text, fontSize: type.title, fontWeight: '600' },
-  label: { color: colors.text, fontSize: type.title, fontWeight: '700' },
-  input: { color: colors.text, fontSize: type.title, fontWeight: '600', borderWidth: 3, borderColor: colors.text, borderRadius: 14, padding: 16, minHeight: 64 },
-  error: { color: colors.danger, fontSize: type.title, fontWeight: '700' },
-  button: { minHeight: 72, borderRadius: 16, borderWidth: 3, borderColor: colors.focus, alignItems: 'center', justifyContent: 'center', padding: 14 },
-  primary: { backgroundColor: colors.focus },
-  buttonText: { color: colors.focus, fontSize: type.title, fontWeight: '800', textAlign: 'center' },
-});

@@ -34,6 +34,7 @@ function fakeProvider(stored: boolean, restore: Promise<SocialAccount | null>): 
     name: 'Bluesky',
     hasStoredSession: async () => stored,
     restoreSession: jest.fn(() => restore),
+    onSessionExpired: () => () => undefined,
   } as unknown as SocialProvider;
 }
 

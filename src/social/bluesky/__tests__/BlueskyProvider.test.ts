@@ -2,6 +2,9 @@ import { createMemoryStore } from '@/storage/keyValueStore';
 
 import { BlueskyProvider } from '../BlueskyProvider';
 
+const FAKE_APP_KEY = 'fake-app-key';
+const signInWithKey = (provider: BlueskyProvider, identifier: string) => provider.signInWithAppPassword.call(provider, identifier, FAKE_APP_KEY);
+
 const feedItem = (n: number) => ({
   post: {
     uri: `at://post/${n}`,
@@ -26,6 +29,9 @@ jest.mock('@atproto/api', () => ({
   },
   AtpAgent: class {
     session: any = undefined;
+    get did() {
+      return this.session?.did;
+    }
     login = jest.fn(async ({ identifier }: { identifier: string }) => {
       this.session = { did: 'did:plc:me', handle: identifier, accessJwt: 'a', refreshJwt: 'r', active: true };
       this.options.persistSession?.('create', this.session);
@@ -82,7 +88,7 @@ describe('BlueskyProvider', () => {
 
   it('signs in, stores the session and reads the home timeline with the cursor', async () => {
     const { provider, store, agent } = setup();
-    expect(await provider.signIn(' @me.bsky.social ', 'app-password')).toEqual({ id: 'did:plc:me', handle: 'me.bsky.social' });
+    expect(await signInWithKey(provider, ' @me.bsky.social ')).toEqual({ id: 'did:plc:me', handle: 'me.bsky.social' });
     expect(JSON.parse((await store.get('bluesky.session'))!)).toMatchObject({ did: 'did:plc:me', refreshJwt: 'r' });
     const page = await provider.getTimeline({ cursor: 'abc' });
     expect(agent.getTimeline).toHaveBeenCalledWith({ cursor: 'abc', limit: 30 });
@@ -104,7 +110,7 @@ describe('BlueskyProvider', () => {
 
   it('clears the stored session on sign out', async () => {
     const { provider, store } = setup();
-    await provider.signIn('me.bsky.social', 'pw');
+    await signInWithKey(provider, 'me.bsky.social');
     await provider.signOut();
     expect(await store.get('bluesky.session')).toBeNull();
   });
@@ -153,7 +159,7 @@ describe('BlueskyProvider', () => {
   it("deletes a post and finds the signed-in user's latest own post, skipping reposts", async () => {
     const { provider, agent } = setup();
     expect(await provider.getMyLatestPost()).toBeNull();
-    await provider.signIn('me.bsky.social', 'pw');
+    await signInWithKey(provider, 'me.bsky.social');
     const latest = await provider.getMyLatestPost();
     expect(agent.getAuthorFeed).toHaveBeenCalledWith({ actor: 'did:plc:me', limit: 10, filter: 'posts_with_replies' });
     expect(latest?.uri).toBe('at://post/6');
@@ -176,7 +182,7 @@ describe('BlueskyProvider content filter', () => {
 
   it('skips adult posts in the signed-in timeline too', async () => {
     const { provider, agent } = setup();
-    await provider.signIn('me.bsky.social', 'pw');
+    await signInWithKey(provider, 'me.bsky.social');
     agent.getTimeline.mockResolvedValueOnce({ data: { feed: [labeled(1, 'nudity'), feedItem(2), labeled(3, 'graphic-media')], cursor: 'c' } });
     expect((await provider.getTimeline()).posts.map((post) => post.uri)).toEqual(['at://post/2']);
   });

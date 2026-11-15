@@ -9,6 +9,8 @@ const transformed = [
   '@react-navigation/.*',
   'react-native-svg',
   '@atproto/.*',
+  '@atproto-labs/.*',
+  '@noble/.*',
   'multiformats',
   'uint8arrays',
   '@ipld/.*',

@@ -22,7 +22,7 @@ function check(condition: boolean, what: string) {
 async function main() {
   if (!handle || !password) throw new Error('BLUESKY_TEST_HANDLE and BLUESKY_TEST_APP_PASSWORD are required');
   const provider = new BlueskyProvider({ store: createMemoryStore() });
-  const account = await provider.signIn(handle, password);
+  const account = await provider.signInWithAppPassword(handle, password);
   const conversation = new ConversationLog();
   const log: string[] = [];
   const notices: string[] = [];

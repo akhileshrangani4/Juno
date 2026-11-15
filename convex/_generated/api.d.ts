@@ -8,9 +8,12 @@
  * @module
  */
 
+import type * as http from "../http.js";
 import type * as memory from "../memory.js";
 import type * as memoryLimits from "../memoryLimits.js";
 import type * as memoryOwners from "../memoryOwners.js";
+import type * as oauth from "../oauth.js";
+import type * as oauthClientMetadata from "../oauthClientMetadata.js";
 import type * as postDescriptions from "../postDescriptions.js";
 import type * as users from "../users.js";
 
@@ -21,9 +24,12 @@ import type {
 } from "convex/server";
 
 declare const fullApi: ApiFromModules<{
+  http: typeof http;
   memory: typeof memory;
   memoryLimits: typeof memoryLimits;
   memoryOwners: typeof memoryOwners;
+  oauth: typeof oauth;
+  oauthClientMetadata: typeof oauthClientMetadata;
   postDescriptions: typeof postDescriptions;
   users: typeof users;
 }>;
