@@ -76,7 +76,7 @@ describe('agent context and config', () => {
     expect(assistant.silenceTimeoutSeconds).toBe(SILENCE_TIMEOUT_SECONDS);
     expect(SILENCE_TIMEOUT_SECONDS).toBe(30);
     expect(assistant.maxDurationSeconds).toBe(MAX_DURATION_SECONDS);
-    expect(assistant.clientMessages).toEqual(expect.arrayContaining(['tool-calls', 'transcript', 'status-update', 'speech-update']));
+    expect(assistant.clientMessages).toEqual(expect.arrayContaining(['tool-calls', 'transcript', 'status-update', 'speech-update', 'assistant.speechStarted']));
     expect(assistant.model.tools.map((tool) => tool.function.name)).toEqual(toolNames);
     for (const tool of assistant.model.tools) expect(tool).not.toHaveProperty('server');
     expect(assistant.model.messages[0].content).toContain('The post in focus: Author: Maya');

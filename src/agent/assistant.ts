@@ -9,7 +9,8 @@ export const SILENCE_TIMEOUT_SECONDS = 30;
 export const MAX_DURATION_SECONDS = 600;
 export const FIRST_MESSAGE = "I'm listening.";
 
-export const clientMessages = ['tool-calls', 'transcript', 'status-update', 'speech-update'] as const;
+// assistant.speechStarted names who is speaking each turn (the app's say() or the model); see agentVoice.ts.
+export const clientMessages = ['tool-calls', 'transcript', 'status-update', 'speech-update', 'assistant.speechStarted'] as const;
 
 export function buildAssistant(context: PromptContext) {
   return {

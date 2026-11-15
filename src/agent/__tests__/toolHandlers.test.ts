@@ -281,6 +281,29 @@ describe('agent tools', () => {
     expect((await handlers.run('edit_draft', { find: 'Hello from my new app', replace: 'goodbye' })).speak).toBe('Posting to your followers: goodbye. Shall I post it?');
   });
 
+  it('lets a plain thanks or okay during the five seconds pass without holding the send', async () => {
+    const { handlers, say, provider, scheduler } = setup();
+    say('post hello from my new app');
+    const draft = await handlers.run('draft_post', { text: 'Hello from my new app.' });
+    say('yes');
+    await handlers.run('publish_draft', { draftId: draftIdOf(draft.result) });
+    handlers.publisher.startCountdown();
+    for (const said of ['thanks', 'Thank you!', 'Okay.', 'great', 'Great, thanks.']) {
+      say(said);
+      expect([said, handlers.heard(said)]).toEqual([said, null]);
+    }
+    await scheduler.advance(UNDO_WINDOW_MS);
+    expect(provider.createPost).toHaveBeenCalledTimes(1);
+
+    say('post second try');
+    const again = await handlers.run('draft_post', { text: 'Second try.' });
+    say('yes');
+    await handlers.run('publish_draft', { draftId: draftIdOf(again.result) });
+    handlers.publisher.startCountdown();
+    say('thanks, but add a smiley');
+    expect(handlers.heard('thanks, but add a smiley')).toMatchObject({ kind: 'held' });
+  });
+
   it('says truthfully that a post went out when removing it after an undo fails, and keeps it undoable', async () => {
     let finishSend: () => void = () => undefined;
     const provider = makeProvider({
