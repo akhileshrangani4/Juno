@@ -2,6 +2,8 @@ import { act, render } from '@testing-library/react-native';
 import type { ReactNode } from 'react';
 
 import type { Post } from '@/social/types';
+import { haptic } from '@/feedback/haptics';
+import { messages } from '@/narration/buildNarration';
 import { makePost } from '@/testing/fixtures';
 
 import { GESTURES } from '../gestures';
@@ -134,8 +136,7 @@ describe('stuck hints on the feed', () => {
     expect(mockNarrator.speaking()).toBe(false);
 
     await strokes(1);
-    expect(mockSpeech.log).toEqual(['Gesture not recognized.']);
-    await finishSpeech();
+    expect(mockSpeech.log).toEqual([]);
     await strokes(2);
     expect(mockNarrator.speaking()).toBe(false);
     expect(spokenHints()).toEqual([]);
@@ -145,6 +146,20 @@ describe('stuck hints on the feed', () => {
     expect(spokenHints()).toEqual([]);
     await finishSpeech();
     expect(spokenHints()).toEqual([GESTURES[2].hint]);
+  });
+
+  it('give the haptic and the on-screen hint but no speech for a stroke that ends while the earcon plays', async () => {
+    mockFeed.post = withImage();
+    mockEarcon.ms = 160;
+    const screen = await render(<MainScreen />);
+    await act(async () => undefined);
+    await act(async () => jest.advanceTimersByTime(100));
+    await strokes(1);
+    expect(haptic).toHaveBeenCalledWith('unrecognized');
+    expect(screen.getByText(messages.unrecognized)).toBeTruthy();
+    expect(mockNarrator.speak).not.toHaveBeenCalled();
+    await act(async () => jest.advanceTimersByTime(60));
+    expect(mockSpeech.log).toEqual([expect.stringContaining('Hello world')]);
   });
 
   it('give no idle hint while the post is still being read', async () => {
