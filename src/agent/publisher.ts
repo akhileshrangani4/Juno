@@ -1,5 +1,6 @@
 import { countGraphemes } from 'unicode-segmenter/grapheme';
 
+import { APP_NAME } from '@/appName';
 import { analyzeText, authorName, formatAge, tagList } from '@/narration/buildNarration';
 import type { Post } from '@/social/types';
 
@@ -7,6 +8,14 @@ import type { Post } from '@/social/types';
 // 1. A draft step builds exactly what will be published and to whom; the app reads it aloud itself.
 // 2. Publishing is accepted only for that draft, and only when the user's very next utterance after the read-back
 //    is a plain yes and nothing else. A later turn, or any other tool call in between, needs a new read-back.
+//    Or by an explicit command that names the action ("post it"), once that exact draft has been read back to the
+//    end and not changed since: a command answers no one's question, so it can't be a yes meant for the model.
+//    Every way of confirming, the yes included, needs that exact draft's read-back heard to the end; a yes over a
+//    read-back that was cut off gets it read again.
+//    A refused confirmation says what to say instead, once; after a second, the draft is kept and nobody asks again.
+//    A reply or repost is bound to the post it was drafted on: once focus leaves that post, the draft is dropped, so
+//    "send it" or "repost this" never acts on a post the user has moved away from. A new post has no target.
+//    Once the conversation is over, nothing can be confirmed and nothing counting down is sent.
 // 3. After the yes, nothing is sent for UNDO_WINDOW_MS; undo in that window cancels it with nothing sent.
 // 4. An undo while the send is in flight is held for that send: whatever went out is removed when it returns.
 
@@ -22,8 +31,14 @@ export type Draft = {
   parts: string[];
   split: boolean;
   target: Post | null;
+  // What the draft is bound to, by kind of context: a reply or repost to the post in focus ({ focus: uri }). When
+  // that context changes, the draft is dropped (Publisher.contextChanged), so no read-back of it counts any more.
+  bound: Record<string, string>;
   readBackTurn: number | null;
   voided?: boolean;
+  // The turn in which the user had heard its read-back to the end, as reported by the agent's voice.
+  heardAt?: number | null;
+  refusals?: number;
 };
 
 export type DraftOutcome =
@@ -34,7 +49,7 @@ export type DraftOutcome =
 export type ConfirmOutcome =
   | { ok: true; draft: Draft; announcement: string }
   | { ok: false; reason: 'noDraft' | 'staleDraft' | 'notReadBack' | 'sameTurn' | 'notAffirmative' | 'alreadyPending' }
-  | { ok: false; reason: 'expired' | 'wrongVerb'; readBack: string };
+  | { ok: false; reason: 'expired' | 'wrongVerb' | 'notHeard'; speak: string; then: 'instruct' | 'keep'; reread: boolean };
 
 // stopped: cancelled inside the five seconds, nothing sent. sending: the send is in flight and removes what it sent.
 export type UndoOutcome = { state: 'stopped' | 'sending'; draft: Draft } | null;
@@ -63,18 +78,60 @@ const FITTING_VERBS: Record<DraftKind, string[]> = {
   delete: ['delete', 'remove'],
 };
 
-// The verbs in an utterance made only of assent, or null when it is anything more than assent.
-function assentVerbs(utterance: string): string[] | null {
-  if (utterance.includes('?')) return null;
-  const said = utterance
+// The app's name said to the agent as a form of address, at the start or end or set off by commas: "Juno, yes",
+// "post it Juno", "okay, Juno, post it". It is dropped before the checks, so those count as their bare forms, while
+// "yes, Juno, but change it" is still more than assent and "Juno?" alone is still a question.
+const VOCATIVE = new RegExp(`^\\s*${APP_NAME}\\b[\\s,.!]*|[\\s,]*\\b${APP_NAME}[\\s.!]*$|,\\s*${APP_NAME}\\s*(?=,)`, 'gi');
+
+export const withoutVocative = (utterance: string) => utterance.replace(VOCATIVE, ' ').trim();
+
+const plainWords = (utterance: string) =>
+  withoutVocative(utterance)
     .toLowerCase()
     .replace(/[’]/g, "'")
     .replace(/[^a-z' ]+/g, ' ')
     .replace(/\s+/g, ' ')
     .trim();
+
+// The verbs in an utterance made only of assent, or null when it is anything more than assent.
+function assentVerbs(utterance: string): string[] | null {
+  if (utterance.includes('?')) return null;
+  const said = plainWords(utterance);
   if (!CONFIRMATION.test(said) || /^(?:please ?)+$/.test(said)) return null;
   return said.match(new RegExp(`\\b${VERB}\\b`, 'g')) ?? [];
 }
+
+// An explicit command naming the action: a verb that fits the draft, then "it", "that", "this", "the post", "the
+// reply", "my post" or "my reply", optionally led by "yes", "yeah", "okay", "ok", "sure", "please", "just", "now" or
+// "go ahead and", and followed by "now", "please" or "then". "Post it", "send it now", "okay, publish it", "go ahead
+// and share it", "repost this", "delete my post". Nothing else: no negation, no question, no change attached. On real
+// calls Vapi's transcriber heard "post it" as "host it", so "host" counts as "post" here, and nowhere else.
+const COMMAND_VERBS: Record<DraftKind, string[]> = {
+  post: ['post', 'host', 'send', 'publish', 'share'],
+  reply: ['post', 'host', 'send', 'publish', 'share', 'reply'],
+  repost: ['repost'],
+  delete: ['delete', 'remove'],
+};
+const COMMAND = /^(?:(?:yes|yeah|okay|ok|sure|please|just|now|go ahead and) )*(post|host|send|publish|share|reply|repost|delete|remove) (?:it|that|this|the post|the reply|my post|my reply)(?: (?:now|please|then))*$/;
+
+export function isCommand(utterance: string, kind: DraftKind): boolean {
+  if (utterance.includes('?')) return false;
+  const verb = plainWords(utterance).match(COMMAND)?.[1];
+  return !!verb && COMMAND_VERBS[kind].includes(verb);
+}
+
+const COMMANDS: Record<DraftKind, { say: string; does: string }> = {
+  post: { say: 'post it', does: 'send it' },
+  reply: { say: 'send it', does: 'send the reply' },
+  repost: { say: 'repost it', does: 'repost it' },
+  delete: { say: 'delete it', does: 'delete it' },
+};
+
+// After the first refused confirmation: what to say instead.
+export const instructionOf = (kind: DraftKind) => `Say "${COMMANDS[kind].say}" to ${COMMANDS[kind].does}, or "cancel".`;
+
+// After the second: the draft stays, and the app stops asking.
+export const keptOf = (kind: DraftKind) => `I'll keep it as a draft and stop asking. Say "${COMMANDS[kind].say}" whenever you're ready, or "cancel".`;
 
 export function isAffirmative(utterance: string, kind?: DraftKind): boolean {
   const verbs = assentVerbs(utterance);
@@ -133,8 +190,9 @@ const VERBS: Record<DraftKind, { doing: string; question: string }> = {
 
 const asSentence = (text: string) => (/[.!?…]['")\]]*$/.test(text.trim()) ? text.trim() : `${text.trim()}.`);
 
-export function readBackOf(draft: Draft, now = new Date()): string {
-  const { question } = VERBS[draft.kind];
+// ask ends the read-back: the question by default, or what to say after a refused confirmation.
+export function readBackOf(draft: Draft, now = new Date(), ask = VERBS[draft.kind].question): string {
+  const question = ask;
   const body =
     draft.parts.length > 1
       ? `This will be a thread of ${draft.parts.length} posts. ${draft.parts.map((part, i) => `Post ${i + 1}: ${asSentence(part)}`).join(' ')}`
@@ -152,14 +210,35 @@ export function readBackOf(draft: Draft, now = new Date()): string {
   }
 }
 
+// A reply or repost acts on the post in focus when it was drafted; a delete acts on the user's own last post, wherever
+// focus is, and a new post on nothing.
+const boundTo = (kind: DraftKind, target: Post | null): Record<string, string> => ((kind === 'reply' || kind === 'repost') && target ? { focus: target.uri } : {});
+
+// Names what goes and to whom, since the user may have heard the read-back a while ago.
 export function announcementOf(draft: Draft): string {
-  return `${VERBS[draft.kind].doing} in five seconds. Say undo to stop it.`;
+  const who = draft.target ? authorName(draft.target) : '';
+  const what: Record<DraftKind, string> = {
+    post: 'Posting',
+    reply: `Sending your reply to ${who}`,
+    repost: `Reposting ${who}'s post`,
+    delete: 'Deleting your post',
+  };
+  return `${what[draft.kind]} in five seconds. Say undo to stop it.`;
+}
+
+// Said when a draft was dropped because what it was bound to changed.
+export function droppedOf(draft: Draft): string {
+  const who = draft.target ? authorName(draft.target) : 'that post';
+  if (draft.kind === 'reply') return `I dropped your reply to ${who}. Nothing was sent.`;
+  if (draft.kind === 'repost') return `I dropped the repost of ${who}'s post. Nothing was sent.`;
+  return 'I dropped your draft. Nothing was sent.';
 }
 
 export class Publisher {
   private draft: Draft | null = null;
   private pending: { draft: Draft; cancel: (() => void) | null } | null = null;
   private sending: { draft: Draft; undoRequested: boolean } | null = null;
+  private closed = false;
 
   constructor(private readonly deps: Deps) {}
 
@@ -183,11 +262,11 @@ export class Publisher {
   draftText(kind: 'post' | 'reply', text: string, target: Post | null, turn: number): DraftOutcome {
     const clean = text.trim();
     if (!clean) return { ok: false, reason: 'empty' };
-    return this.check({ id: this.deps.newId(), kind, text: clean, parts: [clean], split: false, target, readBackTurn: null }, turn);
+    return this.check({ id: this.deps.newId(), kind, text: clean, parts: [clean], split: false, target, bound: boundTo(kind, target), readBackTurn: null }, turn);
   }
 
   draftAction(kind: 'repost' | 'delete', target: Post, turn: number): DraftOutcome {
-    return this.check({ id: this.deps.newId(), kind, text: '', parts: [], split: false, target, readBackTurn: null }, turn);
+    return this.check({ id: this.deps.newId(), kind, text: '', parts: [], split: false, target, bound: boundTo(kind, target), readBackTurn: null }, turn);
   }
 
   edit(find: string, replace: string, turn: number): DraftOutcome {
@@ -240,16 +319,55 @@ export class Publisher {
     return { draft, readBack: this.readBackAgain(draft, turn) };
   }
 
+  // A context the draft may be bound to now has this value (context 'focus': the uri of the post in focus). A draft
+  // bound to another value of it is dropped and returned.
+  contextChanged(context: string, value: string | null): Draft | null {
+    const draft = this.draft;
+    const bound = draft?.bound[context];
+    if (!draft || bound === undefined || bound === value) return null;
+    this.draft = null;
+    return draft;
+  }
+
+  // The conversation is over: nothing more is confirmed, a countdown is stopped, and the draft is dropped unsent.
+  close(): { cancelled: Draft | null; dropped: Draft | null } {
+    this.closed = true;
+    const dropped = this.draft;
+    this.draft = null;
+    return { cancelled: this.cancelPending(), dropped };
+  }
+
   confirm(draftId: string, turn: number, utterance: string): ConfirmOutcome {
     if (this.busy) return { ok: false, reason: 'alreadyPending' };
     const draft = this.draft;
-    if (!draft) return { ok: false, reason: 'noDraft' };
+    if (!draft || this.closed) return { ok: false, reason: 'noDraft' };
     if (draft.id !== draftId) return { ok: false, reason: 'staleDraft' };
+    if (draft.heardAt != null && turn > draft.heardAt && isCommand(utterance, draft.kind)) return this.accept(draft);
     if (draft.readBackTurn === null) return { ok: false, reason: 'notReadBack' };
     if (turn <= draft.readBackTurn) return { ok: false, reason: 'sameTurn' };
-    if (draft.voided || turn > draft.readBackTurn + 1) return { ok: false, reason: 'expired', readBack: this.readBackAgain(draft, turn) };
+    if (draft.voided || turn > draft.readBackTurn + 1) return this.refuse(draft, 'expired', turn);
     if (!isAffirmative(utterance)) return { ok: false, reason: 'notAffirmative' };
-    if (!isAffirmative(utterance, draft.kind)) return { ok: false, reason: 'wrongVerb', readBack: this.readBackAgain(draft, turn) };
+    if (!isAffirmative(utterance, draft.kind)) return this.refuse(draft, 'wrongVerb', turn);
+    if (draft.heardAt == null) return this.refuse(draft, 'notHeard', turn);
+    return this.accept(draft);
+  }
+
+  // The agent's voice reports that this draft's read-back was spoken to the end.
+  readBackHeard(draftId: string, turn: number): void {
+    if (this.draft?.id === draftId) this.draft.heardAt ??= turn;
+  }
+
+  // Never the same read-back and question again: the first refusal says what to say, the second keeps the draft and
+  // stops asking. Either re-reads the draft first only if it was never heard to the end, in place of the question.
+  private refuse(draft: Draft, reason: 'expired' | 'wrongVerb' | 'notHeard', turn: number): ConfirmOutcome {
+    draft.refusals = (draft.refusals ?? 0) + 1;
+    const then = draft.refusals > 1 ? 'keep' : 'instruct';
+    const ask = then === 'keep' ? keptOf(draft.kind) : instructionOf(draft.kind);
+    if (draft.heardAt != null) return { ok: false, reason, speak: ask, then, reread: false };
+    return { ok: false, reason, speak: this.readBackAgain(draft, turn, ask), then, reread: true };
+  }
+
+  private accept(draft: Draft): ConfirmOutcome {
     this.draft = null;
     this.pending = { draft, cancel: null };
     return { ok: true, draft, announcement: announcementOf(draft) };
@@ -257,7 +375,7 @@ export class Publisher {
 
   startCountdown(): void {
     const pending = this.pending;
-    if (!pending || pending.cancel) return;
+    if (!pending || pending.cancel || this.closed) return;
     pending.cancel = this.deps.schedule(() => {
       if (this.pending !== pending) return;
       this.pending = null;
@@ -290,10 +408,10 @@ export class Publisher {
     return pending.draft;
   }
 
-  private readBackAgain(draft: Draft, turn: number): string {
+  private readBackAgain(draft: Draft, turn: number, ask?: string): string {
     draft.voided = false;
     draft.readBackTurn = turn;
-    return readBackOf(draft, this.deps.now?.() ?? new Date());
+    return readBackOf(draft, this.deps.now?.() ?? new Date(), ask);
   }
 
   private check(draft: Draft, turn: number): DraftOutcome {
@@ -304,6 +422,8 @@ export class Publisher {
     }
     draft.readBackTurn = turn;
     draft.voided = false;
+    draft.heardAt = null;
+    draft.refusals = 0;
     return { ok: true, draft, readBack: readBackOf(draft, this.deps.now?.() ?? new Date()) };
   }
 }

@@ -33,7 +33,7 @@ export function createVoiceCall(publicKey: string): VoiceCall {
         );
       }),
     stop: () => vapi.stop(),
-    say: (text) => vapi.say(text, false, true),
+    say: (text, interrupt) => vapi.say(text, false, true, interrupt),
     addMessage: (content, triggerResponse) =>
       vapi.send({ type: 'add-message', message: { role: 'system', content }, triggerResponseEnabled: triggerResponse } as Parameters<Vapi['send']>[0]),
   };

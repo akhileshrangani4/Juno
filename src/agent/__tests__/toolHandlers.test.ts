@@ -6,14 +6,17 @@ import { makePost } from '@/testing/fixtures';
 import { agentMessages } from '../agentMessages';
 import { UNDO_WINDOW_MS } from '../publisher';
 import { toolNames } from '../tools';
-import { PICTURE_WAIT_MS, TOOL_CEILING_MS, usesOwnWords } from '../toolHandlers';
+import { PICTURE_WAIT_MS, TOOL_CEILING_MS, TRANSCRIPT_WAIT_MS, usesOwnWords } from '../toolHandlers';
 
 const draftIdOf = (result: string) => result.match(/draftId="([^"]+)"/)?.[1] ?? '';
 
 describe('agent tools', () => {
   it('handles every tool the assistant is given', async () => {
-    const { handlers } = setup();
-    for (const name of toolNames) expect((await handlers.run(name, {})).result).not.toMatch(/^UNKNOWN_TOOL/);
+    const { handlers, say } = setup();
+    for (const name of toolNames) {
+      say(name);
+      expect((await handlers.run(name, {})).result).not.toMatch(/^UNKNOWN_TOOL/);
+    }
     expect((await handlers.run('fly_away', {})).result).toMatch(/^UNKNOWN_TOOL/);
   });
 
@@ -82,7 +85,7 @@ describe('agent tools', () => {
     const draft = await handlers.run('draft_repost', {});
     expect(draft.speak).toMatch(/^Reposting Maya's post/);
     say('yes');
-    expect(await handlers.run('publish_draft', { draftId: draftIdOf(draft.result) })).toMatchObject({ speak: 'Reposting in five seconds. Say undo to stop it.', after: 'countdown' });
+    expect(await handlers.run('publish_draft', { draftId: draftIdOf(draft.result) })).toMatchObject({ speak: "Reposting Maya's post in five seconds. Say undo to stop it.", after: 'countdown' });
     handlers.publisher.startCountdown();
     await scheduler.advance(UNDO_WINDOW_MS);
     expect(provider.repost).toHaveBeenCalledWith(maya);
@@ -111,11 +114,13 @@ describe('agent tools', () => {
   });
 
   it('refuses to publish without a yes in a later turn', async () => {
-    const { handlers, say, provider } = setup();
+    const { handlers, say, provider, scheduler } = setup();
     say('post hello from my new app');
     const draft = await handlers.run('draft_post', { text: 'Hello from my new app.' });
     const id = draftIdOf(draft.result);
-    expect((await handlers.run('publish_draft', { draftId: id })).result).toMatch(/^REFUSED: The user hasn't answered/);
+    const early = handlers.run('publish_draft', { draftId: id });
+    await scheduler.advance(TRANSCRIPT_WAIT_MS);
+    expect((await early).result).toMatch(/^REFUSED: The user hasn't answered/);
     say('hmm, not sure');
     expect((await handlers.run('publish_draft', { draftId: id })).result).toMatch(/^REFUSED: The user's reply to the read-back was not a plain yes/);
     expect((await handlers.run('publish_draft', { draftId: 'nope' })).result).toMatch(/out of date/);
@@ -167,12 +172,16 @@ describe('agent tools', () => {
     say('sure, but change it to goodbye');
     expect((await handlers.run('publish_draft', { draftId: id })).result).toMatch(/^REFUSED: .*not a plain yes.*edit_draft/);
     say('yes');
-    const reread = await handlers.run('publish_draft', { draftId: id });
-    expect(reread).toMatchObject({ speak: 'Posting to your followers: Hello from my new app. Shall I post it?', respond: false, result: expect.stringMatching(/^REREAD/) });
+    const told = await handlers.run('publish_draft', { draftId: id });
+    expect(told).toMatchObject({ speak: 'Say "post it" to send it, or "cancel".', respond: false, result: expect.stringMatching(/^NOT_SENT_YET/) });
+    say('please like it');
     await handlers.run('like_post', {});
     say('yes');
-    expect((await handlers.run('publish_draft', { draftId: id })).result).toMatch(/^REREAD/);
-    say('yes please');
+    expect(await handlers.run('publish_draft', { draftId: id })).toMatchObject({
+      speak: 'I\'ll keep it as a draft and stop asking. Say "post it" whenever you\'re ready, or "cancel".',
+      result: expect.stringMatching(/^DRAFT_KEPT/),
+    });
+    say('post it please');
     expect(await handlers.run('publish_draft', { draftId: id })).toMatchObject({ after: 'countdown' });
     expect(provider.createPost).not.toHaveBeenCalled();
   });
@@ -242,18 +251,18 @@ describe('agent tools', () => {
     const post = await handlers.run('draft_post', { text: 'Hello from my new app.' });
     say('yes, delete it');
     expect(await handlers.run('publish_draft', { draftId: draftIdOf(post.result) })).toMatchObject({
-      speak: 'Posting to your followers: Hello from my new app. Shall I post it?',
-      result: expect.stringMatching(/^REREAD: "yes, delete it" doesn't fit this draft/),
+      speak: 'Say "post it" to send it, or "cancel".',
+      result: expect.stringMatching(/^NOT_SENT_YET: Nothing was published, because "yes, delete it" doesn't fit this draft/),
     });
-    say('yes, send it');
+    say('send it');
     expect(await handlers.run('publish_draft', { draftId: draftIdOf(post.result) })).toMatchObject({ after: 'countdown' });
     handlers.publisher.cancelPending();
 
     say('delete my last post');
     const del = await handlers.run('draft_delete_my_last_post', {});
     say('send it');
-    expect((await handlers.run('publish_draft', { draftId: draftIdOf(del.result) })).result).toMatch(/^REREAD/);
-    say('yes, remove it');
+    expect((await handlers.run('publish_draft', { draftId: draftIdOf(del.result) })).result).toMatch(/^NOT_SENT_YET/);
+    say('remove it');
     expect(await handlers.run('publish_draft', { draftId: draftIdOf(del.result) })).toMatchObject({ after: 'countdown' });
     handlers.publisher.cancelPending();
     expect(provider.createPost).not.toHaveBeenCalled();
@@ -349,12 +358,15 @@ describe('agent tools', () => {
   });
 
   it('changes words in a draft, starts over and cancels', async () => {
-    const { handlers, say } = setup();
+    const { handlers, say, scheduler } = setup();
     say('post going to the park today');
     await handlers.run('draft_post', { text: 'Going to the park today.' });
     say('change park to beach');
     expect((await handlers.run('edit_draft', { find: 'park', replace: 'beach' })).speak).toBe('Posting to your followers: Going to the beach today. Shall I post it?');
-    expect((await handlers.run('edit_draft', { find: 'beach', replace: 'moon base' })).result).toMatch(/^REWORDED/);
+    const reworded = handlers.run('edit_draft', { find: 'beach', replace: 'moon base' });
+    await scheduler.advance(TRANSCRIPT_WAIT_MS);
+    expect((await reworded).result).toMatch(/^REWORDED/);
+    say('cancel it');
     expect((await handlers.run('discard_draft', {})).result).toMatch(/^DISCARDED/);
     expect((await handlers.run('discard_draft', {})).result).toMatch(/^NO_DRAFT/);
   });
@@ -367,7 +379,7 @@ describe('agent tools', () => {
     const draft = await handlers.run('draft_delete_my_last_post', {});
     expect(draft.speak).toBe("Deleting your post from 1 hour ago: Old news. A deleted post can't be brought back. Shall I delete it?");
     say('yes delete it');
-    expect((await handlers.run('publish_draft', { draftId: draftIdOf(draft.result) })).speak).toBe('Deleting in five seconds. Say undo to stop it.');
+    expect((await handlers.run('publish_draft', { draftId: draftIdOf(draft.result) })).speak).toBe('Deleting your post in five seconds. Say undo to stop it.');
     handlers.publisher.startCountdown();
     await scheduler.advance(UNDO_WINDOW_MS);
     expect(provider.deletePost).toHaveBeenCalledWith(mine);
