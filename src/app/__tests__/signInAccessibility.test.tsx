@@ -6,7 +6,7 @@ import type { SocialAccount } from '@/social/types';
 import SignInScreen from '../sign-in';
 
 jest.mock('expo-speech', () => ({ speak: jest.fn(), stop: jest.fn(async () => undefined) }));
-jest.mock('expo-router', () => ({ router: { canGoBack: () => true, back: jest.fn(), replace: jest.fn() } }));
+jest.mock('expo-router', () => ({ router: { canGoBack: () => true, back: jest.fn(), replace: jest.fn(), push: jest.fn() }, useFocusEffect: jest.fn() }));
 jest.mock('@/feedback/haptics', () => ({ haptic: jest.fn() }));
 
 const mockSession = { account: null as SocialAccount | null, expiredAccount: null as SocialAccount | null };
@@ -58,7 +58,7 @@ describe('every sign-in and sign-up control has a label, a role and a hint', () 
   it('on the first screen, sign up, handle entry and the app password screen', async () => {
     await render(<SignInScreen />);
     expect(screen.getByRole('header', { name: 'Welcome to Juno' })).toBeTruthy();
-    expectLabeled(['Sign in', 'Create an account', 'Listen without signing in']);
+    expectLabeled(['Sign in', 'Create an account', 'Listen without signing in', 'Practice the gestures']);
 
     await fireEvent.press(screen.getByRole('button', { name: 'Create an account' }));
     expectLabeled(['Open Bluesky sign-up', 'Back']);
@@ -84,7 +84,7 @@ describe('every sign-in and sign-up control has a label, a role and a hint', () 
   it('on the account and sign-out confirmation screens', async () => {
     mockSession.account = { id: 'did:plc:me', handle: 'maya.bsky.social' };
     await render(<SignInScreen />);
-    expectLabeled(['Back to the feed', 'Sign out']);
+    expectLabeled(['Back to the feed', 'Sign out', 'Practice the gestures']);
     await fireEvent.press(screen.getByRole('button', { name: 'Sign out' }));
     expectLabeled(['Sign out', 'Cancel']);
   });

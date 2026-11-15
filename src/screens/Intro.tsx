@@ -1,4 +1,4 @@
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { Pressable, StyleSheet, Text } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
@@ -6,18 +6,22 @@ import { useScreenReader } from '@/accessibility/useScreenReader';
 import { haptic } from '@/feedback/haptics';
 import { INTRO_SUMMARY, introInstructions } from '@/narration/buildNarration';
 import { useNarrator } from '@/narration/useNarrator';
+import { PracticeScreen } from '@/onboarding/PracticeScreen';
 import { colors, type } from '@/theme';
 
 export function Intro({ onDone }: { onDone(): void }) {
   const narrator = useNarrator();
   const screenReader = useScreenReader();
   const instructions = introInstructions(screenReader);
+  const [practicing, setPracticing] = useState(false);
 
   useEffect(() => {
     if (screenReader) return;
     narrator.speak(`${INTRO_SUMMARY} ${instructions}`);
     return () => narrator.stop();
   }, [narrator, screenReader, instructions]);
+
+  if (practicing) return <PracticeScreen onDone={onDone} />;
 
   return (
     <SafeAreaView style={styles.screen}>
@@ -28,7 +32,7 @@ export function Intro({ onDone }: { onDone(): void }) {
         accessibilityHint={instructions}
         onPress={() => {
           haptic('next');
-          onDone();
+          setPracticing(true);
         }}>
         <Text style={styles.title} accessibilityRole="header">
           Welcome

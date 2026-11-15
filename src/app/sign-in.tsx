@@ -1,4 +1,5 @@
-import { useCallback, useState } from 'react';
+import { router, useFocusEffect } from 'expo-router';
+import { useCallback, useRef, useState } from 'react';
 
 import { authMessages } from '@/auth/messages';
 import { haptic } from '@/feedback/haptics';
@@ -22,6 +23,15 @@ export default function SignInScreen() {
   const [notice, setNotice] = useState(expiredAccount ? authMessages.expired : '');
   const [createStatus, setCreateStatus] = useState({ message: authMessages.createAccount, error: false, busy: false });
   const [signingOut, setSigningOut] = useState(false);
+  const [returns, setReturns] = useState(0);
+  const shown = useRef(false);
+
+  useFocusEffect(
+    useCallback(() => {
+      if (shown.current) setReturns((count) => count + 1);
+      shown.current = true;
+    }, []),
+  );
 
   const finish = useCallback(
     async (_account: SocialAccount, message: string) => {
@@ -43,7 +53,7 @@ export default function SignInScreen() {
           : mode === 'confirmSignOut'
             ? authMessages.confirmSignOut
             : '';
-  const statusRef = useStatus(message, { key: mode });
+  const statusRef = useStatus(message, { key: `${mode}:${returns}` });
 
   if (mode === 'handle') {
     return (
@@ -102,6 +112,7 @@ export default function SignInScreen() {
         <Status message={message} statusRef={statusRef} />
         <AuthButton label="Back to the feed" hint="Returns to your timeline." onPress={returnToFeed} primary />
         <AuthButton label="Sign out" hint="Asks before signing you out of Bluesky on this device." onPress={() => setMode('confirmSignOut')} />
+        <PracticeButton />
       </AuthScreen>
     );
   }
@@ -150,6 +161,17 @@ export default function SignInScreen() {
           returnToFeed();
         }}
       />
+      <PracticeButton />
     </AuthScreen>
+  );
+}
+
+function PracticeButton() {
+  return (
+    <AuthButton
+      label="Practice the gestures"
+      hint="Opens gesture practice, where you try each gesture with spoken feedback. You come back here when you finish."
+      onPress={() => router.push('/practice')}
+    />
   );
 }

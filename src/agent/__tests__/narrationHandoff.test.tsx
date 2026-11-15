@@ -27,7 +27,7 @@ jest.mock('@/feed/useFeed', () => ({
 }));
 jest.mock('@/backend/convex', () => ({ describePost: jest.fn(async () => null) }));
 jest.mock('@/feedback/haptics', () => ({ haptic: jest.fn() }));
-jest.mock('expo-router', () => ({ router: { push: jest.fn() } }));
+jest.mock('expo-router', () => ({ router: { push: jest.fn() }, useIsFocused: () => true }));
 jest.mock('@/screens/PostCard', () => ({ PostCard: () => null }));
 jest.mock('@/gestures/GestureSurface', () => {
   const { View } = jest.requireActual('react-native');

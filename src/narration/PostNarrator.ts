@@ -76,6 +76,10 @@ export class PostNarrator {
     this.deps.narrator.stop();
   }
 
+  speaking(): boolean {
+    return this.timer !== null || this.deps.narrator.speaking();
+  }
+
   onScript(listener: (script: string) => void): () => void {
     this.listeners.add(listener);
     return () => void this.listeners.delete(listener);
