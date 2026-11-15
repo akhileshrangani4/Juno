@@ -97,6 +97,25 @@ Release builds without the variable print these lines with `console.log`, which 
 
 `eas.json` has `development` (dev client), `preview` and `production` profiles: `npx eas-cli build --profile development --platform ios`. This needs an Expo account and, for iOS, an Apple developer account.
 
+## App icon and launch screen
+
+Juno's logo is a peacock chick, for the bird in Juno's name, with its fanned tail drawn as rounded sound bars. Akhilesh chose the chick; Derek Lu chose the Midnight peacock palette: a gold chick with a cream belly and teal, green and blue bars on navy `#0F1B3D`. The two masters were made with an image model and live in `assets/logo`:
+
+| Master | What it is |
+| --- | --- |
+| `juno-icon-1024.png` | The full-bleed square icon on navy, with no transparency and no rounded corners (iOS applies its own mask). |
+| `juno-mark-transparent-1024.png` | The chick and bars alone on a transparent background. |
+
+Every image app.json uses is generated from them by one script:
+
+```bash
+uv run scripts/generate-icons.py   # or python3 scripts/generate-icons.py with pillow and numpy installed
+```
+
+It writes `assets/images/icon.png` (the iOS and default icon), `splash-icon.png` (the launch screen), `android-icon-foreground.png` and `android-icon-monochrome.png` (the adaptive icon, inside its 66% safe zone) and `favicon.png`. The model's output needed small fixes, which the script applies on every run: the icon's background was `#101F3E` with some noise, so it is set to exactly `#0F1B3D`; the mark's stray near-transparent pixels are cleared, its edges take their colour from the shape so no fringe shows, and its dark outline is painted the same navy so the launch screen matches the icon. To change the logo, replace a master and run the script again; don't edit the generated files by hand.
+
+The launch screen shows the mark on the same navy, so opening the app doesn't flash another colour. It has no separate `dark` entry on purpose: app.json sets `userInterfaceStyle` to `dark`, so iOS always uses this one, and a `dark` entry would make the splash plugin rewrite `UIUserInterfaceStyle` to `Automatic`, which would let system controls turn light. The app's own screens are black, so `src/app/_layout.tsx` sets the splash screen to fade out over 300 ms (iOS) instead of cutting from navy to black when expo-router hides it.
+
 ## Convex
 
 `pnpm convex:dev` creates or links a personal deployment, pushes `convex/`, regenerates `convex/_generated` and writes `EXPO_PUBLIC_CONVEX_URL` to `.env.local`. With `CONVEX_DEPLOY_KEY` in the environment, `npx convex deploy` pushes to the deployment the key belongs to.

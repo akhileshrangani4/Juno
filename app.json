@@ -11,7 +11,6 @@
     ],
     "userInterfaceStyle": "dark",
     "ios": {
-      "icon": "./assets/expo.icon",
       "bundleIdentifier": "com.akhileshrangani.consumerhack",
       "supportsTablet": false,
       "infoPlist": {
@@ -24,9 +23,8 @@
     "android": {
       "package": "com.akhileshrangani.consumerhack",
       "adaptiveIcon": {
-        "backgroundColor": "#000000",
+        "backgroundColor": "#0F1B3D",
         "foregroundImage": "./assets/images/android-icon-foreground.png",
-        "backgroundImage": "./assets/images/android-icon-background.png",
         "monochromeImage": "./assets/images/android-icon-monochrome.png"
       },
       "predictiveBackGestureEnabled": false
@@ -42,9 +40,9 @@
       [
         "expo-splash-screen",
         {
-          "backgroundColor": "#000000",
+          "backgroundColor": "#0F1B3D",
           "image": "./assets/images/splash-icon.png",
-          "imageWidth": 76
+          "imageWidth": 180
         }
       ],
       [
