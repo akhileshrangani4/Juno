@@ -15,9 +15,9 @@ describe('surfaceActions', () => {
   });
 
   it('lists the feed, comments and agent actions', () => {
-    expect(labels('feed')).toEqual(['Next post', 'Previous post', 'Like', 'Open comments', 'Read this post again', 'Read exactly', 'Wake the agent']);
+    expect(labels('feed')).toEqual(['Next post', 'Previous post', 'Like', 'Open comments', 'Read this post again', 'Read exactly', 'Wake the agent', 'Open the camera']);
     expect(labels('comments')).toEqual(['Next reply', 'Previous reply', 'Like', 'Back to posts', 'Read this reply again']);
-    expect(labels('agent')).toEqual(['Back to scrolling', 'Like', 'Hear the instructions', 'Account settings']);
+    expect(labels('agent')).toEqual(['Back to scrolling', 'Like', 'Hear the instructions', 'Account settings', 'Open the camera']);
   });
 
   it('names the like action after the like state', () => {

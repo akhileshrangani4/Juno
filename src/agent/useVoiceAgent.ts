@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 
 import { actionHistory } from '@/actions/history';
 import { loadedComments, readComments } from '@/comments/commentsControl';
+import { createCameraTools, describePendingPhoto } from '@/camera/agentTools';
 import { move, type FeedState, type MoveOutcome } from '@/feed/feedState';
 import { haptic } from '@/feedback/haptics';
 import type { Narrator } from '@/narration/Narrator';
@@ -66,7 +67,7 @@ export function useVoiceAgent({
   feed: Feed;
   narrator: Narrator;
   onExit(reason: EndReason, message: string): void;
-}): { status: AgentStatus | null; say(text: string): boolean } {
+}): { status: AgentStatus | null; say(text: string): boolean; notify(text: string, speak?: string): void } {
   const { provider, account } = useSession();
   const [status, setStatus] = useState<AgentStatus | null>(null);
   const latest = useRef({ post, feed, narrator, onExit, account });
@@ -104,6 +105,7 @@ export function useVoiceAgent({
       loadedReplies: (target) => loadedComments(target.uri),
       replies: (target) => readComments(target.uri),
       history: actionHistory,
+      camera: createCameraTools(),
       mayNeedTranslation: (target) => descriptionCache.mayNeedTranslation(target),
       translationState: (target, detail) => descriptionCache.translationState(target, detail),
       settings: narrationSettings,
@@ -127,13 +129,15 @@ export function useVoiceAgent({
           memoryOffer ? withTimeout(memoryOffer.prepare(), MEMORY_TIMEOUT_MS) : Promise.resolve(null),
           focus ? Promise.resolve(descriptionCache.peek(focus, detailFor('full', narrationSettings.get()))) : Promise.resolve(null),
         ]);
-        if (!offer) memoryOffer?.withdraw();
+        const photo = describePendingPhoto();
+        if (!offer || photo) memoryOffer?.withdraw();
         return buildAssistant({
           account: describeAccount(latest.current.account),
           settings: describeSettings(narrationSettings.get()),
           memories: describeMemories(memories),
           focus: describeFocus(focus, description),
-          memoryOffer: offer,
+          memoryOffer: photo ? null : offer,
+          photo,
         });
       },
       status: setStatus,
@@ -166,5 +170,5 @@ export function useVoiceAgent({
     session.current?.focusChanged(post);
   }, [post]);
 
-  return { status: active ? status : null, say: (text) => session.current?.say(text) ?? false };
+  return { status: active ? status : null, say: (text) => session.current?.say(text) ?? false, notify: (text, speak) => session.current?.notify(text, speak) };
 }

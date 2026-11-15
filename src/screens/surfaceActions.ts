@@ -2,7 +2,7 @@ export type Mode = 'scroll' | 'agent';
 
 export type SurfaceView = 'feed' | 'comments' | 'agent';
 
-export type SurfaceActionName = 'next' | 'previous' | 'like' | 'comments' | 'back' | 'reread' | 'readExactly' | 'toggleAgent' | 'instructions' | 'account' | 'increment' | 'decrement';
+export type SurfaceActionName = 'next' | 'previous' | 'like' | 'comments' | 'back' | 'reread' | 'readExactly' | 'toggleAgent' | 'instructions' | 'account' | 'camera' | 'increment' | 'decrement';
 
 export type SurfaceAction = { name: SurfaceActionName; label?: string };
 
@@ -18,6 +18,7 @@ export function surfaceActions(view: SurfaceView, platform: string, liked: boole
           { name: 'reread', label: 'Read this post again' },
           { name: 'readExactly', label: 'Read exactly' },
           { name: 'toggleAgent', label: 'Wake the agent' },
+          { name: 'camera', label: 'Open the camera' },
         ]
       : view === 'comments'
         ? [
@@ -32,6 +33,7 @@ export function surfaceActions(view: SurfaceView, platform: string, liked: boole
             like,
             { name: 'instructions', label: 'Hear the instructions' },
             { name: 'account', label: 'Account settings' },
+            { name: 'camera', label: 'Open the camera' },
           ];
   return platform === 'android' && view !== 'agent' ? [...labeled, { name: 'increment' }, { name: 'decrement' }] : labeled;
 }

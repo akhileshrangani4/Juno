@@ -10,6 +10,7 @@ import { SessionProvider } from '../SessionContext';
 
 jest.mock('expo-speech', () => ({ speak: jest.fn(), stop: jest.fn(async () => undefined) }));
 jest.mock('@/backend/convex', () => ({ recordUser: jest.fn() }));
+jest.mock('@/camera/cacheFileStore', () => ({ forgetLibraryDescriptions: jest.fn(async () => undefined) }));
 jest.mock('@/storage/keyValueStore', () => {
   const actual = jest.requireActual('@/storage/keyValueStore');
   return { ...actual, secureStore: actual.createMemoryStore() };

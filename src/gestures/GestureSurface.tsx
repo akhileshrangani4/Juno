@@ -1,11 +1,13 @@
 import { createContext, use, useEffect, useMemo, useRef, type ReactNode } from 'react';
 import { View, type ViewProps } from 'react-native';
-import { GestureDetector, GestureStateManager, useCompetingGestures, useManualGesture, usePanGesture, useTapGesture, type PanGesture } from 'react-native-gesture-handler';
+import { GestureDetector, GestureStateManager, useCompetingGestures, useLongPressGesture, useManualGesture, usePanGesture, useTapGesture, type PanGesture } from 'react-native-gesture-handler';
 
 import type { CircleDirection, Point } from './circle';
 import { PRESS, PressTracker, type Touch } from './press';
 import { classifyStroke } from './stroke';
 import type { SwipeDirection } from './swipe';
+
+export const HOLD_MS = 600;
 
 type Props = ViewProps & {
   tapsEnabled: boolean;
@@ -20,6 +22,7 @@ type Props = ViewProps & {
   // end when the finger lifts, or end(true) when the system takes the touch away.
   onTalkHold?: { start(): void; end(cancelled: boolean): void };
   onUnrecognizedStroke?: (points: Point[]) => void;
+  onHold?: () => void;
   children: ReactNode;
 };
 
@@ -31,7 +34,7 @@ export function useStrokeGesture(): StrokeGesture | null {
   return use(StrokeGestureContext);
 }
 
-export function GestureSurface({ tapsEnabled, onTapTop, onTapBottom, onCircle, onSwipe, onTwoFingerHold, onTwoFingerHoldWarning, onTalkHold, onUnrecognizedStroke, children, ...viewProps }: Props) {
+export function GestureSurface({ tapsEnabled, onTapTop, onTapBottom, onCircle, onSwipe, onTwoFingerHold, onTwoFingerHoldWarning, onTalkHold, onUnrecognizedStroke, onHold, children, ...viewProps }: Props) {
   const stroke = useRef<Point[]>([]);
   const startedAt = useRef(0);
   const scrolled = useRef(false);
@@ -115,6 +118,15 @@ export function GestureSurface({ tapsEnabled, onTapTop, onTapBottom, onCircle, o
     },
   });
 
+  const hold = useLongPressGesture({
+    runOnJS: true,
+    disableReanimated: true,
+    enabled: !!onHold,
+    minDuration: HOLD_MS,
+    maxDistance: 12,
+    onActivate: () => onHold?.(),
+  });
+
   const tap = useTapGesture({
     runOnJS: true,
     disableReanimated: true,
@@ -139,7 +151,7 @@ export function GestureSurface({ tapsEnabled, onTapTop, onTapBottom, onCircle, o
   );
 
   return (
-    <GestureDetector gesture={useCompetingGestures(pan, press, tap)}>
+    <GestureDetector gesture={useCompetingGestures(pan, press, hold, tap)}>
       <View
         {...viewProps}
         collapsable={false}

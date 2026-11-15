@@ -20,7 +20,7 @@ export function BackendProvider({ children }: { children: ReactNode }) {
 
 let deviceId: Promise<string> | null = null;
 
-function getDeviceId(): Promise<string> {
+export function getDeviceId(): Promise<string> {
   deviceId ??= secureStore
     .get(DEVICE_ID_KEY)
     .catch(() => null)
