@@ -6,7 +6,7 @@ import { makePost } from '@/testing/fixtures';
 import { agentMessages } from '../agentMessages';
 import { UNDO_WINDOW_MS } from '../publisher';
 import { toolNames } from '../tools';
-import { PICTURE_WAIT_MS, TOOL_CEILING_MS, usesOwnWords } from '../toolHandlers';
+import { PICTURE_WAIT_MS, TOOL_CEILING_MS, TRANSCRIPT_WAIT_MS, usesOwnWords } from '../toolHandlers';
 
 const draftIdOf = (result: string) => result.match(/draftId="([^"]+)"/)?.[1] ?? '';
 
@@ -111,11 +111,13 @@ describe('agent tools', () => {
   });
 
   it('refuses to publish without a yes in a later turn', async () => {
-    const { handlers, say, provider } = setup();
+    const { handlers, say, provider, scheduler } = setup();
     say('post hello from my new app');
     const draft = await handlers.run('draft_post', { text: 'Hello from my new app.' });
     const id = draftIdOf(draft.result);
-    expect((await handlers.run('publish_draft', { draftId: id })).result).toMatch(/^REFUSED: The user hasn't answered/);
+    const early = handlers.run('publish_draft', { draftId: id });
+    await scheduler.advance(TRANSCRIPT_WAIT_MS);
+    expect((await early).result).toMatch(/^REFUSED: The user hasn't answered/);
     say('hmm, not sure');
     expect((await handlers.run('publish_draft', { draftId: id })).result).toMatch(/^REFUSED: The user's reply to the read-back was not a plain yes/);
     expect((await handlers.run('publish_draft', { draftId: 'nope' })).result).toMatch(/out of date/);
@@ -168,10 +170,15 @@ describe('agent tools', () => {
     expect((await handlers.run('publish_draft', { draftId: id })).result).toMatch(/^REFUSED: .*not a plain yes.*edit_draft/);
     say('yes');
     const reread = await handlers.run('publish_draft', { draftId: id });
-    expect(reread).toMatchObject({ speak: 'Posting to your followers: Hello from my new app. Shall I post it?', respond: false, result: expect.stringMatching(/^REREAD/) });
+    expect(reread).toMatchObject({ speak: 'Posting to your followers: Hello from my new app. Say "post it" to send it, or "cancel".', respond: false, result: expect.stringMatching(/^REREAD/) });
+    expect(await handlers.run('like_post', {})).toMatchObject({ respond: false, result: expect.stringMatching(/^WAITING_FOR_ANSWER/) });
+    say('please like it');
     await handlers.run('like_post', {});
     say('yes');
-    expect((await handlers.run('publish_draft', { draftId: id })).result).toMatch(/^REREAD/);
+    expect(await handlers.run('publish_draft', { draftId: id })).toMatchObject({
+      speak: 'Posting to your followers: Hello from my new app. I\'ll keep it as a draft and stop asking. Say "post it" whenever you\'re ready, or "cancel".',
+      result: expect.stringMatching(/^DRAFT_KEPT/),
+    });
     say('yes please');
     expect(await handlers.run('publish_draft', { draftId: id })).toMatchObject({ after: 'countdown' });
     expect(provider.createPost).not.toHaveBeenCalled();
@@ -242,8 +249,8 @@ describe('agent tools', () => {
     const post = await handlers.run('draft_post', { text: 'Hello from my new app.' });
     say('yes, delete it');
     expect(await handlers.run('publish_draft', { draftId: draftIdOf(post.result) })).toMatchObject({
-      speak: 'Posting to your followers: Hello from my new app. Shall I post it?',
-      result: expect.stringMatching(/^REREAD: "yes, delete it" doesn't fit this draft/),
+      speak: 'Posting to your followers: Hello from my new app. Say "post it" to send it, or "cancel".',
+      result: expect.stringMatching(/^REREAD: Nothing was published, because "yes, delete it" doesn't fit this draft/),
     });
     say('yes, send it');
     expect(await handlers.run('publish_draft', { draftId: draftIdOf(post.result) })).toMatchObject({ after: 'countdown' });

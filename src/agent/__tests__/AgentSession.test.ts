@@ -1,8 +1,9 @@
 import { maya, nextPost, setup as setupTools } from '@/testing/agent';
 
 import { agentMessages } from '../agentMessages';
-import { AgentSession, CONNECT_TIMEOUT_MS, type EndReason } from '../AgentSession';
+import { AgentSession, CONNECT_TIMEOUT_MS, COUNTDOWN_FALLBACK_MS, type EndReason } from '../AgentSession';
 import { UNDO_WINDOW_MS } from '../publisher';
+import { vapiTools } from '../tools';
 import type { CallListener, VapiMessage, VoiceCall } from '../voiceCall';
 
 function fakeCall(connect: 'ok' | 'fail' | 'hang' = 'ok') {
@@ -83,6 +84,20 @@ describe('AgentSession', () => {
     expect(exits.map((exit) => exit.reason)).toEqual(['failed']);
   });
 
+  it('stops the call once and forgets the connect timeout when the user leaves while it connects', async () => {
+    const { session, call, exits, scheduler, logs } = setup({ connect: 'hang' });
+    const started = session.start();
+    await new Promise<void>((resolve) => setImmediate(() => resolve()));
+    expect(scheduler.pending()).toBe(1);
+    session.stop();
+    await started;
+    expect(scheduler.pending()).toBe(0);
+    await scheduler.advance(CONNECT_TIMEOUT_MS);
+    expect(call.stop).toHaveBeenCalledTimes(1);
+    expect(exits).toEqual([{ reason: 'user', message: agentMessages.asleep }]);
+    expect(logs.some((line) => line.startsWith('connect failed'))).toBe(false);
+  });
+
   it('explains a denied microphone and never starts a call', async () => {
     const { session, call, exits } = setup({ microphone: 'denied' });
     await session.start();
@@ -101,7 +116,7 @@ describe('AgentSession', () => {
     const { session, call, toolCall } = setup();
     await session.start();
     await toolCall('read_post', { mode: 'brief' });
-    expect(call.say).toHaveBeenCalledWith('Maya. Meet our new puppy Biscuit! Has an image and two hashtags.');
+    expect(call.say).toHaveBeenCalledWith('Maya. Meet our new puppy Biscuit! Has an image and two hashtags.', true);
     expect(call.addMessage).toHaveBeenLastCalledWith(expect.stringMatching(/^Result of read_post: READ_ALOUD/), false);
     await toolCall('like_post');
     expect(call.addMessage).toHaveBeenLastCalledWith("Result of like_post: LIKED: Liked Maya's post. Confirm in a word or two.", true);
@@ -124,12 +139,12 @@ describe('AgentSession', () => {
     await toolCall('draft_post', { text: 'Hello from my new app.' });
     userSays('yes');
     await toolCall('publish_draft', { draftId: draftIdOf(call.addMessage) });
-    expect(call.say).toHaveBeenLastCalledWith('Posting in five seconds. Say undo to stop it.');
+    expect(call.say).toHaveBeenLastCalledWith('Posting in five seconds. Say undo to stop it.', true);
     emit({ type: 'speech-update', role: 'assistant', status: 'started' });
     emit({ type: 'speech-update', role: 'assistant', status: 'stopped' });
     await scheduler.advance(3000);
     userSays('undo!');
-    expect(call.say).toHaveBeenLastCalledWith('Stopped. Nothing was sent.');
+    expect(call.say).toHaveBeenLastCalledWith('Stopped. Nothing was sent.', true);
     await scheduler.advance(20_000);
     expect(provider.createPost).not.toHaveBeenCalled();
   });
@@ -139,6 +154,8 @@ describe('AgentSession', () => {
     const asSpoken = 'Posting to your followers. alice dot bsky dot social see you at five. Shall I post it?';
     const question = 'Want me to like it too?';
     const countdown = 'Posting in five seconds. Say undo to stop it.';
+    const sayPostIt = 'Say "post it" to send it, or "cancel".';
+    const readBackAgain = readBack.replace('Shall I post it?', sayPostIt);
 
     async function drafted(tool: 'draft_post' | 'draft_reply' = 'draft_post', text = '@alice.bsky.social see you at 5') {
       const world = setup();
@@ -163,7 +180,7 @@ describe('AgentSession', () => {
       await confirm();
       expect(lastSaid()).toBe(countdown);
       expect(logs).toContain('assistant speech during read-back {"speaker":"app","by":"timing and words","source":null,"turn":1}');
-      expect(logs).toContain('publish confirmed');
+      expect(logs).toContain('publish confirmed {"by":"words"}');
     });
 
     it("lets Vapi's force-say decide, whatever the words", async () => {
@@ -177,13 +194,13 @@ describe('AgentSession', () => {
     });
 
     it("voids the yes when the model asks its own question after the read-back, and keeps the next read-back's yes", async () => {
-      const { speech, assistantSays, confirm, lastSaid, logs, provider } = await drafted();
+      const { speech, assistantSays, confirm, lastSaid, logs, provider, userSays, toolCall, call } = await drafted();
       speech(1);
       assistantSays(asSpoken);
       speech(2);
       assistantSays(question);
       await confirm();
-      expect(lastSaid()).toBe(readBack);
+      expect(lastSaid()).toBe(sayPostIt);
       expect(logs).toEqual(
         expect.arrayContaining([
           'assistant speech during read-back {"speaker":"model","by":"timing and words","source":null,"turn":2}',
@@ -191,9 +208,8 @@ describe('AgentSession', () => {
           'publish refused {"reason":"expired"}',
         ]),
       );
-      speech(3);
-      assistantSays(asSpoken);
-      await confirm();
+      userSays('post it');
+      await toolCall('publish_draft', { draftId: draftIdOf(call.addMessage) });
       expect(lastSaid()).toBe(countdown);
       expect(provider.createPost).not.toHaveBeenCalled();
     });
@@ -206,7 +222,7 @@ describe('AgentSession', () => {
         source(named, 2);
         assistantSays(question);
         await confirm();
-        expect([named, lastSaid()]).toEqual([named, readBack]);
+        expect([named, lastSaid()]).toEqual([named, sayPostIt]);
       }
     });
 
@@ -216,7 +232,7 @@ describe('AgentSession', () => {
       speech(1);
       assistantSays(question);
       await confirm();
-      expect(lastSaid()).toBe(readBack);
+      expect(lastSaid()).toBe(readBackAgain);
     });
 
     it("lets Vapi naming the model win over a word match: a question reusing the reply's words doesn't confirm it", async () => {
@@ -227,7 +243,7 @@ describe('AgentSession', () => {
       source('model', 2);
       assistantSays('Shall I delete my post tonight?');
       await confirm();
-      expect(lastSaid()).toBe(spokenReadBack);
+      expect(lastSaid()).toBe('Say "send it" to send the reply, or "cancel".');
       expect(provider.reply).not.toHaveBeenCalled();
     });
 
@@ -236,7 +252,7 @@ describe('AgentSession', () => {
       speech(1);
       assistantSays('Shall I delete my post tonight?');
       await confirm();
-      expect(lastSaid()).toBe(spokenReadBack);
+      expect(lastSaid()).toBe(spokenReadBack.replace('Shall I send the reply?', 'Say "send it" to send the reply, or "cancel".'));
     });
 
     it('starts a new segment when the model is named within the same turn as the read-back', async () => {
@@ -247,7 +263,7 @@ describe('AgentSession', () => {
       source('model', 1);
       assistantSays(question);
       await confirm();
-      expect(lastSaid()).toBe(readBack);
+      expect(lastSaid()).toBe(sayPostIt);
     });
 
     it('voids the yes when Vapi names the model, even with a say() still due', async () => {
@@ -256,21 +272,140 @@ describe('AgentSession', () => {
       speech(1);
       assistantSays(asSpoken);
       await confirm();
-      expect(lastSaid()).toBe(readBack);
+      expect(lastSaid()).toBe(readBackAgain);
     });
 
     it('puts it down to the model when the signals are missing or disagree', async () => {
       const noEvents = await drafted();
       noEvents.assistantSays(asSpoken);
       await noEvents.confirm();
-      expect(noEvents.lastSaid()).toBe(readBack);
+      expect(noEvents.lastSaid()).toBe(readBackAgain);
 
       const expired = await drafted();
       await expired.scheduler.advance(60_000);
       expired.speech(1);
       expired.assistantSays(asSpoken);
       await expired.confirm();
-      expect(expired.lastSaid()).toBe(readBack);
+      expect(expired.lastSaid()).toBe(readBackAgain);
+    });
+  });
+
+  // The event sequences of the device log of build 1226095 (handoffs/device-logs/1226095-round7-publish-loop.log),
+  // where one call refused seven confirmations and published nothing, and of a real Vapi web call
+  // (src/agent/__eval__/liveCall.run.ts). On main before AKH-48 every one of these ends with nothing published.
+  describe('replays of the publishing loop (AKH-48)', () => {
+    const readBack = 'Posting to your followers: Hello from my new app. Shall I post it?';
+    const countdown = 'Posting in five seconds. Say undo to stop it.';
+
+    async function drafted() {
+      const world = setup();
+      await world.session.start();
+      world.userSays('post hello from my new app');
+      await world.toolCall('draft_post', { text: 'Hello from my new app.' });
+      const id = draftIdOf(world.call.addMessage);
+      const segment = (turn: number, source: string | undefined, ...chunks: string[]) => {
+        world.emit({ type: 'speech-update', role: 'assistant', status: 'started', turn });
+        world.emit({ type: 'assistant.speechStarted', source, turn, text: '' });
+        for (const transcript of chunks) world.emit({ type: 'transcript', role: 'assistant', transcriptType: 'final', transcript });
+        world.emit({ type: 'speech-update', role: 'assistant', status: 'stopped', turn });
+      };
+      const answer = async (utterance: string) => {
+        world.userSays(utterance);
+        await world.toolCall('publish_draft', { draftId: id });
+        return world.call.say.mock.calls.at(-1)?.[0] as string;
+      };
+      return { ...world, id, segment, answer };
+    }
+
+    it('interrupts whatever the agent is saying with the read-back, and Vapi never asks the model to answer a tool', async () => {
+      const { call } = await drafted();
+      expect(call.say).toHaveBeenLastCalledWith(readBack, true);
+      for (const tool of vapiTools) expect(tool.messages).toEqual([{ type: 'request-start', content: '' }, { type: 'request-complete', content: '' }]);
+    });
+
+    it('turns 1, 2, 6 and 7: a read-back in chunks with no source is the app, and yes publishes', async () => {
+      const { segment, answer, logs, scheduler, provider } = await drafted();
+      segment(1, undefined, 'Posting to your followers,', 'Hello from my new app. Shall I post it?');
+      expect(await answer('Yes.')).toBe(countdown);
+      expect(logs).toContain('read-back heard in full {"by":"timing and words","source":null,"turn":1}');
+      expect(logs.some((line) => line.startsWith('yes voided'))).toBe(false);
+      await scheduler.advance(COUNTDOWN_FALLBACK_MS);
+      await scheduler.advance(UNDO_WINDOW_MS);
+      expect(provider.createPost).toHaveBeenCalledWith({ text: 'Hello from my new app.' });
+    });
+
+    it('turns 4 and 5: the model talks after the read-back, so yes is refused once with what to say, and post it publishes', async () => {
+      const { segment, answer, logs } = await drafted();
+      segment(4, 'force-say', 'Posting to your followers,', 'Hello from my new app. Shall I post it?');
+      segment(4, 'model', 'Your', 'post draft says,', 'hello from my new app.', 'Would you like to post it?');
+      expect(logs).toContain('yes voided by assistant speech {"by":"source","source":"model","turn":4}');
+      expect(await answer('Yes.')).toBe('Say "post it" to send it, or "cancel".');
+      expect(await answer('Post it.')).toBe(countdown);
+    });
+
+    it('turn 8: force-say chunks then a model chunk; yes twice never repeats the question, and post it still publishes', async () => {
+      const { segment, answer, logs } = await drafted();
+      segment(8, 'force-say', 'Posting to your followers,', 'Hello from my new app. Shall I post it?');
+      segment(8, 'model', 'Just say yes when you are ready.');
+      expect(await answer('yes')).toBe('Say "post it" to send it, or "cancel".');
+      expect(await answer('yes')).toBe('I\'ll keep it as a draft and stop asking. Say "post it" whenever you\'re ready, or "cancel".');
+      expect(await answer('yes')).toBe('I\'ll keep it as a draft and stop asking. Say "post it" whenever you\'re ready, or "cancel".');
+      expect(logs.filter((line) => line === 'publish refused {"reason":"expired"}')).toHaveLength(3);
+      expect(await answer('Juno, post it')).toBe(countdown);
+    });
+
+    it('a read-back cut off partway is never heard in full, so post it needs it read again', async () => {
+      const { segment, answer, call } = await drafted();
+      segment(1, undefined, 'Posting to your followers,');
+      expect(await answer('post it')).toBe(readBack.replace('Shall I post it?', 'Say "post it" to send it, or "cancel".'));
+      expect(call.say).toHaveBeenLastCalledWith(expect.any(String), true);
+      segment(2, 'force-say', 'Posting to your followers,', 'Hello from my new app. Say "post it" to send it, or "cancel".');
+      expect(await answer('post it')).toBe(countdown);
+    });
+
+    it('a stray tool call of the model after a re-read is refused and costs nothing: yes then publishes', async () => {
+      const { segment, answer, toolCall, call, provider, logs } = await drafted();
+      segment(1, 'model', 'Do you want to post it?');
+      expect(await answer('yes')).toBe(readBack.replace('Shall I post it?', 'Say "post it" to send it, or "cancel".'));
+      segment(2, 'force-say', readBack.replace('Shall I post it?', 'Say "post it" to send it, or "cancel".'));
+      await toolCall('like_post');
+      expect(provider.like).not.toHaveBeenCalled();
+      expect(call.addMessage).toHaveBeenLastCalledWith(expect.stringMatching(/^Result of like_post: WAITING_FOR_ANSWER/), false);
+      expect(logs).toContain('tool refused {"reason":"awaitingAnswer"}');
+      expect(await answer('yes')).toBe(countdown);
+    });
+
+    it('a stray tool call and model speech after a re-read: yes is refused, post it publishes', async () => {
+      const { segment, answer, toolCall } = await drafted();
+      segment(1, undefined, 'Posting to your followers,');
+      expect(await answer('yes')).toBe(readBack.replace('Shall I post it?', 'Say "post it" to send it, or "cancel".'));
+      segment(2, 'force-say', readBack.replace('Shall I post it?', 'Say "post it" to send it, or "cancel".'));
+      await toolCall('like_post');
+      segment(3, 'model', 'I liked the post for you.');
+      expect(await answer('yes')).toBe('I\'ll keep it as a draft and stop asking. Say "post it" whenever you\'re ready, or "cancel".');
+      expect(await answer('post it')).toBe(countdown);
+    });
+
+    it("the last refusal (sameTurn): a confirmation Vapi sends before the user's words waits for them", async () => {
+      const { segment, toolCall, userSays, id, call } = await drafted();
+      segment(1, 'force-say', readBack);
+      await toolCall('publish_draft', { draftId: id });
+      userSays('yes');
+      await new Promise<void>((resolve) => setImmediate(() => resolve()));
+      expect(call.say).toHaveBeenLastCalledWith(countdown, true);
+    });
+
+    it("okay, let me think is not a yes; the model's own answer to it then makes the next yes need post it", async () => {
+      const { segment, answer, call, provider } = await drafted();
+      segment(1, 'force-say', readBack);
+      call.say.mockClear();
+      await answer('okay, let me think');
+      expect(call.say).not.toHaveBeenCalled();
+      expect(call.addMessage).toHaveBeenLastCalledWith(expect.stringMatching(/^Result of publish_draft: REFUSED: .*not a plain yes/), true);
+      segment(2, 'model', 'Take your time. Do you want me to post it?');
+      expect(await answer('yes')).toBe('Say "post it" to send it, or "cancel".');
+      expect(await answer('post it now')).toBe(countdown);
+      expect(provider.createPost).not.toHaveBeenCalled();
     });
   });
 
@@ -285,7 +420,7 @@ describe('AgentSession', () => {
     emit({ type: 'speech-update', role: 'assistant', status: 'stopped' });
     await scheduler.advance(1000);
     userSays('But change it to goodbye.');
-    expect(call.say).toHaveBeenLastCalledWith('I stopped it, nothing was sent. Posting to your followers: Hello from my new app. Shall I post it?');
+    expect(call.say).toHaveBeenLastCalledWith('I stopped it, nothing was sent. Posting to your followers: Hello from my new app. Shall I post it?', true);
     expect(call.addMessage).toHaveBeenLastCalledWith(expect.stringMatching(/^HELD draftId=/), false);
     await scheduler.advance(20_000);
     expect(provider.createPost).not.toHaveBeenCalled();

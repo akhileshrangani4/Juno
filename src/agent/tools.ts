@@ -137,8 +137,19 @@ export type ToolName =
 
 export const toolNames = definitions.map((definition) => definition.name as ToolName);
 
+// A client-side tool can't hand a result back to the model, so after every call Vapi asks the model to respond on
+// its own, and it talks over the app (around a read-back that voids the user's yes, or claiming a post went out).
+// An empty request-complete message is spoken instead of that response, and an empty request-start replaces Vapi's
+// "one moment" filler, so after a tool call the agent says only what the app says (its say()) and answers only when
+// the app's result asks it to (add-message with triggerResponseEnabled).
+const SILENT = [
+  { type: 'request-start' as const, content: '' },
+  { type: 'request-complete' as const, content: '' },
+];
+
 export const vapiTools = definitions.map(({ name, description, parameters }) => ({
   type: 'function' as const,
   async: true,
   function: { name, description, parameters },
+  messages: SILENT,
 }));
