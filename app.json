@@ -67,7 +67,8 @@
           "enableScreenShare": false,
           "microphonePermission": "Juno's voice agent listens through the microphone only while it is awake, after you draw a clockwise circle."
         }
-      ]
+      ],
+      "expo-localization"
     ],
     "experiments": {
       "typedRoutes": true,

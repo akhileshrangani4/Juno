@@ -13,7 +13,7 @@ describe('surfaceActions', () => {
   });
 
   it('lists the scroll actions and the agent actions', () => {
-    expect(labels('scroll', 'ios')).toEqual(['Next post', 'Previous post', 'Read this post again', 'Wake the agent']);
+    expect(labels('scroll', 'ios')).toEqual(['Next post', 'Previous post', 'Read this post again', 'Read exactly', 'Wake the agent']);
     expect(labels('agent', 'ios')).toEqual(['Back to scrolling', 'Hear the instructions', 'Account settings']);
   });
 

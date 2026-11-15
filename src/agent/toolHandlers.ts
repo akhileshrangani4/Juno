@@ -1,13 +1,16 @@
 import type { MoveOutcome } from '@/feed/feedState';
-import { authorName, lateDescription, messages, type DescriptionParts, type DetailLevel } from '@/narration/buildNarration';
+import { authorName, lateAddition, messages, translationMessages, type DescriptionParts, type DetailLevel, type TranslationState } from '@/narration/buildNarration';
+import { deviceLanguages } from '@/narration/deviceLanguages';
+import { languageCode, languageName } from '@/narration/language';
+import { changeTranslation, effectiveLanguages, type TranslationChange } from '@/narration/preferences';
 import type { Post, PostRef, RecordRef, ReplyParent, SocialAccount, SocialProvider } from '@/social/types';
 
 import { agentMessages } from './agentMessages';
 import { memoryRejection, MemorySignInNeededError, MemoryUnavailableError, type MemoryClient } from './memoryClient';
 import type { MemoryOffer } from './memoryOffer';
-import { detailFor, narrateForFeed, narratePost, usesDescriptions, type ReadMode } from './narrationAdapter';
+import { detailFor, narrateForFeed, narratePost, usesDescriptions, usesTranslation, type ReadMode } from './narrationAdapter';
 import { describeFocus } from './postContext';
-import { droppedOf, isAffirmative, isCommand, Publisher, withoutVocative, type ConfirmOutcome, type Draft, type DraftOutcome } from './publisher';
+import { droppedOf, isAffirmative, isCommand, Publisher, withoutVocative, type ConfirmOutcome, type Draft, type DraftOutcome, type TargetText } from './publisher';
 import { MAX_FACTS } from './memoryRateLimits';
 import { MAX_RATE, MIN_RATE, RATE_STEP, type NarrationSettings, type SettingsStore } from './settings';
 import { answersReadBack, type ToolName } from './tools';
@@ -38,9 +41,14 @@ export type AgentDeps = {
   account(): SocialAccount | null;
   focused(): Post | null;
   move(direction: 'next' | 'previous'): { outcome: MoveOutcome; post: Post | null };
-  description(post: Post, detail: DetailLevel): Promise<DescriptionParts | null>;
+  // translationOnly: ask only when the post's text may need translating, not for picture descriptions.
+  description(post: Post, detail: DetailLevel, options?: { translationOnly?: boolean }): Promise<DescriptionParts | null>;
   // A description already on the phone, without waiting.
   cachedDescription(post: Post, detail: DetailLevel): DescriptionParts | null;
+  // Whether the post's text may be in a language the user does not read, and if so whether its translation is
+  // still to come or failed (src/narration/descriptions.ts).
+  mayNeedTranslation(post: Post): boolean;
+  translationState(post: Post, detail: DetailLevel): TranslationState;
   settings: SettingsStore;
   memory: MemoryClient | null;
   // Open when the agent's first words asked to keep what was saved before sign-in (memoryOffer.ts).
@@ -181,23 +189,37 @@ export function createToolHandlers(deps: AgentDeps) {
       const off = deps.conversation.onUtterance(done);
     });
 
-  const request = (post: Post, detail: DetailLevel) => deps.description(post, detail).catch(() => null);
+  const request = (post: Post, detail: DetailLevel, translationOnly = false) => deps.description(post, detail, { translationOnly }).catch(() => null);
 
-  // A description that lands after the reading: the app says it in the agent's voice if the same post is still in
-  // focus, and otherwise it is only cached for the next reading. A promised one that doesn't come is admitted.
-  const whenDescribed = (post: Post, pending: Promise<DescriptionParts | null>, promised = false) =>
+  type Late = { translation: TranslationState; brief?: boolean; media?: boolean; promised?: boolean };
+
+  // A description or translation that lands after the reading: the app says it in the agent's voice if the same
+  // post is still in focus, and otherwise it is only cached for the next reading. One that doesn't come is admitted.
+  const whenDescribed = (post: Post, pending: Promise<DescriptionParts | null>, { translation, brief = false, media = true, promised = false }: Late) =>
     void pending.then((parts) => {
       if (deps.focused()?.uri !== post.uri) return;
-      const late = parts && lateDescription(post, parts);
-      if (late) return deps.notify(`DESCRIBED: The app just told the user more about the picture in the post in focus. Don't repeat it.`, late);
-      if (promised) deps.notify("DESCRIPTION_UNAVAILABLE: The fuller picture description didn't come. Tell the user in a few words there's nothing more to add.");
+      const late = parts && lateAddition(post, parts, translation, { brief, media });
+      if (late) return deps.notify(`DESCRIBED: The app just told the user the rest of the post in focus${translation ? ', translated' : ''}. Don't repeat it.`, late);
+      if (!parts && translation === 'pending') return deps.notify('TRANSLATION_FAILED: The app told the user the post could not be translated right now. Say nothing.', translationMessages.failed);
+      if (promised) deps.notify("DESCRIPTION_UNAVAILABLE: Nothing more came. Tell the user in a few words there's nothing more to add.");
     });
 
-  // What a reading includes now: a description already on the phone, or none while one is fetched in the background.
-  const partsNow = (post: Post, detail: DetailLevel) => {
+  // What a reading includes now: what is already on the phone, while anything missing is fetched in the background.
+  const partsNow = (post: Post, mode: ReadMode, detail: DetailLevel) => {
     const cached = deps.cachedDescription(post, detail);
-    if (!cached) whenDescribed(post, request(post, detail));
-    return cached;
+    const translation = usesTranslation(mode) ? deps.translationState(post, detail) : null;
+    const wanted = usesDescriptions(mode) || deps.mayNeedTranslation(post);
+    if (!cached && wanted) whenDescribed(post, request(post, detail, !usesDescriptions(mode)), { translation, brief: mode === 'brief', media: usesDescriptions(mode) && mode !== 'translation' });
+    return { parts: cached, translation: cached ? null : translation };
+  };
+
+  // How a read-back names the post it acts on: by its labeled translation, or, until there is one, by its
+  // language alone, so another language's words are never quoted in the agent's voice.
+  const translationOf = (post: Post): TargetText | null => {
+    const parts = deps.cachedDescription(post, detailFor('full', deps.settings.get()));
+    if (parts?.translation) return parts.translation;
+    if (parts?.untranslatedLanguage) return { language: parts.untranslatedLanguage, text: null };
+    return !parts && deps.mayNeedTranslation(post) ? { language: 'und', text: null } : null;
   };
 
   // An undo said while this send was in flight: the app removes what went out and says which happened.
@@ -344,8 +366,15 @@ export function createToolHandlers(deps: AgentDeps) {
     }
   }
 
+  const translationSummary = (settings: NarrationSettings) => {
+    const languages = effectiveLanguages(settings, deviceLanguages());
+    if (!languages) return 'posts not translated';
+    const others = languages.keep.filter((code) => code !== languages.target).map(languageName);
+    return `posts in other languages translated into ${languageName(languages.target)}${others.length ? ` (${others.join(', ')} read as written)` : ''}`;
+  };
+
   const settingsSummary = (settings: NarrationSettings) =>
-    `speed ${settings.rate} times normal, ${settings.mode} reading, hashtags ${settings.skipHashtags ? 'skipped' : 'read'}, ${settings.pictureDetail} picture descriptions`;
+    `speed ${settings.rate} times normal, ${settings.mode} reading, hashtags ${settings.skipHashtags ? 'skipped' : 'read'}, ${settings.pictureDetail} picture descriptions, ${translationSummary(settings)}`;
 
   async function run(name: string, args: Record<string, unknown>): Promise<ToolOutcome> {
     const tool = name as ToolName;
@@ -363,23 +392,31 @@ export function createToolHandlers(deps: AgentDeps) {
     switch (tool) {
       case 'read_post': {
         if (!focus) return { respond: true, result: NO_FOCUS };
-        const mode = (['full', 'brief', 'exact', 'hashtags', 'picture'] as const).includes(args.mode as ReadMode) ? (args.mode as ReadMode) : 'full';
+        const mode = (['full', 'brief', 'exact', 'hashtags', 'picture', 'translation'] as const).includes(args.mode as ReadMode) ? (args.mode as ReadMode) : 'full';
         const settings = deps.settings.get();
         const detail = detailFor(mode, settings);
-        const read = (parts: DescriptionParts | null) => narratePost(focus, mode, settings, { now: deps.now(), parts });
+        const read = (parts: DescriptionParts | null, translation: TranslationState = null) => narratePost(focus, mode, settings, { now: deps.now(), parts, translation });
         const done = { respond: false, result: "READ_ALOUD: The app read the post aloud. Don't repeat or reword it." };
-        if (!usesDescriptions(mode)) return { ...done, speak: read(null) };
-        if (mode !== 'picture') return { ...done, speak: read(partsNow(focus, detail)) };
+        if (mode === 'translation' && !deps.mayNeedTranslation(focus)) {
+          return { ...done, speak: read(deps.cachedDescription(focus, detail)), result: "NOT_FOREIGN: The post is in a language the user reads, so the app read it as it is. Don't repeat it." };
+        }
+        if (!usesDescriptions(mode) && !usesTranslation(mode)) return { ...done, speak: read(null) };
+        // An explicit "describe the picture" or "translate this" waits a little for what it asked for.
+        if (mode !== 'picture' && mode !== 'translation') {
+          const now = partsNow(focus, mode, detail);
+          return { ...done, speak: read(now.parts, now.translation) };
+        }
         const cached = deps.cachedDescription(focus, detail);
         if (cached) return { ...done, speak: read(cached) };
+        const translation = mode === 'translation' ? deps.translationState(focus, detail) : null;
         const pending = request(focus, detail);
         const waited = await within(pending, PICTURE_WAIT_MS);
-        if (waited.done) return { ...done, speak: read(waited.value) };
-        whenDescribed(focus, pending, true);
+        if (waited.done) return { ...done, speak: read(waited.value, waited.value ? null : translation && 'failed') };
+        whenDescribed(focus, pending, { translation, promised: !translation, media: mode === 'picture' });
         return {
-          speak: `${read(null)} ${agentMessages.descriptionOnItsWay}`,
+          speak: translation ? read(null, 'pending') : `${read(null)} ${agentMessages.descriptionOnItsWay}`,
           respond: false,
-          result: "READ_ALOUD: The app read what it has and said a fuller description is on its way. The app says it when it arrives. Don't repeat or reword it.",
+          result: "READ_ALOUD: The app read what it has and said the rest is on its way. The app says it when it arrives. Don't repeat or reword it.",
         };
       }
       case 'go_to_post': {
@@ -393,8 +430,9 @@ export function createToolHandlers(deps: AgentDeps) {
         const dropped = leave(post);
         const kept = !dropped && publisher.currentDraft?.readBackTurn === turn - 1 ? agentMessages.draftKept : null;
         const before = dropped ?? kept;
+        const now = partsNow(post, settings.mode, detailFor(settings.mode, settings));
         return {
-          speak: (before ? `${before} ` : '') + narrateForFeed(post, settings, usesDescriptions(settings.mode) ? partsNow(post, detailFor(settings.mode, settings)) : null, deps.now()),
+          speak: (before ? `${before} ` : '') + narrateForFeed(post, settings, now.parts, deps.now(), now.translation),
           respond: false,
           result: `MOVED: The app read the new post aloud. Don't repeat it. The post in focus is now: ${describeFocus(post, null, deps.now())}`,
         };
@@ -414,11 +452,11 @@ export function createToolHandlers(deps: AgentDeps) {
       case 'draft_reply': {
         if (tool === 'draft_reply' && !focus) return { respond: true, result: NO_FOCUS };
         if (!usesOwnWords(text, deps.conversation.recentUtterances())) return { respond: true, result: REWORDED };
-        return draftResult(publisher.draftText(tool === 'draft_post' ? 'post' : 'reply', text, tool === 'draft_reply' ? focus : null, turn));
+        return draftResult(publisher.draftText(tool === 'draft_post' ? 'post' : 'reply', text, tool === 'draft_reply' ? focus : null, turn, tool === 'draft_reply' && focus ? translationOf(focus) : null));
       }
       case 'draft_repost':
         if (!focus) return { respond: true, result: NO_FOCUS };
-        return draftResult(publisher.draftAction('repost', focus, turn));
+        return draftResult(publisher.draftAction('repost', focus, turn, translationOf(focus)));
       case 'draft_delete_my_last_post': {
         const mine = await deps.provider.getMyLatestPost();
         if (!mine) return { respond: true, result: "NO_POSTS: The user hasn't posted anything yet. Tell them." };
@@ -463,6 +501,20 @@ export function createToolHandlers(deps: AgentDeps) {
         if (args.mode === 'full' || args.mode === 'brief') patch.mode = args.mode;
         if (typeof args.skipHashtags === 'boolean') patch.skipHashtags = args.skipHashtags;
         if (args.pictureDetail === 'short' || args.pictureDetail === 'long') patch.pictureDetail = args.pictureDetail;
+        const named = [args.translateInto, args.dontTranslate, args.translateAgain].find((value) => typeof value === 'string') as string | undefined;
+        const language = named === undefined ? null : languageCode(named);
+        if (named !== undefined && !language) return { respond: true, result: `UNKNOWN_LANGUAGE: The app doesn't know a language called "${named}". Nothing changed. Ask the user which language they mean.` };
+        const change: TranslationChange | null =
+          args.translation === 'on' || args.translation === 'off' || args.translation === 'device'
+            ? { kind: args.translation }
+            : language && typeof args.translateInto === 'string'
+              ? { kind: 'into', language }
+              : language && typeof args.dontTranslate === 'string'
+                ? { kind: 'keep', language }
+                : language
+                  ? { kind: 'translate', language }
+                  : null;
+        if (change) Object.assign(patch, changeTranslation(current, deviceLanguages(), change));
         const next = await deps.settings.update(patch);
         const asked = patch.rate;
         const speedNote =

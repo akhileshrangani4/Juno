@@ -34,6 +34,8 @@ export type Post = PostRef & {
   replyRoot: PostRef | null;
   replyTo?: PostReplyContext | null;
   facets?: PostFacet[];
+  // The languages the post's record declares (often missing or wrong, so only a hint).
+  langs?: string[];
   counts: { likes: number; reposts: number; replies: number };
 };
 

@@ -3,10 +3,15 @@ import { v } from 'convex/values';
 
 export const detailValidator = v.union(v.literal('standard'), v.literal('detailed'));
 
+const translatedValidator = v.union(v.object({ language: v.string(), text: v.string() }), v.null());
+
 export const partsValidator = v.object({
-  images: v.array(v.object({ description: v.string(), beyondAlt: v.string() })),
+  images: v.array(v.object({ description: v.string(), beyondAlt: v.string(), altTranslation: v.optional(translatedValidator) })),
   video: v.union(v.string(), v.null()),
   hashtagTopic: v.union(v.string(), v.null()),
+  videoAltTranslation: v.optional(translatedValidator),
+  translation: v.optional(translatedValidator),
+  untranslatedLanguage: v.optional(v.union(v.string(), v.null())),
 });
 
 export default defineSchema({
@@ -21,6 +26,8 @@ export default defineSchema({
     postUri: v.string(),
     promptVersion: v.number(),
     detail: detailValidator,
+    // The listener's target and kept languages (src/narration/language.ts languagesKey), "" with translation off.
+    languages: v.optional(v.string()),
     status: v.union(v.literal('pending'), v.literal('done'), v.literal('failed')),
     parts: v.optional(partsValidator),
     model: v.optional(v.string()),
@@ -40,7 +47,7 @@ export default defineSchema({
     // What a pending claim holds on that hour's spend counter, until the call completes, fails or expires.
     reservation: v.optional(v.object({ windowStart: v.number(), usd: v.number() })),
   })
-    .index('by_post', ['postUri', 'promptVersion', 'detail'])
+    .index('by_post', ['postUri', 'promptVersion', 'detail', 'languages'])
     .index('by_status_updated', ['status', 'updatedAt']),
   // Hourly counters for describe:describePost: model spend for the whole deployment ("global") and model calls
   // per hashed device id, plus Bluesky fetches ("fetch:…") per deployment, hashed address and hashed device.

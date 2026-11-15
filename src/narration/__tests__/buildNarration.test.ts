@@ -317,6 +317,9 @@ describe('what needs the network, and earcons', () => {
       video: null,
       link: null,
       hashtags: ['a', 'b', 'c', 'd'],
+      body: 'Hi',
+      languageText: 'Hi',
+      langs: [],
     });
   });
 
