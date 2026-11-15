@@ -13,7 +13,7 @@ import { memoryRejection, MemorySignInNeededError, MemoryUnavailableError, type 
 import type { MemoryOffer } from './memoryOffer';
 import { detailFor, narrateForFeed, narratePost, usesDescriptions, usesTranslation, type ReadMode } from './narrationAdapter';
 import { describeFocus } from './postContext';
-import { droppedOf, isAffirmative, isCommand, Publisher, withoutVocative, type ConfirmOutcome, type Draft, type DraftOutcome, type TargetText } from './publisher';
+import { droppedOf, isAffirmative, isCommand, Publisher, withoutVocative, type ConfirmOutcome, type Draft, type DraftImage, type DraftOutcome, type TargetText } from './publisher';
 import { MAX_FACTS } from './memoryRateLimits';
 import { MAX_RATE, MIN_RATE, RATE_STEP, type NarrationSettings, type SettingsStore } from './settings';
 import { answersReadBack, type ToolName } from './tools';
@@ -39,8 +39,20 @@ export type Conversation = {
   onUtterance(listener: () => void): () => void;
 };
 
+// The camera and photo library (src/camera), as the agent reaches them. run() does the action on the phone; the
+// camera speaks for itself, and anything else the user should hear comes back as speak, said in the app's voice.
+export type CameraTools = {
+  run(action: string, subject: string | null): { result: string; speak?: string };
+  // The photo the user kept or chose, waiting to be attached to the next new post.
+  photo(): DraftImage | null;
+  // The photo at this uri went out with a post, or the draft it was on was thrown away.
+  photoUsed(uri: string): void;
+  isOpen(): boolean;
+};
+
 export type AgentDeps = {
   provider: SocialProvider;
+  camera?: CameraTools;
   account(): SocialAccount | null;
   focused(): Post | null;
   move(direction: 'next' | 'previous'): { outcome: MoveOutcome; post: Post | null };
@@ -104,6 +116,8 @@ const MEMORY_NEEDS_SIGN_IN =
 const MEMORY_NEEDS_SIGN_IN_TOLD =
   "MEMORY_NEEDS_SIGN_IN: Memory still needs them to sign in again, and you already told them in this conversation. Don't say it again; answer in a few words without memory.";
 const MEMORY_UNREACHABLE = "MEMORY_UNREACHABLE: The user's memory can't be reached right now, so nothing was saved, read or forgotten. Say in one short sentence that you can't reach their memory right now, then carry on.";
+const PHOTO_REPLACED =
+  "PHOTO_REPLACED: The user kept a different photo after that draft was made, so the app threw the old draft away, published nothing, and asked what the new post should say. Say nothing. When they say it, call draft_post with their exact words.";
 const NO_FOCUS = 'NO_POST: No post is in focus. Tell the user there is no post to act on right now.';
 const REPLIES_FAILED: ToolOutcome = { respond: true, result: "FAILED: The replies couldn't be loaded. Nothing changed. Tell the user it didn't work and they can try again." };
 const MAX_READ_REPLIES = 10;
@@ -113,7 +127,7 @@ const MAX_SUMMARY_REPLIES = 40;
 const WAITING_FOR_ANSWER =
   "WAITING_FOR_ANSWER: The app just read a draft back and is waiting for the user's answer, so nothing was done. Say nothing, and wait for the user.";
 
-const ACCOUNT_TOOLS = new Set<ToolName>(['like_post', 'unlike_post', 'draft_post', 'draft_reply', 'draft_repost', 'draft_delete_my_last_post', 'publish_draft']);
+const ACCOUNT_TOOLS = new Set<ToolName>(['edit_image_description', 'like_post', 'unlike_post', 'draft_post', 'draft_reply', 'draft_repost', 'draft_delete_my_last_post', 'publish_draft']);
 
 const normalized = (text: string) =>
   text
@@ -330,9 +344,11 @@ export function createToolHandlers(deps: AgentDeps) {
     let parent: ReplyParent | null = draft.kind === 'reply' && draft.target ? draft.target : null;
     const root = parent ? (parent.replyRoot ?? { uri: parent.uri, cid: parent.cid }) : null;
     try {
-      for (const text of draft.parts) {
+      const images = draft.image ? [await provider.uploadImage({ uri: draft.image.uri, mimeType: draft.image.mimeType, width: draft.image.width, height: draft.image.height }, draft.image.alt)] : undefined;
+      for (const [i, text] of draft.parts.entries()) {
         if (undoRequested()) break;
-        const ref = parent ? await provider.reply(parent, { text }) : await provider.createPost({ text });
+        const post = { text, images: i === 0 ? images : undefined };
+        const ref = parent ? await provider.reply(parent, post) : await provider.createPost(post);
         refs.push(ref);
         parent = { ...ref, replyRoot: root ?? refs[0] };
       }
@@ -351,6 +367,7 @@ export function createToolHandlers(deps: AgentDeps) {
       }
       return removeAfterSend(draft, deleteSent, entry(), agentMessages.deletedAfterSend, agentMessages.postStuck);
     }
+    if (draft.image) deps.camera?.photoUsed(draft.image.uri);
     place(draft, entry());
     deps.notify(`Result of publish_draft: SENT. The ${draft.kind === 'reply' ? 'reply was sent' : refs.length > 1 ? 'thread was posted' : 'post was published'}. Confirm in a few words.`);
   }
@@ -527,8 +544,22 @@ export function createToolHandlers(deps: AgentDeps) {
   const settingsSummary = (settings: NarrationSettings) =>
     `speed ${settings.rate} times normal, ${settings.mode} reading, hashtags ${settings.skipHashtags ? 'skipped' : 'read'}, ${settings.pictureDetail} picture descriptions, ${translationSummary(settings)}`;
 
+  // A photo draft is bound to the one photo it was made with. Once the user keeps or chooses another, that draft
+  // is gone (a new draft names the new photo and is read back); while the camera is open, its read-back no longer
+  // counts, so nothing is confirmed until the draft has been read back again.
+  // A photo draft is bound to its photo ({ photo: uri }), the way a reply is bound to its post: once another photo
+  // is kept the draft is dropped, so "post it" can never send the replaced one. While the camera is open again over
+  // a photo draft, its read-back no longer counts.
+  function bindPhoto(): boolean {
+    if (!deps.camera || !publisher.currentDraft?.image) return false;
+    if (publisher.contextChanged('photo', deps.camera.photo()?.uri ?? null)) return true;
+    if (deps.camera.isOpen()) publisher.interrupt();
+    return false;
+  }
+
   async function run(name: string, args: Record<string, unknown>): Promise<ToolOutcome> {
     const tool = name as ToolName;
+    if (bindPhoto() && tool === 'publish_draft') return { respond: false, speak: agentMessages.photoReplaced, result: PHOTO_REPLACED };
     if (ACCOUNT_TOOLS.has(tool) && !deps.account()) return { respond: true, result: NOT_SIGNED_IN };
     // Vapi can send a tool call before the final transcript of the words that prompted it, so a call right after a
     // read-back waits a moment for them rather than being taken for the model acting on its own.
@@ -622,7 +653,8 @@ export function createToolHandlers(deps: AgentDeps) {
       case 'draft_reply': {
         if (tool === 'draft_reply' && !focus) return { respond: true, result: NO_FOCUS };
         if (!usesOwnWords(text, deps.conversation.recentUtterances())) return { respond: true, result: REWORDED };
-        return draftResult(publisher.draftText(tool === 'draft_post' ? 'post' : 'reply', text, tool === 'draft_reply' ? focus : null, turn, tool === 'draft_reply' && focus ? translationOf(focus) : null));
+        const image = tool === 'draft_post' ? (deps.camera?.photo() ?? null) : null;
+        return draftResult(publisher.draftText(tool === 'draft_post' ? 'post' : 'reply', text, tool === 'draft_reply' ? focus : null, turn, tool === 'draft_reply' && focus ? translationOf(focus) : null, image));
       }
       case 'draft_repost':
         if (!focus) return { respond: true, result: NO_FOCUS };
@@ -637,11 +669,30 @@ export function createToolHandlers(deps: AgentDeps) {
         if (!usesOwnWords(replace, deps.conversation.recentUtterances())) return { respond: true, result: REWORDED };
         return draftResult(publisher.edit(typeof args.find === 'string' ? args.find : '', replace, turn));
       }
+      case 'edit_image_description': {
+        const replace = typeof args.text === 'string' ? args.text : typeof args.replace === 'string' ? args.replace : '';
+        const removing = typeof args.text === 'string' && !args.text.trim();
+        if (!removing && !usesOwnWords(replace, deps.conversation.recentUtterances())) return { respond: true, result: REWORDED };
+        const find = typeof args.text === 'string' ? null : typeof args.find === 'string' ? args.find : null;
+        if (!publisher.currentDraft?.image) return { respond: true, result: 'NO_IMAGE: The draft has no photo, so there is no image description to change.' };
+        return draftResult(publisher.editImageDescription(find, replace, turn));
+      }
+      case 'camera': {
+        if (!deps.camera) return { respond: false, speak: "The camera isn't available on this phone.", result: "CAMERA_UNAVAILABLE: The app told the user the camera isn't available. Say nothing." };
+        const action = typeof args.action === 'string' ? args.action : '';
+        const subject = typeof args.subject === 'string' && args.subject.trim() ? args.subject.trim() : null;
+        const { result, speak } = deps.camera.run(action, subject);
+        return { respond: false, speak, result };
+      }
       case 'split_draft':
         return draftResult(publisher.split(turn));
-      case 'discard_draft':
+      case 'discard_draft': {
         drafting = null;
-        return { respond: true, result: publisher.discard() ? 'DISCARDED: The draft is gone and nothing was published. Confirm briefly.' : 'NO_DRAFT: There was no draft.' };
+        const image = publisher.currentDraft?.image;
+        if (!publisher.discard()) return { respond: true, result: 'NO_DRAFT: There was no draft.' };
+        if (image) deps.camera?.photoUsed(image.uri);
+        return { respond: true, result: `DISCARDED: The draft is gone and nothing was published${image ? ', and the photo with it' : ''}. Confirm briefly.` };
+      }
       case 'publish_draft': {
         const dropped = leave(focus);
         if (dropped) return droppedOutcome(dropped);

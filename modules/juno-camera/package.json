@@ -1,0 +1,6 @@
+{
+  "name": "juno-camera",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Juno's camera: an AVFoundation preview and capture with Apple Vision framing measurements, all on the device."
+}

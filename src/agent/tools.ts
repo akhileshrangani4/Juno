@@ -68,6 +68,20 @@ const definitions: { name: string; description: string; parameters: Schema; answ
     },
     answersReadBack: true,
   },
+  {
+    name: 'edit_image_description',
+    description:
+      'Change the description of the photo in the draft, which is what other people\'s screen readers will say. Pass text for a whole new description in the user\'s words, or find and replace to change part of it. To remove the description, pass text as an empty string. The app reads the draft back.',
+    parameters: {
+      type: 'object',
+      properties: {
+        text: { type: 'string', description: "The whole new description, in the user's words." },
+        find: { type: 'string', description: 'Words in the current description to replace.' },
+        replace: { type: 'string', description: "The user's new words for them." },
+      },
+    },
+    answersReadBack: true,
+  },
   { name: 'split_draft', description: 'Split a draft that is too long into a thread of posts. Only when the user chooses to split.', parameters: none, answersReadBack: true },
   { name: 'discard_draft', description: 'Throw away the current draft, for "cancel" or "start over".', parameters: none, answersReadBack: true },
   {
@@ -127,6 +141,23 @@ const definitions: { name: string; description: string; parameters: Schema; answ
     description: "Only in their reply right after the question about keeping what they saved before signing in: keep true if they said yes, keep false if they said no.",
     parameters: { type: 'object', properties: { keep: { type: 'boolean', description: 'true only for a plain yes.' } }, required: ['keep'] },
   },
+  {
+    name: 'camera',
+    description:
+      'The camera and the photo library. The app does it on the phone and speaks for itself (cues, descriptions, what was taken), so say nothing after it unless the result asks. open: "open the camera". photos: "choose from my photos". describe: "what do you see?". check: "is my dog in the picture?", "is the whole sign in view?", with subject. shutter: "take the picture". flip: "switch camera". keep and retake: the answer to "keep it or take another?". next and previous: move through the photos. choose: "this one", "pick it". descriptions_on and descriptions_off: whether pictures may be sent to be described. close: "close the camera".',
+    parameters: {
+      type: 'object',
+      properties: {
+        action: {
+          type: 'string',
+          enum: ['open', 'photos', 'describe', 'check', 'shutter', 'flip', 'keep', 'retake', 'next', 'previous', 'choose', 'descriptions_on', 'descriptions_off', 'close'],
+        },
+        subject: { type: 'string', description: 'For check: what the user asked about, in their words, e.g. "my dog", "the whole sign".' },
+      },
+      required: ['action'],
+    },
+    answersReadBack: true,
+  },
   { name: 'open_sign_in', description: 'End the conversation and open the sign-in screen. Only after the user agrees.', parameters: none },
   { name: 'end_conversation', description: 'End the conversation and go back to scrolling, when the user says goodbye, stop, or that they are done.', parameters: none },
 ];
@@ -141,6 +172,7 @@ export type ToolName =
   | 'draft_repost'
   | 'draft_delete_my_last_post'
   | 'edit_draft'
+  | 'edit_image_description'
   | 'split_draft'
   | 'discard_draft'
   | 'publish_draft'
@@ -154,6 +186,7 @@ export type ToolName =
   | 'forget_memory'
   | 'ask_to_keep_saved_memories'
   | 'answer_memory_offer'
+  | 'camera'
   | 'open_sign_in'
   | 'end_conversation';
 

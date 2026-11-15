@@ -17,15 +17,19 @@
     "convex": "^1.50.0",
     "core-js": "^3.51.0",
     "expo": "~58.0.25",
+    "expo-asset": "~58.0.21",
     "expo-audio": "~58.0.12",
     "expo-constants": "~58.0.16",
     "expo-crypto": "~58.0.8",
     "expo-dev-client": "~58.0.20",
+    "expo-file-system": "~58.0.13",
     "expo-font": "~58.0.12",
     "expo-haptics": "~58.0.8",
     "expo-image": "~58.0.18",
+    "expo-image-manipulator": "~58.0.16",
     "expo-linking": "~58.0.17",
     "expo-localization": "~58.0.5",
+    "expo-media-library": "~58.0.14",
     "expo-router": "~58.0.31",
     "expo-secure-store": "~58.0.3",
     "expo-speech": "~58.0.4",
@@ -57,6 +61,7 @@
     "eslint-config-expo": "^58.0.4",
     "jest": "^30.5.2",
     "jest-expo": "^58.0.14",
+    "jpeg-js": "^0.4.4",
     "typescript": "~6.0.3"
   },
   "scripts": {
@@ -70,7 +75,8 @@
     "convex:dev": "convex dev",
     "eval:agent": "jest --testRegex 'src/agent/__eval__/vapiChat\\.eval\\.ts$' --testTimeout 900000",
     "eval:memory-proof": "esbuild src/agent/__eval__/memoryProof.run.ts --bundle --platform=node --format=cjs --log-level=warning --outfile=.eval/memory-proof.cjs --alias:react-native=./src/agent/__eval__/nativeShim.ts --alias:expo-secure-store=./src/agent/__eval__/nativeShim.ts && node .eval/memory-proof.cjs",
-    "eval:bluesky": "esbuild src/agent/__eval__/bluesky.run.ts --bundle --platform=node --format=cjs --log-level=warning --outfile=.eval/bluesky.cjs --alias:react-native=./src/agent/__eval__/nativeShim.ts --alias:expo-secure-store=./src/agent/__eval__/nativeShim.ts && node .eval/bluesky.cjs"
+    "eval:bluesky": "esbuild src/agent/__eval__/bluesky.run.ts --bundle --platform=node --format=cjs --log-level=warning --outfile=.eval/bluesky.cjs --alias:react-native=./src/agent/__eval__/nativeShim.ts --alias:expo-secure-store=./src/agent/__eval__/nativeShim.ts && node .eval/bluesky.cjs",
+    "eval:look": "esbuild scripts/look-eval.ts --bundle --platform=node --format=cjs --log-level=warning --outfile=.eval/look.cjs --loader:.jpg=empty && node .eval/look.cjs"
   },
   "private": true,
   "packageManager": "pnpm@12.11.2"

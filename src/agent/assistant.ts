@@ -1,4 +1,5 @@
 import { APP_NAME } from '@/appName';
+import { cameraMessages } from '@/camera/cameraMessages';
 
 import { buildSystemPrompt, type PromptContext } from './systemPrompt';
 import { vapiTools } from './tools';
@@ -11,6 +12,8 @@ export const SILENCE_TIMEOUT_SECONDS = 30;
 export const MAX_DURATION_SECONDS = 600;
 export const FIRST_MESSAGE = "I'm listening.";
 export const POST_FIRST_MESSAGE = 'What would you like to post?';
+// When the call starts because a photo was kept or chosen, the agent opens by asking for the post's words.
+export const PHOTO_FIRST_MESSAGE = cameraMessages.photoReady;
 
 // Words the transcriber should expect. On a real call Deepgram heard "post" at the start of an utterance as
 // "host" ("Host, hello again.", "Host it."), so the agent missed drafts and "post it" never confirmed.
@@ -27,7 +30,7 @@ export const clientMessages = ['tool-calls', 'transcript', 'status-update', 'spe
 export function buildAssistant(context: PromptContext) {
   return {
     name: `${APP_NAME} voice agent`,
-    firstMessage: context.opening === 'post' ? POST_FIRST_MESSAGE : context.memoryOffer ? `${FIRST_MESSAGE} ${context.memoryOffer}` : FIRST_MESSAGE,
+    firstMessage: context.photo ? PHOTO_FIRST_MESSAGE : context.opening === 'post' ? POST_FIRST_MESSAGE : context.memoryOffer ? `${FIRST_MESSAGE} ${context.memoryOffer}` : FIRST_MESSAGE,
     firstMessageMode: 'assistant-speaks-first' as const,
     model: {
       provider: 'openai' as const,

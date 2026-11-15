@@ -10,6 +10,10 @@ if ! xcodebuild -version >/dev/null 2>&1; then
 fi
 : "${APPLE_TEAM_ID:?Set APPLE_TEAM_ID to your Apple development team (see docs/building.md)}"
 if [ -f build.env ]; then set -a; . ./build.env; set +a; fi
+if [ "${EXPO_PUBLIC_DEV_FRAME_SOURCE:-}" = 1 ] || grep -qsE '^[[:space:]]*EXPO_PUBLIC_DEV_FRAME_SOURCE[[:space:]]*=[[:space:]]*["'"'"']?1' .env .env.local .env.production .env.production.local; then
+  echo "EXPO_PUBLIC_DEV_FRAME_SOURCE=1 is for simulator test builds only; unset it (and remove it from .env files) to build for a phone" >&2
+  exit 1
+fi
 export CI=1 COREPACK_ENABLE_DOWNLOAD_PROMPT=0
 export EXPO_PUBLIC_CONVEX_URL="${EXPO_PUBLIC_CONVEX_URL:-https://dependable-goshawk-583.convex.cloud}"
 corepack pnpm install --frozen-lockfile

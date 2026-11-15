@@ -245,10 +245,11 @@ export class BlueskyProvider implements SocialProvider {
     return flattenReplies(data.thread, agent?.did);
   }
 
-  async uploadImage(image: { uri: string; mimeType: string }, alt: string): Promise<UploadedImage> {
+  async uploadImage(image: { uri: string; mimeType: string; width?: number; height?: number }, alt: string): Promise<UploadedImage> {
     const bytes = new Uint8Array(await (await fetch(image.uri)).arrayBuffer());
     const { data } = await this.agent().uploadBlob(bytes, { encoding: image.mimeType });
-    return { alt, handle: data.blob };
+    const aspectRatio = image.width && image.height ? { width: Math.round(image.width), height: Math.round(image.height) } : undefined;
+    return { alt, handle: data.blob, aspectRatio };
   }
 
   private async viewerOf(post: PostRef) {
@@ -377,7 +378,7 @@ export class BlueskyProvider implements SocialProvider {
       facets: richText.facets,
       reply,
       embed: images?.length
-        ? { $type: 'app.bsky.embed.images', images: images.map((image) => ({ alt: image.alt, image: image.handle as BlobRef })) }
+        ? { $type: 'app.bsky.embed.images', images: images.map((image) => ({ alt: image.alt, image: image.handle as BlobRef, ...(image.aspectRatio ? { aspectRatio: image.aspectRatio } : {}) })) }
         : undefined,
     });
   }

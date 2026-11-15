@@ -3,6 +3,7 @@ import { APP_NAME } from '@/appName';
 // Everything the app itself says around a call, in one place.
 export const agentMessages = {
   connecting: 'Waking the agent.',
+  photoReplaced: 'You kept a new photo, so I threw away the earlier draft. Nothing was posted. What should the new post say?',
   micExplain:
     'To talk with the agent, the app needs your microphone. It listens only while the agent is awake. Your iPhone will now ask for permission. Choose Allow.',
   micDenied:
