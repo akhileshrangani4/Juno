@@ -24,7 +24,7 @@ describe('startPractice', () => {
     const { state, feedback } = startPractice(0);
     expect(state).toEqual({ phase: 'practicing', step: 0, misses: 0, readyAt: 0 });
     expect(feedback?.text).toContain("Let's practice 4 gestures, one at a time.");
-    expect(feedback?.text).toContain('press Skip practice at the bottom right');
+    expect(feedback?.text).toContain('press Skip practice at the bottom of the screen');
     expect(feedback?.text).toContain('choose it from the VoiceOver actions');
     expect(feedback?.text).toContain('with Voice Control, say: tap Skip practice');
     expect(feedback?.text).toContain(`Step 1 of 4. ${GESTURES[0].instruction}`);
@@ -47,8 +47,9 @@ describe('practiceReducer', () => {
     });
     expect(results.map((r) => r?.feedback?.haptic)).toEqual(['previous', 'next', 'agentAwake', 'agentAsleep']);
     expect(result.state.phase).toBe('complete');
-    expect(result.feedback?.text).toContain('Tap anywhere to continue.');
-    expect(result.feedback?.text).toContain('Gesture help action');
+    expect(result.feedback?.text).toContain('Tap above the buttons to finish.');
+    expect(result.feedback?.text).toContain("With VoiceOver, the feed's Gesture help repeats this.");
+    expect(result.feedback?.text).not.toContain('Gesture help action');
   });
 
   it('names the wrong half and asks again without advancing', () => {

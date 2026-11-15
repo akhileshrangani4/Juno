@@ -39,7 +39,7 @@ describe('startDiscovery', () => {
 });
 
 describe('stuck hint after unrecognized strokes', () => {
-  const listening = (learned: GestureId[] = []) => discoveryReducer(fresh(learned), { type: 'quiet', at: 0 }).state;
+  const listening = (learned: GestureId[] = []) => discoveryReducer(fresh(learned), { type: 'quiet', mode: 'scroll', at: 0 }).state;
 
   it(`hints after ${STROKES_BEFORE_HINT} unrecognized strokes in a row, then starts counting again`, () => {
     const { hints, state } = apply(listening(), strokes(['curve', 'curve', 'curve', 'curve']));
@@ -63,12 +63,17 @@ describe('stuck hint after unrecognized strokes', () => {
   });
 
   it('holds a stroke hint until the post being read has finished, instead of cutting it off', () => {
-    const { hints } = apply(fresh(), [...strokes(['curve', 'curve', 'curve']), { type: 'quiet', at: 5000 }]);
+    const { hints } = apply(fresh(), [...strokes(['curve', 'curve', 'curve']), { type: 'quiet', mode: 'scroll', at: 5000 }]);
     expect(hints).toEqual([null, null, null, 'circleClockwise']);
   });
 
+  it('drops a held hint instead of speaking it when the narration ends with the agent awake', () => {
+    const { hints } = apply(fresh(), [...strokes(['curve', 'curve', 'curve']), { type: 'quiet', mode: 'agent', at: 5000 }, { type: 'quiet', mode: 'scroll', at: 6000 }]);
+    expect(hints).toEqual([null, null, null, null, null]);
+  });
+
   it('holds a stroke hint while the narrator reports it is speaking, even with no event saying a post started', () => {
-    const { hints } = apply(listening(), [...strokes(['curve', 'curve', 'curve'], 'scroll', true), { type: 'quiet', at: 5000 }]);
+    const { hints } = apply(listening(), [...strokes(['curve', 'curve', 'curve'], 'scroll', true), { type: 'quiet', mode: 'scroll', at: 5000 }]);
     expect(hints).toEqual([null, null, null, 'circleClockwise']);
   });
 
@@ -84,9 +89,9 @@ describe('stuck hint after unrecognized strokes', () => {
   });
 
   it('drops a held stroke hint once the user moves on', () => {
-    const viaGesture = apply(fresh(), [...strokes(['curve', 'curve', 'curve']), { type: 'recognized', gesture: 'tapBottom', at: 4000 }, { type: 'quiet', at: 5000 }]);
+    const viaGesture = apply(fresh(), [...strokes(['curve', 'curve', 'curve']), { type: 'recognized', gesture: 'tapBottom', at: 4000 }, { type: 'quiet', mode: 'scroll', at: 5000 }]);
     expect(viaGesture.hints).toEqual([null, null, null, null, null]);
-    const viaAction = apply(fresh(), [...strokes(['curve', 'curve', 'curve']), { type: 'activity', at: 4000 }, { type: 'quiet', at: 5000 }]);
+    const viaAction = apply(fresh(), [...strokes(['curve', 'curve', 'curve']), { type: 'activity', at: 4000 }, { type: 'quiet', mode: 'scroll', at: 5000 }]);
     expect(viaAction.hints).toEqual([null, null, null, null, null]);
   });
 
@@ -94,16 +99,16 @@ describe('stuck hint after unrecognized strokes', () => {
     const { hints } = apply(listening(), [
       ...strokes(['curve', 'curve']),
       { type: 'recognized', gesture: 'tapBottom', at: 2500 },
-      { type: 'quiet', at: 2600 },
+      { type: 'quiet', mode: 'scroll', at: 2600 },
       ...strokes(['curve', 'curve']),
     ]);
     expect(hints).toEqual([null, null, null, null, null, null]);
   });
 
   it('stays quiet after the first sessions or once every gesture has been used', () => {
-    expect(apply(discoveryReducer(fresh([], FIRST_SESSIONS + 1), { type: 'quiet', at: 0 }).state, strokes(['curve', 'curve', 'curve'])).hints).toEqual([null, null, null]);
+    expect(apply(discoveryReducer(fresh([], FIRST_SESSIONS + 1), { type: 'quiet', mode: 'scroll', at: 0 }).state, strokes(['curve', 'curve', 'curve'])).hints).toEqual([null, null, null]);
     const learnedAll: DiscoveryEvent[] = GESTURES.map((g, i) => ({ type: 'recognized', gesture: g.id, at: i }));
-    const { state, hints } = apply(listening(), [...learnedAll, { type: 'quiet', at: 10 }, ...strokes(['curve', 'curve', 'curve'])]);
+    const { state, hints } = apply(listening(), [...learnedAll, { type: 'quiet', mode: 'scroll', at: 10 }, ...strokes(['curve', 'curve', 'curve'])]);
     expect(state.active).toBe(false);
     expect(hints.every((hint) => hint === null)).toBe(true);
   });
@@ -118,7 +123,7 @@ describe('stuck hint after unrecognized strokes', () => {
     const { hints } = apply(listening(), [
       ...strokes(['curve', 'curve']),
       { type: 'scrolling', at: 2500 },
-      { type: 'quiet', at: 2600 },
+      { type: 'quiet', mode: 'scroll', at: 2600 },
       ...strokes(['curve', 'curve']),
       { type: 'unrecognized', stroke: 'curve', mode: 'scroll', narrating: false, at: 9000 },
     ]);
@@ -136,7 +141,7 @@ describe('stuck hint after unrecognized strokes', () => {
 });
 
 describe('stuck hint after a long idle', () => {
-  const quiet = (at: number): DiscoveryEvent => ({ type: 'quiet', at });
+  const quiet = (at: number): DiscoveryEvent => ({ type: 'quiet', mode: 'scroll', at });
   const tick = (at: number, mode: 'scroll' | 'agent' = 'scroll', narrating = false): DiscoveryEvent => ({ type: 'tick', mode, narrating, at });
 
   it('hints once the narration has been quiet for the idle time, and only once per idle stretch', () => {

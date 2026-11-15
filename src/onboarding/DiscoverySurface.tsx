@@ -56,7 +56,8 @@ export function DiscoverySurface({
     };
   }, []);
 
-  useEffect(() => narrator.onDone(() => onEffectEvent({ type: 'quiet', at: Date.now() })), [narrator]);
+  const onQuiet = useEffectEvent(() => dispatch({ type: 'quiet', mode: discoveryMode, at: Date.now() }));
+  useEffect(() => narrator.onDone(() => onQuiet()), [narrator]);
 
   useEffect(() => {
     if (discoveryMode === 'scroll') onEffectEvent({ type: 'scrolling', at: Date.now() });
@@ -64,7 +65,7 @@ export function DiscoverySurface({
 
   useEffect(() => {
     if (!focused) return;
-    onEffectEvent({ type: 'quiet', at: Date.now() });
+    onEffectEvent({ type: 'quiet', mode: discoveryMode, at: Date.now() });
     const timer = setInterval(() => onEffectEvent({ type: 'tick', mode: discoveryMode, narrating: postNarrator.speaking(), at: Date.now() }), TICK_MS);
     return () => clearInterval(timer);
   }, [focused, discoveryMode, postNarrator]);

@@ -14,7 +14,7 @@ export type DiscoveryState = {
 export type DiscoveryEvent =
   | { type: 'recognized'; gesture: GestureId; at: number }
   | { type: 'unrecognized'; stroke: StrokeKind; mode: FeedMode; narrating: boolean; at: number }
-  | { type: 'quiet'; at: number }
+  | { type: 'quiet'; mode: FeedMode; at: number }
   | { type: 'tick'; mode: FeedMode; narrating: boolean; at: number }
   | { type: 'scrolling'; at: number }
   | { type: 'activity'; at: number };
@@ -84,7 +84,7 @@ export function discoveryReducer(state: DiscoveryState, event: DiscoveryEvent, g
       return none({ ...state, streak: [], speaking: true, quietSince: event.at, idleHinted: false, pending: null });
     case 'quiet': {
       const next = { ...state, speaking: false, quietSince: event.at, pending: null };
-      if (!state.active || !state.pending) return none(next);
+      if (!state.active || !state.pending || event.mode === 'agent') return none(next);
       return { state: { ...next, speaking: true }, hint: find(state.pending) };
     }
     case 'tick': {
