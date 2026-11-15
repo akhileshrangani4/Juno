@@ -37,7 +37,11 @@ function strings(path: string): string[] {
 
 describe('the app is called Juno everywhere a person can see or hear it', () => {
   it('has no string in src/ or convex/ that says consumerhack, apart from the kept identifiers', () => {
-    const offending = [...sourceFiles(join(ROOT, 'src')), ...sourceFiles(join(ROOT, 'convex'))].flatMap((path) => {
+    const files = [...sourceFiles(join(ROOT, 'src')), ...sourceFiles(join(ROOT, 'convex'))];
+    for (const dir of ['src/agent', 'src/app', 'src/auth', 'src/narration', 'src/onboarding', 'src/screens', 'convex']) {
+      expect(files.some((path) => relative(ROOT, path).startsWith(`${dir}/`))).toBe(true);
+    }
+    const offending = files.flatMap((path) => {
       const file = relative(ROOT, path);
       return strings(path)
         .filter((text) => OLD_NAME.test(text) && !(ALLOWED_STRINGS[file] ?? []).includes(text))
