@@ -10,5 +10,6 @@ export function createSocialProvider(): SocialProvider {
     store: secureStore,
     service: process.env.EXPO_PUBLIC_BLUESKY_SERVICE,
     demoFeed: process.env.EXPO_PUBLIC_BLUESKY_DEMO_FEED,
+    oauthOrigin: process.env.EXPO_PUBLIC_BLUESKY_OAUTH_ORIGIN,
   });
 }
