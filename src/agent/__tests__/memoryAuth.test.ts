@@ -1,7 +1,7 @@
 import { p256 } from '@noble/curves/nist.js';
 import { secp256k1 } from '@noble/curves/secp256k1.js';
 
-import { authorizeMemory, didSource, fetchPlcDocument, isPublicAddress, REFETCH_AFTER_MS, signingKeyOf, type AuthDeps, type CachedKey, type DidSource, type MemoryAccess } from '../../../convex/memoryAuth';
+import { authorizeMemory, didSource, fetchPlcDocument, isPublicAddress, KEY_CACHE_MS, REFETCH_AFTER_MS, signingKeyOf, type AuthDeps, type CachedKey, type DidSource, type MemoryAccess } from '../../../convex/memoryAuth';
 import { MEMORY_METHOD, memoryAudience } from '../../../convex/memoryService';
 import { MEMORY_LIMITS, takeOne, type Bucket, type RateCheck } from '../memoryRateLimits';
 
@@ -179,6 +179,29 @@ describe('signed-in memory access', () => {
     for (let i = 0; i < 5; i++) await expect(memory.authorize(asAccount(ALICE, SESSION_A, serviceToken(impostor)))).rejects.toEqual(refused('badSignature'));
     expect(fetches(memory)).toEqual([`fetch https://plc.directory/${nobody.did}`, `fetch https://plc.directory/${ALICE}`]);
     await expect(memory.authorize(asAccount(ALICE, SESSION_B, serviceToken(alice)))).resolves.toBe(`bsky:${ALICE}`);
+  });
+
+  it("keeps a verified key when the directory fails during a forced refetch, so a bad proof can't lock its owner out", async () => {
+    const directory: Record<string, string> = { ...documents };
+    const memory = server(directory);
+    const at = (signer: Account, iss = signer.did) => serviceToken(signer, { iss, iat: Math.floor(memory.deps.now() / 1000), exp: Math.floor(memory.deps.now() / 1000) + 60 });
+    await expect(memory.authorize(asAccount(ALICE, SESSION_A, at(alice)))).resolves.toBe(`bsky:${ALICE}`);
+    delete directory[ALICE];
+    memory.advance(REFETCH_AFTER_MS + 60_000);
+    memory.deps.addressHash = 'address-2';
+    await expect(memory.authorize(asAccount(ALICE, SESSION_B, at(bob, ALICE)))).rejects.toEqual(refused('badSignature'));
+    expect(fetches(memory)).toEqual([`fetch https://plc.directory/${ALICE}`, `fetch https://plc.directory/${ALICE}`]);
+    memory.deps.addressHash = 'address-1';
+    await expect(memory.authorize(asAccount(ALICE, 'c'.repeat(64), at(alice)))).resolves.toBe(`bsky:${ALICE}`);
+    memory.advance(KEY_CACHE_MS);
+    await expect(memory.authorize(asAccount(ALICE, 'd'.repeat(64), at(alice)))).resolves.toBe(`bsky:${ALICE}`);
+    expect(fetches(memory)).toHaveLength(3);
+    directory[ALICE] = JSON.stringify({ id: ALICE, verificationMethod: [] });
+    memory.advance(REFETCH_AFTER_MS);
+    memory.deps.addressHash = 'address-3';
+    await expect(memory.authorize(asAccount(ALICE, 'e'.repeat(64), at(bob, ALICE)))).rejects.toEqual(refused('badSignature'));
+    memory.deps.addressHash = 'address-1';
+    await expect(memory.authorize(asAccount(ALICE, 'f'.repeat(64), at(alice)))).resolves.toBe(`bsky:${ALICE}`);
   });
 
   it("lets one address send garbage proofs for an hour without switching off anyone else's memory", async () => {

@@ -97,6 +97,25 @@ Release builds without the variable print these lines with `console.log`, which 
 
 `eas.json` has `development` (dev client), `preview` and `production` profiles: `npx eas-cli build --profile development --platform ios`. This needs an Expo account and, for iOS, an Apple developer account.
 
+## App icon and launch screen
+
+Juno's logo is a peacock chick, for the bird in Juno's name, with its fanned tail drawn as rounded sound bars. Akhilesh chose the chick; Derek Lu chose the Midnight peacock palette: a gold chick with a cream belly and teal, green and blue bars on navy `#0F1B3D`. The two masters were made with an image model and live in `assets/logo`:
+
+| Master | What it is |
+| --- | --- |
+| `juno-icon-1024.png` | The full-bleed square icon on navy, with no transparency and no rounded corners (iOS applies its own mask). |
+| `juno-mark-transparent-1024.png` | The chick and bars alone on a transparent background. |
+
+Every image app.json uses is generated from them by one script:
+
+```bash
+uv run scripts/generate-icons.py   # or python3 scripts/generate-icons.py with pillow and numpy installed
+```
+
+It writes `assets/images/icon.png` (the iOS and default icon), `splash-icon.png` (the launch screen), `android-icon-foreground.png` and `android-icon-monochrome.png` (the adaptive icon, inside its 66% safe zone) and `favicon.png`. The model's output needed small fixes, which the script applies on every run: the icon's background was `#101F3E` with some noise, so it is set to exactly `#0F1B3D`; the mark's stray near-transparent pixels are cleared, its edges take their colour from the shape so no fringe shows, and its dark outline is painted the same navy so the launch screen matches the icon. To change the logo, replace a master and run the script again; don't edit the generated files by hand.
+
+The launch screen shows the mark on the same navy, so opening the app doesn't flash another colour. It has no separate `dark` entry on purpose: app.json sets `userInterfaceStyle` to `dark`, so iOS always uses this one, and a `dark` entry would make the splash plugin rewrite `UIUserInterfaceStyle` to `Automatic`, which would let system controls turn light. The app's own screens are black, so `src/app/_layout.tsx` sets the splash screen to fade out over 300 ms (iOS) instead of cutting from navy to black when expo-router hides it.
+
 ## Convex
 
 `pnpm convex:dev` creates or links a personal deployment, pushes `convex/`, regenerates `convex/_generated` and writes `EXPO_PUBLIC_CONVEX_URL` to `.env.local`. With `CONVEX_DEPLOY_KEY` in the environment, `npx convex deploy` pushes to the deployment the key belongs to.
@@ -131,7 +150,7 @@ None of these is ever set in the app or in `.env.local`. The voice agent's Conve
 - **OAuth sign-ins** need the scope `rpc:com.akhileshrangani.juno.accessMemory?aud=did:web:<deployment>.convex.site%23juno_memory`. The client metadata pins it to the deployment that serves the metadata, so the grant can't mint memory proofs for any other service. If the client id moves elsewhere (AKH-24), the scope must still name the memory deployment.
 - **People who signed in with OAuth before the scope was added** have to sign in again before memory works. Their server refuses the proof with 403 "Missing required scope". The first time memory comes up in a conversation, the agent says in one sentence that remembering needs them to sign in again, and offers to open sign-in. After that it doesn't repeat it. Everything else works. App-password sessions need nothing new.
 - **DID documents** come only from plc.directory (`did:plc`) or from a public host name (`did:web`, with no port and no path). A `did:web` host is fetched from a Node action (`convex/didWeb.ts`). That action connects only to the addresses it checked and refuses private, loopback, link-local and similar ranges. Neither fetch follows redirects, and both stop after 3 seconds or 64 KB, counted as the body streams in.
-- **Fetches are cached and limited**, so garbage proofs can't switch memory off for everyone. A proof is fully checked before any fetch: its structure, account, audience, method and lifetime, and that the account is a `did:plc` or a safe `did:web`. A key that verified is cached for 24 hours, so a returning user costs no fetch. A key the account rotated away can keep opening that account's memory, and nothing else, for up to a day. After any fetch of a DID, whether it found a key, found none, or the proof then failed, that DID isn't fetched again for 10 minutes, which also bounds key-rotation refetches.
+- **Fetches are cached and limited**, so garbage proofs can't switch memory off for everyone. A proof is fully checked before any fetch: its structure, account, audience, method and lifetime, and that the account is a `did:plc` or a safe `did:web`. A key that verified is cached for 24 hours, so a returning user costs no fetch. A key the account rotated away can keep opening that account's memory, and nothing else, for up to a day. After any fetch of a DID, whether it found a key, found none, or the proof then failed, that DID isn't fetched again for 10 minutes, which also bounds key-rotation refetches. A fetch that fails or finds no key keeps the key verified before, which stays in use until a fetch returns a different one: anyone can force a refetch with a badly signed proof, and while plc.directory is failing that would otherwise lock the account's owner out. The OAuth scope's memory audience, the proof the app asks for and the audience the deployment accepts must agree; `src/agent/__tests__/memoryAudience.test.ts` fails if the client id (AKH-24) or the build's Convex URL moves without the others.
 - **Fetch windows.** Each caller address may cause 6 fetches an hour, and the deployment 300. A fetch is needed only the first time an account is seen in a day, so 300 an hour covers about 7,200 different accounts a day, far beyond Juno's use, while one address can take at most 2% of it.
 - **Known limit, unchanged:** two addresses calling at their full memory rate (60 per 10 minutes each) can still use up the deployment's 600 memory calls an hour.
 - **Checking against the real servers.** `pnpm eval:memory-proof` runs the checks with the test account in `BLUESKY_TEST_HANDLE` and `BLUESKY_TEST_APP_PASSWORD`.
