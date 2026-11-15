@@ -196,9 +196,9 @@ export class AgentSession {
   // one is waiting for an answer, every assistant transcript is logged with who it was put down to, never its words.
   private onAssistantSaid(transcript: string) {
     const awaiting = this.deps.handlers.publisher.awaitingAnswer;
-    const { speaker, by } = this.voice.attribute(transcript);
-    if (awaiting) this.deps.log('assistant speech during read-back', { speaker, by });
-    if (speaker === 'model' && this.deps.handlers.assistantSaid()) this.deps.log('yes voided by assistant speech', { by });
+    const { speaker, by, source, turn } = this.voice.attribute(transcript);
+    if (awaiting) this.deps.log('assistant speech during read-back', { speaker, by, source, turn });
+    if (speaker === 'model' && this.deps.handlers.assistantSaid()) this.deps.log('yes voided by assistant speech', { by, source, turn });
   }
 
   // Everything the app says in the agent's voice goes through here, so its transcript is known to be the app's.

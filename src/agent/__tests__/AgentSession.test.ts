@@ -134,109 +134,143 @@ describe('AgentSession', () => {
     expect(provider.createPost).not.toHaveBeenCalled();
   });
 
-  it("voids the read-back when the assistant says something of its own before the user's yes, but not for the app's own words", async () => {
-    const { session, call, userSays, toolCall, emit, provider } = setup();
-    await session.start();
-    const assistantSays = (transcript: string) => emit({ type: 'transcript', role: 'assistant', transcriptType: 'final', transcript });
-    userSays('post hello from my new app');
-    await toolCall('draft_post', { text: 'Hello from my new app.' });
-    assistantSays('Posting to your followers: Hello from my new app.');
-    assistantSays('Shall I post it?');
-    assistantSays('Want me to like it too?');
-    userSays('yes');
-    await toolCall('publish_draft', { draftId: draftIdOf(call.addMessage) });
-    expect(call.addMessage).toHaveBeenLastCalledWith(expect.stringMatching(/^Result of publish_draft: REREAD/), false);
-    expect(call.say).toHaveBeenLastCalledWith('Posting to your followers: Hello from my new app. Shall I post it?');
-    assistantSays('Posting to your followers: Hello from my new app. Shall I post it?');
-    userSays('yes');
-    await toolCall('publish_draft', { draftId: draftIdOf(call.addMessage) });
-    expect(call.say).toHaveBeenLastCalledWith('Posting in five seconds. Say undo to stop it.');
-    expect(provider.createPost).not.toHaveBeenCalled();
-  });
-
-  describe("telling the app's read-back apart from the model's speech when Vapi rewrites it", () => {
+  describe("telling the app's read-back apart from the model's speech", () => {
     const readBack = 'Posting to your followers: @alice.bsky.social see you at 5. Shall I post it?';
     const asSpoken = 'Posting to your followers. alice dot bsky dot social see you at five. Shall I post it?';
+    const question = 'Want me to like it too?';
+    const countdown = 'Posting in five seconds. Say undo to stop it.';
 
-    async function draftWithNumbersAndHandle() {
+    async function drafted(tool: 'draft_post' | 'draft_reply' = 'draft_post', text = '@alice.bsky.social see you at 5') {
       const world = setup();
       await world.session.start();
-      world.userSays('post @alice.bsky.social see you at 5');
-      await world.toolCall('draft_post', { text: '@alice.bsky.social see you at 5' });
-      expect(world.call.say).toHaveBeenLastCalledWith(readBack);
+      world.userSays(`${tool === 'draft_post' ? 'post' : 'reply'} ${text}`);
+      await world.toolCall(tool, { text });
       const assistantSays = (transcript: string) => world.emit({ type: 'transcript', role: 'assistant', transcriptType: 'final', transcript });
-      const speech = (status: 'started' | 'stopped', turn?: number) => world.emit({ type: 'speech-update', role: 'assistant', status, turn });
+      const speech = (turn?: number) => world.emit({ type: 'speech-update', role: 'assistant', status: 'started', turn });
+      const source = (value: unknown, turn: number) => world.emit({ type: 'assistant.speechStarted', source: value, turn, text: '' });
       const confirm = async () => {
         world.userSays('yes');
         await world.toolCall('publish_draft', { draftId: draftIdOf(world.call.addMessage) });
       };
-      return { ...world, assistantSays, speech, confirm };
+      const lastSaid = () => world.call.say.mock.calls.at(-1)?.[0] as string;
+      return { ...world, assistantSays, speech, source, confirm, lastSaid, spokenReadBack: lastSaid() };
     }
 
     it('keeps the yes when the read-back comes back with digits spelled out and the handle reformatted', async () => {
-      const { speech, assistantSays, confirm, call, logs } = await draftWithNumbersAndHandle();
-      speech('started', 1);
-      speech('stopped', 1);
+      const { speech, assistantSays, confirm, lastSaid, logs } = await drafted();
+      speech(1);
       assistantSays(asSpoken);
       await confirm();
-      expect(call.say).toHaveBeenLastCalledWith('Posting in five seconds. Say undo to stop it.');
-      expect(logs).toContain('assistant speech during read-back {"speaker":"app","by":"speech"}');
+      expect(lastSaid()).toBe(countdown);
+      expect(logs).toContain('assistant speech during read-back {"speaker":"app","by":"timing and words","source":null,"turn":1}');
       expect(logs).toContain('publish confirmed');
     });
 
-    it('keeps the yes on the words alone when Vapi reports no speech events', async () => {
-      const { assistantSays, confirm, call, logs } = await draftWithNumbersAndHandle();
-      assistantSays(asSpoken);
+    it("lets Vapi's force-say decide, whatever the words", async () => {
+      const { source, speech, assistantSays, confirm, lastSaid, logs } = await drafted();
+      source('force-say', 1);
+      speech(1);
+      assistantSays('Words the formatter rewrote beyond recognition.');
       await confirm();
-      expect(call.say).toHaveBeenLastCalledWith('Posting in five seconds. Say undo to stop it.');
-      expect(logs).toContain('assistant speech during read-back {"speaker":"app","by":"words"}');
+      expect(lastSaid()).toBe(countdown);
+      expect(logs).toContain('assistant speech during read-back {"speaker":"app","by":"source","source":"force-say","turn":1}');
     });
 
-    it("trusts Vapi's named source of a turn over what was due", async () => {
-      const { emit, speech, assistantSays, confirm, call } = await draftWithNumbersAndHandle();
-      emit({ type: 'assistant.speechStarted', source: 'force-say', turn: 1, text: asSpoken });
-      speech('started', 1);
-      assistantSays('Totally different words the formatter made up.');
-      await confirm();
-      expect(call.say).toHaveBeenLastCalledWith('Posting in five seconds. Say undo to stop it.');
-    });
-
-    it('still voids the yes when the model asks its own question after the read-back', async () => {
-      const { speech, assistantSays, confirm, call, logs, provider } = await draftWithNumbersAndHandle();
-      speech('started', 1);
-      speech('stopped', 1);
+    it("voids the yes when the model asks its own question after the read-back, and keeps the next read-back's yes", async () => {
+      const { speech, assistantSays, confirm, lastSaid, logs, provider } = await drafted();
+      speech(1);
       assistantSays(asSpoken);
-      speech('started', 2);
-      assistantSays('Want me to like it too?');
+      speech(2);
+      assistantSays(question);
       await confirm();
-      expect(call.say).toHaveBeenLastCalledWith(readBack);
-      expect(call.addMessage).toHaveBeenLastCalledWith(expect.stringMatching(/^Result of publish_draft: REREAD/), false);
+      expect(lastSaid()).toBe(readBack);
       expect(logs).toEqual(
         expect.arrayContaining([
-          'assistant speech during read-back {"speaker":"model","by":"speech"}',
-          'yes voided by assistant speech {"by":"speech"}',
+          'assistant speech during read-back {"speaker":"model","by":"timing and words","source":null,"turn":2}',
+          'yes voided by assistant speech {"by":"timing and words","source":null,"turn":2}',
           'publish refused {"reason":"expired"}',
         ]),
       );
+      speech(3);
+      assistantSays(asSpoken);
+      await confirm();
+      expect(lastSaid()).toBe(countdown);
       expect(provider.createPost).not.toHaveBeenCalled();
     });
 
-    it('voids the yes when Vapi names the model as the source, even with a say() still due', async () => {
-      const { emit, speech, assistantSays, confirm, call } = await draftWithNumbersAndHandle();
-      emit({ type: 'assistant.speechStarted', source: 'model', turn: 1, text: 'Should I like it too?' });
-      speech('started', 1);
-      assistantSays('Should I like it too?');
-      await confirm();
-      expect(call.say).toHaveBeenLastCalledWith(readBack);
+    it('treats only force-say as the app: custom-voice and any other named source are the model', async () => {
+      for (const named of ['custom-voice', 'something-new']) {
+        const { speech, source, assistantSays, confirm, lastSaid } = await drafted();
+        speech(1);
+        assistantSays(asSpoken);
+        source(named, 2);
+        assistantSays(question);
+        await confirm();
+        expect([named, lastSaid()]).toEqual([named, readBack]);
+      }
     });
 
-    it("stops counting a say() as due when Vapi never reports its speech", async () => {
-      const { speech, assistantSays, confirm, call, scheduler } = await draftWithNumbersAndHandle();
-      await scheduler.advance(60_000);
-      speech('started');
-      assistantSays('Should I like it too?');
+    it('treats a report with no source as no report, so the words still have to be the read-back', async () => {
+      const { source, speech, assistantSays, confirm, lastSaid } = await drafted();
+      source(undefined, 1);
+      speech(1);
+      assistantSays(question);
       await confirm();
-      expect(call.say).toHaveBeenLastCalledWith(readBack);
+      expect(lastSaid()).toBe(readBack);
+    });
+
+    it("lets Vapi naming the model win over a word match: a question reusing the reply's words doesn't confirm it", async () => {
+      const { source, assistantSays, confirm, lastSaid, spokenReadBack, provider } = await drafted('draft_reply', 'I will delete my post tonight');
+      expect(spokenReadBack).toMatch(/: I will delete my post tonight\. Shall I send the reply\?$/);
+      source('force-say', 1);
+      assistantSays(spokenReadBack);
+      source('model', 2);
+      assistantSays('Shall I delete my post tonight?');
+      await confirm();
+      expect(lastSaid()).toBe(spokenReadBack);
+      expect(provider.reply).not.toHaveBeenCalled();
+    });
+
+    it("needs the whole read-back, not a sentence made of its words, when Vapi names no source", async () => {
+      const { speech, assistantSays, confirm, lastSaid, spokenReadBack } = await drafted('draft_reply', 'I will delete my post tonight');
+      speech(1);
+      assistantSays('Shall I delete my post tonight?');
+      await confirm();
+      expect(lastSaid()).toBe(spokenReadBack);
+    });
+
+    it('starts a new segment when the model is named within the same turn as the read-back', async () => {
+      const { source, assistantSays, confirm, lastSaid } = await drafted();
+      source('force-say', 1);
+      assistantSays(asSpoken);
+      source('force-say', 1);
+      source('model', 1);
+      assistantSays(question);
+      await confirm();
+      expect(lastSaid()).toBe(readBack);
+    });
+
+    it('voids the yes when Vapi names the model, even with a say() still due', async () => {
+      const { source, speech, assistantSays, confirm, lastSaid } = await drafted();
+      source('model', 1);
+      speech(1);
+      assistantSays(asSpoken);
+      await confirm();
+      expect(lastSaid()).toBe(readBack);
+    });
+
+    it('puts it down to the model when the signals are missing or disagree', async () => {
+      const noEvents = await drafted();
+      noEvents.assistantSays(asSpoken);
+      await noEvents.confirm();
+      expect(noEvents.lastSaid()).toBe(readBack);
+
+      const expired = await drafted();
+      await expired.scheduler.advance(60_000);
+      expired.speech(1);
+      expired.assistantSays(asSpoken);
+      await expired.confirm();
+      expect(expired.lastSaid()).toBe(readBack);
     });
   });
 
