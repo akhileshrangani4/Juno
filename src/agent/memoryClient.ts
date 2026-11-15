@@ -13,6 +13,10 @@ export interface MemoryClient {
 // (offline, an older sign-in without the memory permission, a server that doesn't issue proofs).
 export class MemoryUnavailableError extends Error {}
 
+// The account's sign-in predates memory's permission (an OAuth grant without the memory scope): signing in again
+// fixes it, so the agent says that instead of "can't reach".
+export class MemorySignInNeededError extends MemoryUnavailableError {}
+
 const CREDENTIAL = /\b(password|passcode|app password|pin code|token|secret|[a-z0-9]{4}-[a-z0-9]{4}-[a-z0-9]{4}-[a-z0-9]{4})\b/i;
 export const MAX_FACT_LENGTH = 280;
 

@@ -5,7 +5,9 @@ import { createMemoryStore } from '@/storage/keyValueStore';
 import { MEMORY_METHOD, memoryAudience } from '../../../convex/memoryService';
 import { createMemoryClient } from '../convexMemory';
 import { createMemoryAccess, proofLifetimeMs } from '../memoryAccess';
-import { MemoryUnavailableError } from '../memoryClient';
+import { PermissionMissingError } from '@/social/types';
+
+import { MemorySignInNeededError, MemoryUnavailableError } from '../memoryClient';
 import { SIGNED_OUT_MEMORIES } from '../memoryOffer';
 
 const AUDIENCE = memoryAudience('https://dependable-goshawk-583.convex.site');
@@ -79,6 +81,17 @@ describe('memory access on the phone', () => {
     refused.replies.push(new ConvexError({ code: 'proofRefused', reason: 'badSignature' }));
     await expect(refused.memory.remember('Call me Sam.')).rejects.toBeInstanceOf(MemoryUnavailableError);
     expect(refused.sent.map(({ args }) => args.access.kind)).toEqual(['account']);
+  });
+
+  it('tells a sign-in that lacks the memory permission apart from memory being out of reach', async () => {
+    const { memory, serviceAuth, sent } = phone();
+    serviceAuth.mockRejectedValue(new PermissionMissingError('no memory scope'));
+    await expect(memory.list()).rejects.toBeInstanceOf(MemorySignInNeededError);
+    serviceAuth.mockRejectedValue(new Error('Network request failed'));
+    const error = await memory.list().catch((caught: unknown) => caught);
+    expect(error).toBeInstanceOf(MemoryUnavailableError);
+    expect(error).not.toBeInstanceOf(MemorySignInNeededError);
+    expect(sent).toEqual([]);
   });
 
   it('turns the server codes into plain words', async () => {

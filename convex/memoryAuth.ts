@@ -2,7 +2,7 @@ import { p256 } from '@noble/curves/nist.js';
 import { secp256k1 } from '@noble/curves/secp256k1.js';
 import { ConvexError } from 'convex/values';
 
-import { callerChecks, didFetchCheck, userCheck, type RateCheck } from '../src/agent/memoryRateLimits';
+import { callerChecks, didFetchChecks, userCheck, type RateCheck } from '../src/agent/memoryRateLimits';
 import { MEMORY_METHOD } from './memoryService';
 
 // Who may use a memory key (AKH-18). Pure logic with its storage and network passed in, so it is unit tested in
@@ -22,10 +22,13 @@ import { MEMORY_METHOD } from './memoryService';
 
 export const PROOF_LIFETIME_LIMIT_SECONDS = 120;
 const CLOCK_SKEW_SECONDS = 30;
-// A key fetched from a DID document is trusted this long; a signature that fails against it fetches it again
-// (at most once a minute per DID), in case the account rotated its key.
-export const KEY_CACHE_MS = 60 * 60_000;
-const KEY_REFETCH_MS = 60_000;
+// A key read from a DID document is trusted for a day, so a returning user costs no fetch. The trade-off: a key the
+// account rotated away keeps opening that account's memory (and nothing else) for up to a day.
+export const KEY_CACHE_MS = 24 * 60 * 60_000;
+// After any fetch of a DID's document, whatever came of it, that DID isn't fetched again for ten minutes: a DID
+// that didn't resolve, or whose proof failed against a fresh key, is refused from the cache. A real key rotation
+// is picked up within ten minutes.
+export const REFETCH_AFTER_MS = 10 * 60_000;
 export const DID_FETCH_TIMEOUT_MS = 3000;
 export const DID_DOCUMENT_MAX_BYTES = 64 * 1024;
 
@@ -40,6 +43,9 @@ export function memoryError(code: MemoryErrorCode, reason?: string): ConvexError
 }
 
 export type SigningKey = { curve: 'p256' | 'k256'; publicKey: string };
+
+// What the last fetch of a DID's document gave: its key, or null when it couldn't be had.
+export type CachedKey = { key: SigningKey | null; fetchedAt: number };
 
 export type DidSource = { kind: 'plc'; url: string } | { kind: 'web'; host: string };
 
@@ -222,7 +228,7 @@ export function proofRefusal({ claims }: ParsedProof, expected: { did: string; a
 export function signatureValid(proof: ParsedProof, key: SigningKey): boolean {
   if ((proof.alg === 'ES256K') !== (key.curve === 'k256')) return false;
   try {
-    return (key.curve === 'k256' ? secp256k1 : p256).verify(proof.signature, proof.signingInput, fromHex(key.publicKey), { lowS: false });
+    return (key.curve === 'k256' ? secp256k1 : p256).verify(proof.signature, proof.signingInput, fromHex(key.publicKey), { lowS: true });
   } catch {
     return false;
   }
@@ -244,21 +250,40 @@ export type AuthDeps = {
   // Marks the proof used and opens the session, then takes the user's window. 'replayed' when the proof was used
   // before for another session.
   openSession(session: { proofId: string; did: string; sessionHash: string; expiresAt: number; checks: RateCheck[] }): Promise<'ok' | 'replayed' | 'limited'>;
-  cachedKey(did: string): Promise<{ key: SigningKey; fetchedAt: number } | null>;
-  storeKey(did: string, key: SigningKey): Promise<unknown>;
+  cachedKey(did: string): Promise<CachedKey | null>;
+  storeKey(did: string, key: SigningKey | null): Promise<unknown>;
   // The DID document's text, or null when it can't be fetched safely.
   fetchDocument(source: DidSource): Promise<string | null>;
 };
 
 // plc.directory is a fixed host, so this runs in Convex's default runtime. did:web hosts are the caller's and are
 // fetched by convex/didWeb.ts instead, which refuses private addresses.
-export async function fetchPlcDocument(url: string): Promise<string | null> {
+export async function fetchPlcDocument(url: string, fetcher: typeof fetch = fetch): Promise<string | null> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), DID_FETCH_TIMEOUT_MS);
   try {
-    const response = await fetch(url, { redirect: 'error', signal: controller.signal, headers: { accept: 'application/json' } });
-    if (!response.ok || Number(response.headers.get('content-length') ?? 0) > DID_DOCUMENT_MAX_BYTES) return null;
-    return await response.text();
+    const response = await fetcher(url, { redirect: 'error', signal: controller.signal, headers: { accept: 'application/json' } });
+    if (!response.ok || !response.body) return null;
+    const reader = response.body.getReader();
+    const chunks: Uint8Array[] = [];
+    let size = 0;
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      size += value.length;
+      if (size > DID_DOCUMENT_MAX_BYTES) {
+        await reader.cancel();
+        return null;
+      }
+      chunks.push(value);
+    }
+    const bytes = new Uint8Array(size);
+    let offset = 0;
+    for (const chunk of chunks) {
+      bytes.set(chunk, offset);
+      offset += chunk.length;
+    }
+    return new TextDecoder().decode(bytes);
   } finally {
     clearTimeout(timer);
   }
@@ -273,29 +298,27 @@ export function userKeyOf(access: MemoryAccess): string {
   return access.kind === 'device' ? `device:${access.deviceId}` : `bsky:${access.did}`;
 }
 
-async function freshKey(did: string, deps: AuthDeps): Promise<SigningKey | null> {
-  const source = didSource(did);
-  if (!source) return null;
-  if (!(await deps.take(didFetchCheck()))) throw memoryError('tooMany');
-  const text = await deps.fetchDocument(source).catch(() => null);
+function keyOf(text: string | null, did: string): SigningKey | null {
   if (!text || text.length > DID_DOCUMENT_MAX_BYTES) return null;
-  let document: unknown;
   try {
-    document = JSON.parse(text);
+    return signingKeyOf(JSON.parse(text), did);
   } catch {
     return null;
   }
-  const key = signingKeyOf(document, did);
-  if (key) await deps.storeKey(did, key);
-  return key;
 }
 
+// The cached key first. A fetch only when the DID wasn't fetched in the last ten minutes, after the caller's
+// and the deployment's fetch windows, and its outcome is cached either way (REFETCH_AFTER_MS).
 async function proofVerified(proof: ParsedProof, did: string, deps: AuthDeps): Promise<boolean> {
   const cached = await deps.cachedKey(did);
-  const usable = cached && deps.now() - cached.fetchedAt < KEY_CACHE_MS ? cached : null;
-  if (usable && signatureValid(proof, usable.key)) return true;
-  if (usable && deps.now() - usable.fetchedAt < KEY_REFETCH_MS) return false;
-  const key = await freshKey(did, deps);
+  const age = cached ? deps.now() - cached.fetchedAt : Infinity;
+  if (cached?.key && age < KEY_CACHE_MS && signatureValid(proof, cached.key)) return true;
+  if (age < REFETCH_AFTER_MS) return false;
+  const source = didSource(did);
+  if (!source) return false;
+  if (!(await deps.take(didFetchChecks(deps.addressHash)))) throw memoryError('tooMany');
+  const key = keyOf(await deps.fetchDocument(source).catch(() => null), did);
+  await deps.storeKey(did, key);
   return key !== null && signatureValid(proof, key);
 }
 

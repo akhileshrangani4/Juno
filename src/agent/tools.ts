@@ -98,8 +98,13 @@ const definitions: { name: string; description: string; parameters: Schema }[] =
     parameters: { type: 'object', properties: { ids: { type: 'array', items: { type: 'string' }, description: 'Memory ids from the list.' } }, required: ['ids'] },
   },
   {
+    name: 'ask_to_keep_saved_memories',
+    description: 'When the user asks to keep or move what they saved on this phone before signing in to their account. The app asks them the question.',
+    parameters: none,
+  },
+  {
     name: 'answer_memory_offer',
-    description: "Only after your first words asked whether to keep what they saved before signing in: keep true if they said yes, keep false if they said no.",
+    description: "Only in their reply right after the question about keeping what they saved before signing in: keep true if they said yes, keep false if they said no.",
     parameters: { type: 'object', properties: { keep: { type: 'boolean', description: 'true only for a plain yes.' } }, required: ['keep'] },
   },
   { name: 'open_sign_in', description: 'End the conversation and open the sign-in screen. Only after the user agrees.', parameters: none },
@@ -125,6 +130,7 @@ export type ToolName =
   | 'remember'
   | 'recall_memories'
   | 'forget_memory'
+  | 'ask_to_keep_saved_memories'
   | 'answer_memory_offer'
   | 'open_sign_in'
   | 'end_conversation';

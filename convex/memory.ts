@@ -39,7 +39,7 @@ async function namespaceFor(ctx: ActionCtx, memoryAccess: MemoryAccess): Promise
     useSession: (did, sessionHash, checks) => ctx.runMutation(internal.memoryAccess.useSession, { did, sessionHash, checks }),
     openSession: (session) => ctx.runMutation(internal.memoryAccess.openSession, session),
     cachedKey: (did) => ctx.runQuery(internal.memoryAccess.cachedKey, { did }),
-    storeKey: (did, key) => ctx.runMutation(internal.memoryAccess.storeKey, { did, ...key }),
+    storeKey: (did, key) => ctx.runMutation(internal.memoryAccess.storeKey, { did, key }),
     fetchDocument: (source) => (source.kind === 'plc' ? fetchPlcDocument(source.url) : ctx.runAction(internal.didWeb.fetchDocument, { host: source.host })),
   });
   return `consumerhack_${(await sha256(`memory:${userKey}`)).slice(0, 40)}`;

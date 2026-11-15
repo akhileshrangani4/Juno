@@ -4,7 +4,7 @@ import { internalMutation, internalQuery, type MutationCtx } from './_generated/
 import { checksValidator, takeAll } from './memoryLimits';
 
 // Storage for signed-in memory access (convex/memoryAuth.ts): the proofs already used, the sessions they opened,
-// and the signing keys read from DID documents.
+// and the signing keys read from DID documents (or that a DID's document couldn't be had).
 
 // Used proofs and sessions are kept until their token expires, then removed a few at a time as new ones arrive.
 async function prune(ctx: MutationCtx, now: number) {
@@ -61,19 +61,22 @@ export const cachedKey = internalQuery({
       .query('didKeys')
       .withIndex('by_did', (q) => q.eq('did', did))
       .unique();
-    return row ? { key: { curve: row.curve, publicKey: row.publicKey }, fetchedAt: row.fetchedAt } : null;
+    if (!row) return null;
+    return { key: row.curve && row.publicKey ? { curve: row.curve, publicKey: row.publicKey } : null, fetchedAt: row.fetchedAt };
   },
 });
 
+// A fetched key, or null when the document couldn't be had or held no usable key; either way the fetch time.
 export const storeKey = internalMutation({
-  args: { did: v.string(), curve: v.union(v.literal('p256'), v.literal('k256')), publicKey: v.string() },
-  handler: async (ctx, { did, curve, publicKey }) => {
+  args: { did: v.string(), key: v.union(v.null(), v.object({ curve: v.union(v.literal('p256'), v.literal('k256')), publicKey: v.string() })) },
+  handler: async (ctx, { did, key }) => {
     const row = await ctx.db
       .query('didKeys')
       .withIndex('by_did', (q) => q.eq('did', did))
       .unique();
-    if (row) await ctx.db.patch(row._id, { curve, publicKey, fetchedAt: Date.now() });
-    else await ctx.db.insert('didKeys', { did, curve, publicKey, fetchedAt: Date.now() });
+    const fields = { curve: key?.curve, publicKey: key?.publicKey, fetchedAt: Date.now() };
+    if (row) await ctx.db.replace(row._id, { did, ...fields });
+    else await ctx.db.insert('didKeys', { did, ...fields });
   },
 });
 

@@ -84,11 +84,12 @@ export default defineSchema({
     .index('by_hash', ['sessionHash'])
     .index('by_expiry', ['expiresAt']),
 
-  // The signing key from each DID document, so most proofs are checked without a fetch.
+  // The signing key from each DID document, so most proofs are checked without a fetch. No key means the last
+  // fetch found none, which stops that DID being fetched again for a while.
   didKeys: defineTable({
     did: v.string(),
-    curve: v.union(v.literal('p256'), v.literal('k256')),
-    publicKey: v.string(),
+    curve: v.optional(v.union(v.literal('p256'), v.literal('k256'))),
+    publicKey: v.optional(v.string()),
     fetchedAt: v.number(),
   }).index('by_did', ['did']),
 });

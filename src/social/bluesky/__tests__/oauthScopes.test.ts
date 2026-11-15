@@ -1,6 +1,6 @@
-import { OAUTH_SCOPES } from '../../../../convex/oauthClientMetadata';
+import { OAUTH_SCOPES, oauthClientMetadata, oauthScopes } from '../../../../convex/oauthClientMetadata';
 import { MEMORY_METHOD, memoryAudience } from '../../../../convex/memoryService';
-import type { SocialProvider } from '../../types';
+import { PermissionMissingError, type SocialProvider } from '../../types';
 import { BlueskyProvider } from '../BlueskyProvider';
 import type { BlueskyOAuth } from '../oauth';
 
@@ -12,7 +12,9 @@ const REPOST = `at://${DID}/app.bsky.feed.repost/3kaaaaaaaaaab`;
 
 type Request = { nsid: string; params: URLSearchParams; body: any; contentType: string | null };
 
-const MEMORY_AUDIENCE = memoryAudience('https://dependable-goshawk-583.convex.site');
+const ORIGIN = 'https://dependable-goshawk-583.convex.site';
+const MEMORY_AUDIENCE = memoryAudience(ORIGIN);
+const SCOPES = oauthScopes(ORIGIN);
 
 const postView = (n: number) => ({
   uri: `at://${DID}/app.bsky.feed.post/${n}`,
@@ -49,9 +51,9 @@ function scopeFor({ nsid, params, body, contentType }: Request): string {
 function granted(scope: string): boolean {
   if (scope.startsWith('blob:')) {
     const mime = scope.slice('blob:'.length);
-    return OAUTH_SCOPES.some((candidate) => candidate.startsWith('blob:') && new RegExp(`^${candidate.slice(5).replace('*', '[^/]+')}$`).test(mime));
+    return SCOPES.some((candidate) => candidate.startsWith('blob:') && new RegExp(`^${candidate.slice(5).replace('*', '[^/]+')}$`).test(mime));
   }
-  return OAUTH_SCOPES.includes(scope) || (scope.startsWith('rpc:') && OAUTH_SCOPES.includes(scope.replace(/\?aud=.*$/, '?aud=*')));
+  return SCOPES.includes(scope.replace('#', '%23'));
 }
 
 async function signedIn() {
@@ -67,7 +69,8 @@ async function signedIn() {
       requests.push({ nsid, params: new URLSearchParams(query), body, contentType });
       const respond = responses[nsid];
       if (!respond) throw new Error(`No fake response for ${nsid}`);
-      return new Response(JSON.stringify(respond(body)), { status: 200, headers: { 'content-type': 'application/json' } });
+      const result = respond(body);
+      return result instanceof Response ? result : new Response(JSON.stringify(result), { status: 200, headers: { 'content-type': 'application/json' } });
     },
   };
   const client = {
@@ -152,7 +155,13 @@ describe('OAuth scopes', () => {
     );
   });
 
-  it('ask for nothing beyond those calls, the post thread read that comments will use, and the memory proof', () => {
+  it('pin the memory proof to the deployment that serves the metadata', () => {
+    expect(SCOPES.at(-1)).toBe(`rpc:${MEMORY_METHOD}?aud=did:web:dependable-goshawk-583.convex.site%23juno_memory`);
+    expect(oauthClientMetadata(ORIGIN).scope.split(' ')).toEqual(SCOPES);
+    expect(oauthScopes('https://other-deployment-1.convex.site').at(-1)).toBe(`rpc:${MEMORY_METHOD}?aud=did:web:other-deployment-1.convex.site%23juno_memory`);
+  });
+
+  it('ask for nothing beyond those calls and the post thread read that comments will use', () => {
     expect(OAUTH_SCOPES).toEqual([
       'atproto',
       'repo:app.bsky.feed.post?action=create',
@@ -167,7 +176,23 @@ describe('OAuth scopes', () => {
       `rpc:app.bsky.feed.getPosts?aud=${APPVIEW}`,
       `rpc:app.bsky.feed.getPostThread?aud=${APPVIEW}`,
       `rpc:app.bsky.actor.getProfile?aud=${APPVIEW}`,
-      `rpc:${MEMORY_METHOD}?aud=*`,
     ]);
+  });
+});
+
+describe('an OAuth sign-in made before the memory scope', () => {
+  it('is told apart from any other failure, so the agent can ask the user to sign in again', async () => {
+    const original = responses['com.atproto.server.getServiceAuth'];
+    responses['com.atproto.server.getServiceAuth'] = () =>
+      new Response(JSON.stringify({ error: 'ScopeMissingError', message: `Missing required scope "rpc:${MEMORY_METHOD}?aud=${MEMORY_AUDIENCE}"` }), {
+        status: 403,
+        headers: { 'content-type': 'application/json' },
+      });
+    try {
+      const { provider } = await signedIn();
+      await expect(provider.serviceAuth({ aud: MEMORY_AUDIENCE, lxm: MEMORY_METHOD })).rejects.toBeInstanceOf(PermissionMissingError);
+    } finally {
+      responses['com.atproto.server.getServiceAuth'] = original;
+    }
   });
 });

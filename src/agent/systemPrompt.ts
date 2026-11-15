@@ -52,7 +52,8 @@ const MEMORY = `Memory:
 - Only remember what they said about themselves or clearly agreed to. Never remember other people's posts, passwords or codes.
 - "What do you remember about me?" means recall_memories, then tell them briefly.
 - "Forget that" means forget_memory with the ids of the memories they mean. If it was a narration preference, also change that setting back.
-- If a result says MEMORY_UNREACHABLE, or memory is unavailable below and they ask about it, say in one short sentence that you can't reach their memory right now, and carry on with everything else.`;
+- If a result says MEMORY_UNREACHABLE, or memory is unavailable below and they ask about it, say in one short sentence that you can't reach their memory right now, and carry on with everything else. If a result says MEMORY_NEEDS_SIGN_IN, do what it says.
+- If they ask to keep what they saved on this phone before signing in with their account, call ask_to_keep_saved_memories.`;
 
 const SIGNED_OUT = `Signing in:
 - If a result says NOT_SIGNED_IN, say they need to sign in to do that and ask if they want to open the sign-in screen. Call open_sign_in only if they say yes.`;
@@ -75,6 +76,6 @@ Account: ${context.account}
 Reading settings: ${context.settings}
 What you remember about them (they told you this):
 ${context.memories}
-The post in focus: ${context.focus}${context.memoryOffer ? `\nYour first words asked: "${context.memoryOffer}" Call answer_memory_offer with keep true only if they say yes, and keep false if they say no.` : ''}`,
+The post in focus: ${context.focus}${context.memoryOffer ? `\nYour first words asked: "${context.memoryOffer}" If their very next reply is a yes, call answer_memory_offer with keep true; if it is a no, keep false. After that reply the question is closed.` : ''}`,
   ].join('\n\n');
 }

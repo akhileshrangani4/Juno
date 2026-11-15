@@ -1,4 +1,4 @@
-import { authorizeMemory, fetchPlcDocument, type AuthDeps, type MemoryAccess, type SigningKey } from '../../../convex/memoryAuth';
+import { authorizeMemory, fetchPlcDocument, type AuthDeps, type CachedKey, type MemoryAccess } from '../../../convex/memoryAuth';
 import { MEMORY_METHOD, memoryAudience } from '../../../convex/memoryService';
 import { takeOne, type Bucket } from '../memoryRateLimits';
 
@@ -20,7 +20,7 @@ function deps(timings: Record<string, number>): AuthDeps {
   const buckets = new Map<string, Bucket>();
   const proofs = new Map<string, string>();
   const sessions = new Map<string, { did: string; expiresAt: number }>();
-  const keys = new Map<string, { key: SigningKey; fetchedAt: number }>();
+  const keys = new Map<string, CachedKey>();
   const take = (checks: { key: string; limit: number; windowMs: number }[]) => {
     const next = checks.map((check) => takeOne(buckets.get(check.key) ?? null, check, Date.now()));
     if (next.some((bucket) => !bucket)) return false;

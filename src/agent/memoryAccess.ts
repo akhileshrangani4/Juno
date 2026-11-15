@@ -1,10 +1,10 @@
 import 'react-native-get-random-values';
 
-import type { SocialAccount } from '@/social/types';
+import { PermissionMissingError, type SocialAccount } from '@/social/types';
 import type { KeyValueStore } from '@/storage/keyValueStore';
 
 import { MEMORY_METHOD } from '../../convex/memoryService';
-import { MemoryUnavailableError } from './memoryClient';
+import { MemorySignInNeededError, MemoryUnavailableError } from './memoryClient';
 
 // What the phone shows Convex to use a memory (convex/memoryAuth.ts checks it).
 // - Signed out: a random device id with a secret, both kept in this device's keychain.
@@ -67,6 +67,7 @@ export function createMemoryAccess(deps: {
       if (!audience) throw new MemoryUnavailableError('Memory has no server');
       const startedAt = deps.now();
       const proof = await deps.serviceAuth({ aud: audience, lxm: MEMORY_METHOD }).catch((error: unknown) => {
+        if (error instanceof PermissionMissingError) throw new MemorySignInNeededError('The sign-in lacks the memory permission', { cause: error });
         throw new MemoryUnavailableError('No proof of the account', { cause: error });
       });
       current = { kind: 'account', did, session: randomHex(32), proof, renewAt: startedAt + proofLifetimeMs(proof) - RENEW_BEFORE_MS };

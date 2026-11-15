@@ -85,3 +85,7 @@ export interface SocialProvider {
   // signed in as the account, for one method (lxm) only. Never a session token.
   serviceAuth(request: { aud: string; lxm: string }): Promise<string>;
 }
+
+// The account's sign-in doesn't include a permission this call needs, for example an OAuth sign-in made before
+// the app asked for it. Signing in again grants it.
+export class PermissionMissingError extends Error {}

@@ -8,8 +8,10 @@
 // - per caller address (the request's IP, stored only as a hash): 60 calls per 10 minutes, so making up new
 //   memory keys from one place doesn't get around the device limit.
 // - for the whole deployment: 600 calls per hour, a ceiling on spend however many addresses are used.
-// - DID document fetches for the whole deployment: 120 per hour, taken just before a fetch that the key cache
-//   couldn't answer, so proofs can't make this deployment fetch documents at any rate.
+// - DID document fetches, taken just before a fetch the key cache couldn't answer: 6 per hour per caller address
+//   and 300 per hour for the whole deployment. A fetch is only needed the first time a DID is seen in 24 hours
+//   (convex/memoryAuth.ts caches keys that long), so 300 an hour covers about 7,200 different accounts a day,
+//   far beyond Juno's use, while one address can take at most 2% of it.
 // remember also refuses once a person has MAX_FACTS facts.
 // Known limit: whoever uses up the deployment window turns memory off for everyone until the hour is over.
 // Pure logic, shared with the Convex side so it can be unit tested here.
@@ -22,7 +24,8 @@ export const MEMORY_LIMITS = {
   user: { limit: 30, windowMs: TEN_MINUTES },
   address: { limit: 60, windowMs: TEN_MINUTES },
   deployment: { limit: 600, windowMs: 60 * 60_000 },
-  didFetch: { limit: 120, windowMs: 60 * 60_000 },
+  didFetchAddress: { limit: 6, windowMs: 60 * 60_000 },
+  didFetch: { limit: 300, windowMs: 60 * 60_000 },
 } as const;
 
 export type RateCheck = { key: string; limit: number; windowMs: number };
@@ -39,8 +42,8 @@ export function userCheck(userKey: string): RateCheck[] {
 }
 
 // Taken just before a DID document is fetched.
-export function didFetchCheck(): RateCheck[] {
-  return [{ key: 'didFetch', ...MEMORY_LIMITS.didFetch }];
+export function didFetchChecks(addressHash: string | null): RateCheck[] {
+  return [...(addressHash ? [{ key: `didFetch:${addressHash}`, ...MEMORY_LIMITS.didFetchAddress }] : []), { key: 'didFetch', ...MEMORY_LIMITS.didFetch }];
 }
 
 // The bucket after one more call, or null when the call is over the limit.

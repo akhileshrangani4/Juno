@@ -1,7 +1,7 @@
 import { p256 } from '@noble/curves/nist.js';
 import { secp256k1 } from '@noble/curves/secp256k1.js';
 
-import { authorizeMemory, didSource, isPublicAddress, signingKeyOf, type AuthDeps, type DidSource, type MemoryAccess, type SigningKey } from '../../../convex/memoryAuth';
+import { authorizeMemory, didSource, fetchPlcDocument, isPublicAddress, REFETCH_AFTER_MS, signingKeyOf, type AuthDeps, type CachedKey, type DidSource, type MemoryAccess } from '../../../convex/memoryAuth';
 import { MEMORY_METHOD, memoryAudience } from '../../../convex/memoryService';
 import { MEMORY_LIMITS, takeOne, type Bucket, type RateCheck } from '../memoryRateLimits';
 
@@ -11,6 +11,8 @@ const BOB = 'did:plc:bbbbbbbbbbbbbbbbbbbbbbbb';
 const NOW = Date.UTC(2026, 10, 15, 12) ;
 const SESSION_A = 'a'.repeat(64);
 const SESSION_B = 'b'.repeat(64);
+const HOUR = 60 * 60_000;
+const fetches = (memory: { log: string[] }) => memory.log.filter((step) => step.startsWith('fetch'));
 
 const BASE58 = '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz';
 function base58(bytes: Uint8Array): string {
@@ -60,7 +62,7 @@ function server(documents: Record<string, string> = {}) {
   const owners = new Map<string, string>();
   const proofs = new Map<string, string>();
   const sessions = new Map<string, { did: string; expiresAt: number }>();
-  const keys = new Map<string, { key: SigningKey; fetchedAt: number }>();
+  const keys = new Map<string, CachedKey>();
   let now = NOW;
   const take = (checks: RateCheck[]) => {
     const next = checks.map((check) => takeOne(buckets.get(check.key) ?? null, check, now));
@@ -148,17 +150,77 @@ describe('signed-in memory access', () => {
     await expect(memory.authorize(asAccount(ALICE, SESSION_A))).rejects.toEqual(expect.objectContaining({ data: { code: 'proofNeeded' } }));
   });
 
-  it("checks the DID document once, then the cached key, until a signature fails and the key may have changed", async () => {
+  it('checks the DID document once, then the cached key for a day, so a returning user costs no fetch', async () => {
     const memory = server(documents);
     await memory.authorize(asAccount(ALICE, SESSION_A, serviceToken(alice)));
-    await memory.authorize(asAccount(ALICE, SESSION_B, serviceToken(alice)));
-    expect(memory.log.filter((step) => step.startsWith('fetch'))).toEqual([`fetch https://plc.directory/${ALICE}`]);
+    memory.advance(23 * HOUR);
+    await memory.authorize(asAccount(ALICE, SESSION_B, serviceToken(alice, { iat: Math.floor(memory.deps.now() / 1000), exp: Math.floor(memory.deps.now() / 1000) + 60 })));
+    expect(fetches(memory)).toEqual([`fetch https://plc.directory/${ALICE}`]);
+  });
+
+  it('picks up a rotated key, but fetches the same DID again at most once every ten minutes', async () => {
     const rotated = { ...alice, secretKey: secp256k1.utils.randomSecretKey() };
-    documents[ALICE] = didDocument(rotated);
-    memory.advance(61_000);
-    await expect(memory.authorize(asAccount(ALICE, 'c'.repeat(64), serviceToken(rotated, { iat: Math.floor(NOW / 1000) + 61, exp: Math.floor(NOW / 1000) + 121 })))).resolves.toBe(`bsky:${ALICE}`);
-    expect(memory.log.filter((step) => step.startsWith('fetch'))).toHaveLength(2);
-    documents[ALICE] = didDocument(alice);
+    const memory = server({ ...documents, [ALICE]: didDocument(rotated) });
+    memory.deps.storeKey(ALICE, signingKeyOf(JSON.parse(didDocument(alice)), ALICE));
+    const tokenAt = (ms: number) => serviceToken(rotated, { iat: Math.floor(ms / 1000), exp: Math.floor(ms / 1000) + 60 });
+    memory.advance(REFETCH_AFTER_MS - 1);
+    await expect(memory.authorize(asAccount(ALICE, SESSION_A, tokenAt(memory.deps.now())))).rejects.toEqual(refused('badSignature'));
+    expect(fetches(memory)).toEqual([]);
+    memory.advance(1);
+    await expect(memory.authorize(asAccount(ALICE, SESSION_B, tokenAt(memory.deps.now())))).resolves.toBe(`bsky:${ALICE}`);
+    expect(fetches(memory)).toHaveLength(1);
+  });
+
+  it("doesn't fetch a DID again for ten minutes after it failed to resolve or its proof failed", async () => {
+    const memory = server(documents);
+    const nobody = account('did:plc:cccccccccccccccccccccccc');
+    for (let i = 0; i < 5; i++) await expect(memory.authorize(asAccount(nobody.did, SESSION_A, serviceToken(nobody)))).rejects.toEqual(refused('badSignature'));
+    const impostor = { ...alice, secretKey: secp256k1.utils.randomSecretKey() };
+    for (let i = 0; i < 5; i++) await expect(memory.authorize(asAccount(ALICE, SESSION_A, serviceToken(impostor)))).rejects.toEqual(refused('badSignature'));
+    expect(fetches(memory)).toEqual([`fetch https://plc.directory/${nobody.did}`, `fetch https://plc.directory/${ALICE}`]);
+    await expect(memory.authorize(asAccount(ALICE, SESSION_B, serviceToken(alice)))).resolves.toBe(`bsky:${ALICE}`);
+  });
+
+  it("lets one address send garbage proofs for an hour without switching off anyone else's memory", async () => {
+    const memory = server(documents);
+    const randomDid = (i: number) => `did:plc:${i.toString(32).padStart(24, 'a').replace(/[^a-z2-7]/g, 'b')}`;
+    let fetched = 0;
+    for (let second = 0; second < 3600; second += 5) {
+      memory.advance(5000);
+      const did = randomDid(second);
+      const before = fetches(memory).length;
+      const at = Math.floor(memory.deps.now() / 1000);
+      await memory.authorize(asAccount(did, SESSION_A, serviceToken({ ...alice, did }, { iat: at, exp: at + 60 }))).catch(() => undefined);
+      fetched += fetches(memory).length - before;
+    }
+    expect(fetched).toBeLessThanOrEqual(MEMORY_LIMITS.didFetchAddress.limit * 2);
+    memory.deps.addressHash = 'address-2';
+    const at = Math.floor(memory.deps.now() / 1000);
+    await expect(memory.authorize(asAccount(BOB, SESSION_B, serviceToken(bob, { iat: at, exp: at + 60 })))).resolves.toBe(`bsky:${BOB}`);
+  });
+
+  it('limits how many DID documents one address can make this deployment fetch', async () => {
+    const memory = server(documents);
+    const outcomes: string[] = [];
+    for (let i = 0; i < 10; i++) {
+      const did = `did:plc:${'d'.repeat(23)}${'abcdefghij'[i]}`;
+      outcomes.push(await memory.authorize(asAccount(did, SESSION_A, serviceToken({ ...alice, did }))).then(() => 'ok', (error) => error.data.code));
+    }
+    expect(outcomes).toEqual([...Array(6).fill('proofRefused'), ...Array(4).fill('tooMany')]);
+    expect(fetches(memory)).toHaveLength(MEMORY_LIMITS.didFetchAddress.limit);
+  });
+
+  it('refuses a high-S signature, which the AT Protocol forbids', async () => {
+    const memory = server(documents);
+    for (const signer of [alice, bob]) {
+      const [header, payload, signature] = serviceToken(signer).split('.');
+      const lib = signer.curve === 'k256' ? secp256k1 : p256;
+      const sig = lib.Signature.fromBytes(Buffer.from(signature, 'base64url'));
+      const highS = new lib.Signature(sig.r, lib.Point.CURVE().n - sig.s).toBytes();
+      const token = `${header}.${payload}.${Buffer.from(highS).toString('base64url')}`;
+      await expect(memory.authorize(asAccount(signer.did, signer === alice ? SESSION_A : SESSION_B, token))).rejects.toEqual(refused('badSignature'));
+    }
+    await expect(memory.authorize(asAccount(ALICE, SESSION_A, serviceToken(alice)))).resolves.toBe(`bsky:${ALICE}`);
   });
 
   it("refuses a proof for one account presented for another, and one claiming an account it wasn't signed by", async () => {
@@ -226,7 +288,7 @@ describe('signed-in memory access', () => {
       'take address:address-1,deployment',
       'useSession',
       'cachedKey',
-      'take didFetch',
+      'take didFetch:address-1,didFetch',
       `fetch https://plc.directory/${ALICE}`,
       'openSession',
       `take user:bsky:${ALICE}`,
@@ -245,7 +307,7 @@ describe('signed-in memory access', () => {
     expect(memory.log).toEqual(['take address:address-1,deployment']);
   });
 
-  it('stops fetching DID documents when the fetch window is used up', async () => {
+  it('stops fetching DID documents when the deployment fetch window is used up', async () => {
     const memory = server(documents);
     for (let i = 0; i < MEMORY_LIMITS.didFetch.limit; i++) await memory.deps.take([{ key: 'didFetch', ...MEMORY_LIMITS.didFetch }]);
     await expect(memory.authorize(asAccount(ALICE, SESSION_A, serviceToken(alice)))).rejects.toEqual(expect.objectContaining({ data: { code: 'tooMany' } }));
@@ -271,6 +333,22 @@ describe('signed-out memory access', () => {
 });
 
 describe('DID documents', () => {
+  const streaming = (chunks: number, size: number) =>
+    (async () =>
+      new Response(
+        new ReadableStream({
+          pull(controller) {
+            if (chunks-- > 0) controller.enqueue(new Uint8Array(size).fill(32));
+            else controller.close();
+          },
+        }),
+      )) as unknown as typeof fetch;
+
+  it('reads plc.directory up to 64 KB as it streams, without a content length', async () => {
+    await expect(fetchPlcDocument('https://plc.directory/x', streaming(4, 1024))).resolves.toHaveLength(4096);
+    await expect(fetchPlcDocument('https://plc.directory/x', streaming(1000, 1024))).resolves.toBeNull();
+  });
+
   it('fetches only did:plc from plc.directory and did:web on a public host name', () => {
     expect(didSource(ALICE)).toEqual({ kind: 'plc', url: `https://plc.directory/${ALICE}` });
     expect(didSource('did:web:alice.example.org')).toEqual({ kind: 'web', host: 'alice.example.org' });

@@ -13,6 +13,7 @@ import { agentMessages } from './agentMessages';
 import { buildAssistant } from './assistant';
 import { convexMemoryAudience, createConvexMemory } from './convexMemory';
 import { createMemoryAccess } from './memoryAccess';
+import { MemorySignInNeededError } from './memoryClient';
 import { createMemoryOffer } from './memoryOffer';
 import { ensureMicrophone } from './microphone';
 import { detailFor } from './narrationAdapter';
@@ -115,7 +116,7 @@ export function useVoiceAgent({
       assistant: async () => {
         const focus = latest.current.post;
         const [memories, offer, description] = await Promise.all([
-          memory ? withTimeout(memory.list(), MEMORY_TIMEOUT_MS) : Promise.resolve(null),
+          memory ? withTimeout(memory.list().catch((error: unknown) => (error instanceof MemorySignInNeededError ? ('signInNeeded' as const) : null)), MEMORY_TIMEOUT_MS) : Promise.resolve(null),
           memoryOffer ? withTimeout(memoryOffer.prepare(), MEMORY_TIMEOUT_MS) : Promise.resolve(null),
           focus ? Promise.resolve(descriptionCache.peek(focus, detailFor('full', narrationSettings.get()))) : Promise.resolve(null),
         ]);

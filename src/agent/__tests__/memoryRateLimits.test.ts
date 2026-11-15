@@ -1,4 +1,4 @@
-import { callerChecks, didFetchCheck, MEMORY_LIMITS, userCheck, takeOne, type Bucket, type RateCheck } from '../memoryRateLimits';
+import { callerChecks, didFetchChecks, MEMORY_LIMITS, userCheck, takeOne, type Bucket, type RateCheck } from '../memoryRateLimits';
 
 // The same take-all-or-nothing rule as convex/memoryLimits.ts, in the order convex/memory.ts uses: the caller's
 // windows, then the owner check, then the user's window. (Signed-in accounts prove their DID instead of a secret;
@@ -51,6 +51,10 @@ describe('memory rate limits', () => {
   it('skips the address window when the request has no address', () => {
     expect(callerChecks(null).map((check) => check.key)).toEqual(['deployment']);
     expect(userCheck('device:a').map((check) => check.key)).toEqual(['user:device:a']);
-    expect(didFetchCheck()).toEqual([{ key: 'didFetch', limit: 120, windowMs: 60 * 60_000 }]);
+    expect(didFetchChecks('hash-a')).toEqual([
+      { key: 'didFetch:hash-a', limit: 6, windowMs: 60 * 60_000 },
+      { key: 'didFetch', limit: 300, windowMs: 60 * 60_000 },
+    ]);
+    expect(didFetchChecks(null).map((check) => check.key)).toEqual(['didFetch']);
   });
 });
