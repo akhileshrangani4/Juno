@@ -1,7 +1,7 @@
 import { Image } from 'expo-image';
 import { router } from 'expo-router';
 import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
-import { Linking, Platform, StyleSheet, Text, View, type AccessibilityActionEvent, type AccessibilityRole } from 'react-native';
+import { Image as PhotoView, Linking, Platform, StyleSheet, Text, View, type AccessibilityActionEvent, type AccessibilityRole } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import type { CircleDirection } from '@/gestures/circle';
@@ -144,6 +144,7 @@ export function CameraScreen({ start }: { start: 'camera' | 'library' }) {
       .file(libraryId)
       .catch(() => null)
       .then((file) => {
+        logLine(`[camera] library preview ${libraryId} ${file ? file.uri : 'no file'}${current ? '' : ' (moved on)'}`);
         if (current && file) setPreview({ id: libraryId, uri: file.uri });
       });
     return () => {
@@ -253,7 +254,7 @@ export function CameraScreen({ start }: { start: 'camera' | 'library' }) {
               onCameraError={({ nativeEvent }) => controller.cameraFailed(nativeEvent.reason)}
             />
           ) : null}
-          {shown ? <Image key={shown.id} source={{ uri: shown.uri }} style={StyleSheet.absoluteFill} contentFit="contain" /> : null}
+          {shown ? <PhotoView key={shown.id} source={{ uri: shown.uri }} style={StyleSheet.absoluteFill} resizeMode="contain" /> : null}
         </View>
         <Text style={styles.half} maxFontSizeMultiplier={type.maxScale}>
           {halves ? `▲ ${capitalized(halves.top)}` : ' '}
