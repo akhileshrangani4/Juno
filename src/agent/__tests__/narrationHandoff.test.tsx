@@ -8,12 +8,13 @@ import { narrateForFeed } from '../narrationAdapter';
 import { defaultSettings } from '../settings';
 
 const mockPost = maya;
-const mockNarrator = { speak: jest.fn(), stop: jest.fn(), onDone: jest.fn(() => () => undefined) };
+const mockNarrator = { speak: jest.fn(), append: jest.fn(), stop: jest.fn(), speaking: () => false, setRate: jest.fn(), onDone: jest.fn(() => () => undefined) };
 const mockAgentCalls: { active: boolean; onExit(reason: string, message: string): void }[] = [];
 let mockSurface: { onCircle(direction: string): void; onTapTop(): void } | null = null;
 const mockAgentSay = jest.fn((_text: string) => true);
 
-jest.mock('@/agent/narrationSettings', () => ({ useFeedNarrator: () => mockNarrator, useNarrationSettings: () => jest.requireActual('../settings').defaultSettings }));
+jest.mock('@/narration/useNarrator', () => ({ useNarrator: () => mockNarrator }));
+jest.mock('@/narration/earcons', () => ({ createEarconPlayer: () => ({ play: () => 0 }) }));
 jest.mock('@/agent/useVoiceAgent', () => ({
   useVoiceAgent: (args: { active: boolean; onExit(reason: string, message: string): void }) => {
     mockAgentCalls.push(args);
@@ -24,7 +25,7 @@ jest.mock('@/session/SessionContext', () => ({ useSession: () => ({ provider: {}
 jest.mock('@/feed/useFeed', () => ({
   useFeed: () => ({ state: { posts: [mockPost], index: 0, cursor: null, exhausted: true, loading: false, error: null }, post: mockPost, go: jest.fn() }),
 }));
-jest.mock('@/backend/convex', () => ({ fetchCachedDescription: jest.fn(async () => null) }));
+jest.mock('@/backend/convex', () => ({ describePost: jest.fn(async () => null) }));
 jest.mock('@/feedback/haptics', () => ({ haptic: jest.fn() }));
 jest.mock('expo-router', () => ({ router: { push: jest.fn() } }));
 jest.mock('@/screens/PostCard', () => ({ PostCard: () => null }));

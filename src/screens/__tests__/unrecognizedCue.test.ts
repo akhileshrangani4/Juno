@@ -8,7 +8,7 @@ import { playUnrecognizedCue } from '../unrecognizedCue';
 jest.mock('@/feedback/haptics', () => ({ haptic: jest.fn() }));
 
 function fakeNarrator(speaking: boolean): Narrator & { speak: jest.Mock; stop: jest.Mock } {
-  return { speak: jest.fn(), stop: jest.fn(), speaking: () => speaking, onDone: () => () => undefined };
+  return { speak: jest.fn(), append: jest.fn(), stop: jest.fn(), speaking: () => speaking, setRate: () => undefined, onDone: () => () => undefined };
 }
 
 describe('playUnrecognizedCue', () => {

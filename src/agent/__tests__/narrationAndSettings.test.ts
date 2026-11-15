@@ -5,44 +5,58 @@ import { makePost } from '@/testing/fixtures';
 import { buildAssistant, MAX_DURATION_SECONDS, SILENCE_TIMEOUT_SECONDS } from '../assistant';
 import { isDevAgentLink, onDevWake, requestDevWake } from '../devWake';
 import { memoryRejection } from '../memoryClient';
-import { hashtagsOf, narrateForFeed, narratePost, withoutHashtags } from '../narrationAdapter';
+import { PreferencesStore } from '@/narration/preferences';
+
+import { detailFor, narrateForFeed, narratePost, usesDescriptions } from '../narrationAdapter';
 import { describeAccount, describeFocus, describeMemories } from '../postContext';
-import { createSettingsStore, defaultSettings } from '../settings';
+import { defaultSettings, settingsStore } from '../settings';
 import { toolNames } from '../tools';
 
 const now = new Date('2026-11-15T12:00:00.000Z');
 
 describe('narration adapter', () => {
-  it('finds and strips hashtags', () => {
-    expect(hashtagsOf('Hi #one and #two! #three')).toEqual(['#one', '#two', '#three']);
-    expect(withoutHashtags('Hi #one and #two! #three')).toBe('Hi and !');
+  it('reads the feed in the mode the user chose, with the feed\'s own script', () => {
+    expect(narrateForFeed(maya, { ...defaultSettings, mode: 'brief' }, null, now)).toBe('Maya. Meet our new puppy Biscuit! Has an image and two hashtags.');
+    expect(narrateForFeed(maya, defaultSettings, null, now)).toBe(
+      'Maya, 2 hours ago. Meet our new puppy Biscuit! One image: A golden puppy asleep on a red blanket. Its paws twitch. Tagged puppy and dogsofbluesky.',
+    );
+    expect(narrateForFeed(maya, { ...defaultSettings, skipHashtags: true }, null, now)).not.toContain('Tagged');
   });
 
-  it('reads the feed in the mode the user chose', () => {
-    expect(narrateForFeed(maya, { ...defaultSettings, mode: 'brief' }, null, now)).toBe('Maya, 2 hours ago. Meet our new puppy Biscuit! It has an image.');
-    expect(narrateForFeed(maya, defaultSettings, null, now)).toBe('Maya, 2 hours ago. Meet our new puppy Biscuit! #puppy #dogsofbluesky. One image: A golden puppy asleep on a red blanket.');
-  });
-
-  it('describes pictures in detail and says when there are none', () => {
-    const post = makePost({ media: [{ kind: 'video', alt: null, thumbUrl: null }] });
-    expect(narratePost(post, 'picture', defaultSettings, { now, description: 'A cat jumps. It lands.' })).toBe('The video: A cat jumps. It lands.');
-    expect(narratePost(makePost(), 'picture', defaultSettings, { now })).toBe('This post has no pictures or video.');
+  it('reads the exact words, the hashtags, and the pictures in detail', () => {
+    const video = makePost({ media: [{ kind: 'video', alt: null, thumbUrl: null }] });
+    const parts = { images: [], video: 'Opens on a cat mid-jump.', hashtagTopic: null };
+    expect(narratePost(video, 'picture', defaultSettings, { now, parts })).toBe('Alice Chen. A video. Opens on a cat mid-jump.');
+    expect(narratePost(makePost(), 'picture', defaultSettings, { now })).toBe('Alice Chen. This post has no images or video.');
     expect(narratePost(makePost({ text: 'plain' }), 'hashtags', defaultSettings, { now })).toBe('This post has no hashtags.');
+    expect(narratePost(maya, 'hashtags', defaultSettings, { now })).toBe('2 hashtags: puppy, dogsofbluesky.');
+    expect(narratePost(maya, 'exact', defaultSettings, { now })).toBe('Maya wrote, word for word: Meet our new puppy Biscuit! #puppy #dogsofbluesky');
+  });
+
+  it('asks for descriptions only for readings that use them, at the right detail', () => {
+    expect(['full', 'brief', 'exact', 'hashtags', 'picture'].filter((mode) => usesDescriptions(mode as never))).toEqual(['full', 'picture']);
+    expect(detailFor('picture', defaultSettings)).toBe('detailed');
+    expect(detailFor('full', defaultSettings)).toBe('standard');
+    expect(detailFor('full', { ...defaultSettings, pictureDetail: 'long' })).toBe('detailed');
   });
 });
 
 describe('settings', () => {
-  it('persists, clamps and notifies', async () => {
+  it('are a view of the feed\'s preferences: persisted, clamped and shared', async () => {
     const store = createMemoryStore();
-    const settings = createSettingsStore(store);
+    const preferences = new PreferencesStore(store);
+    const settings = settingsStore(preferences);
     const seen: number[] = [];
     settings.subscribe((next) => seen.push(next.rate));
     await settings.update({ rate: 9 });
     expect(settings.get().rate).toBe(3);
-    await settings.update({ rate: 0.1, skipHashtags: true });
-    const reloaded = createSettingsStore(store);
-    expect(await reloaded.load()).toEqual({ ...defaultSettings, rate: 0.5, skipHashtags: true });
+    await settings.update({ rate: 0.1, skipHashtags: true, pictureDetail: 'long' });
+    expect(preferences.get()).toMatchObject({ rate: 0.5, skipHashtags: true, detail: 'detailed' });
+    const reloaded = settingsStore(new PreferencesStore(store));
+    expect(await reloaded.load()).toEqual({ ...defaultSettings, rate: 0.5, skipHashtags: true, pictureDetail: 'long' });
     expect(seen).toEqual([3, 0.5]);
+    preferences.update({ mode: 'brief' });
+    expect(settings.get().mode).toBe('brief');
   });
 });
 

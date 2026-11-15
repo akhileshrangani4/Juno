@@ -5,6 +5,7 @@ import type { KeyValueStore } from '@/storage/keyValueStore';
 
 import type { NewPost, Post, PostRef, RecordRef, ReplyParent, RestoreResult, SignInResult, SocialAccount, SocialProvider, TimelinePage, UploadedImage } from '../types';
 import { mapFeedItem } from './mapPost';
+import { withMentionNames } from './mentionNames';
 import { isHiddenByModeration } from './moderation';
 import { NetworkError } from './oauth/createOAuthClient';
 import { createBlueskyOAuth, type BlueskyOAuth, type BlueskyOAuthFactory } from './oauth';
@@ -146,7 +147,12 @@ export class BlueskyProvider implements SocialProvider {
         .map(mapFeedItem)
         .filter((post): post is Post => post !== null);
       next = data.cursor;
-      if (posts.length || !next) return { posts, cursor: next ?? null };
+      if (posts.length || !next) {
+        return {
+          posts: await withMentionNames(posts, (actors) => this.publicAgent.app.bsky.actor.getProfiles({ actors }).then(({ data }) => data.profiles)),
+          cursor: next ?? null,
+        };
+      }
     }
     return { posts: [], cursor: next ?? null };
   }

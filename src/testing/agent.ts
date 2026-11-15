@@ -4,7 +4,8 @@ import { makePost } from '@/testing/fixtures';
 
 import { ConversationLog } from '@/agent/AgentSession';
 import type { Memory, MemoryClient } from '@/agent/memoryClient';
-import { createSettingsStore } from '@/agent/settings';
+import { settingsStore } from '@/agent/settings';
+import { PreferencesStore } from '@/narration/preferences';
 import { createToolHandlers, type AgentDeps } from '@/agent/toolHandlers';
 
 export function makeProvider(overrides: Partial<SocialProvider> = {}): jest.Mocked<SocialProvider> {
@@ -88,7 +89,7 @@ export function setup(options: { signedIn?: boolean; focus?: Post | null; memory
   const scheduler = makeScheduler();
   const conversation = new ConversationLog();
   const notify = jest.fn();
-  const settings = createSettingsStore(createMemoryStore());
+  const settings = settingsStore(new PreferencesStore(createMemoryStore()));
   let focus: Post | null = options.focus === undefined ? maya : options.focus;
   let ids = 0;
   const deps: AgentDeps = {

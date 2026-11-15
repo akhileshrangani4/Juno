@@ -1,7 +1,8 @@
 import { writeFileSync } from 'node:fs';
 
 import { ConversationLog } from '@/agent/AgentSession';
-import { createSettingsStore } from '@/agent/settings';
+import { settingsStore } from '@/agent/settings';
+import { PreferencesStore } from '@/narration/preferences';
 import { createToolHandlers, type ToolOutcome } from '@/agent/toolHandlers';
 import { BlueskyProvider } from '@/social/bluesky/BlueskyProvider';
 import type { Post } from '@/social/types';
@@ -34,7 +35,7 @@ async function main() {
     focused: () => focus,
     move: () => ({ outcome: 'atEnd', post: null }),
     description: async () => null,
-    settings: createSettingsStore(createMemoryStore()),
+    settings: settingsStore(new PreferencesStore(createMemoryStore())),
     memory: null,
     conversation,
     notify: (text) => notices.push(text),

@@ -26,6 +26,8 @@ describe('mapFeedItem', () => {
       media: [],
       repostedBy: null,
       replyRoot: null,
+      replyTo: null,
+      facets: [],
       counts: { likes: 3, reposts: 2, replies: 1 },
     });
   });
@@ -45,7 +47,7 @@ describe('mapFeedItem', () => {
 
   it('maps video, link and quote embeds', () => {
     expect(mapFeedItem(withEmbed({ $type: 'app.bsky.embed.video#view', playlist: 'p', thumbnail: 't' }))?.media).toEqual([
-      { kind: 'video', alt: null, thumbUrl: 't' },
+      { kind: 'video', alt: null, thumbUrl: 't', captions: [], aspectRatio: null },
     ]);
     expect(
       mapFeedItem(withEmbed({ $type: 'app.bsky.embed.external#view', external: { uri: 'https://example.com', title: 'Example', description: '' } }))?.media,
@@ -88,5 +90,57 @@ describe('mapFeedItem', () => {
   it('returns null for items it cannot read', () => {
     expect(mapFeedItem(null)).toBeNull();
     expect(mapFeedItem({ post: { uri: 'at://x' } })).toBeNull();
+  });
+
+  it('maps gallery embeds as images', () => {
+    const post = mapFeedItem(withEmbed({ $type: 'app.bsky.embed.gallery#view', items: [{ thumbnail: 't1', fullsize: 'f1', alt: '' }, { thumbnail: 't2', fullsize: 'f2', alt: 'Cake' }] }));
+    expect(post?.media).toEqual([{ kind: 'images', images: [{ url: 'f1', alt: null }, { url: 'f2', alt: 'Cake' }] }]);
+  });
+
+  it('keeps video captions and aspect ratio from the record', () => {
+    const item = withEmbed({ $type: 'app.bsky.embed.video#view', thumbnail: 't', aspectRatio: { width: 1280, height: 720 } });
+    item.post.record = {
+      ...item.post.record,
+      embed: { $type: 'app.bsky.embed.video', captions: [{ lang: 'en', file: { ref: { $link: 'bafycaption' } } }, { lang: 'fr', file: {} }] },
+    } as typeof item.post.record;
+    expect(mapFeedItem(item)?.media).toEqual([{ kind: 'video', alt: null, thumbUrl: 't', captions: [{ lang: 'en', cid: 'bafycaption' }], aspectRatio: { width: 1280, height: 720 } }]);
+  });
+
+  it('converts facet byte offsets to string offsets', () => {
+    const text = 'Café 🎉 #Paris @bob.test https://x.org';
+    const bytes = (s: string) => new TextEncoder().encode(s).length;
+    const at = (needle: string) => ({ byteStart: bytes(text.slice(0, text.indexOf(needle))), byteEnd: bytes(text.slice(0, text.indexOf(needle) + needle.length)) });
+    const post = mapFeedItem({
+      ...base,
+      post: {
+        ...base.post,
+        record: {
+          ...base.post.record,
+          text,
+          facets: [
+            { index: at('#Paris'), features: [{ $type: 'app.bsky.richtext.facet#tag', tag: 'Paris' }] },
+            { index: at('@bob.test'), features: [{ $type: 'app.bsky.richtext.facet#mention', did: 'did:plc:bob' }] },
+            { index: at('https://x.org'), features: [{ $type: 'app.bsky.richtext.facet#link', uri: 'https://x.org' }] },
+            { index: { byteStart: 3, byteEnd: 4 }, features: [{ $type: 'app.bsky.richtext.facet#tag', tag: 'broken' }] },
+          ],
+        },
+      },
+    });
+    expect(post?.facets).toEqual([
+      { start: text.indexOf('#Paris'), end: text.indexOf('#Paris') + 6, kind: 'tag', tag: 'Paris' },
+      { start: text.indexOf('@bob'), end: text.indexOf('@bob') + 9, kind: 'mention', did: 'did:plc:bob', name: null },
+      { start: text.indexOf('https'), end: text.length, kind: 'link', url: 'https://x.org' },
+    ]);
+  });
+
+  it('says who a reply answers, and whether it continues the author\'s own thread', () => {
+    const reply = (parentDid: string) => ({
+      post: { ...base.post, record: { ...base.post.record, reply: { root: { uri: 'at://r', cid: 'c' }, parent: { uri: 'at://p', cid: 'c' } } } },
+      reply: { parent: { $type: 'app.bsky.feed.defs#postView', author: { did: parentDid, handle: 'maya.bsky.social', displayName: 'Maya' } } },
+    });
+    expect(mapFeedItem(reply('did:plc:maya'))?.replyTo).toEqual({ authorName: 'Maya', isSelf: false });
+    expect(mapFeedItem(reply('did:plc:alice'))?.replyTo).toEqual({ authorName: 'Maya', isSelf: true });
+    const orphan = { post: { ...base.post, record: { ...base.post.record, reply: { root: { uri: 'at://r', cid: 'c' } } } } };
+    expect(mapFeedItem(orphan)?.replyTo).toEqual({ authorName: null, isSelf: false });
   });
 });

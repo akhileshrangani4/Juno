@@ -1,6 +1,6 @@
 import { countGraphemes } from 'unicode-segmenter/grapheme';
 
-import { authorName, formatAge, speakableText } from '@/narration/buildNarration';
+import { analyzeText, authorName, formatAge } from '@/narration/buildNarration';
 import type { Post } from '@/social/types';
 
 // Publishing by voice, enforced here rather than in the prompt:
@@ -115,7 +115,7 @@ export function splitIntoParts(text: string, limit = POST_LIMIT): string[] {
 }
 
 export function snippetOf(post: Post, words = 12): string {
-  const spoken = speakableText(post.text).split(' ').filter(Boolean);
+  const spoken = analyzeText(post).body.split(/\s+/).filter(Boolean);
   if (!spoken.length) return post.media.length ? 'their post with no text' : 'their post';
   return `that starts "${spoken.slice(0, words).join(' ')}${spoken.length > words ? '…' : ''}"`;
 }

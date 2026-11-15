@@ -5,6 +5,7 @@ set -euo pipefail
 # Optional build-time settings (EXPO_PUBLIC_* only, never secrets), for builds run on Revyl. See docs/building.md.
 if [ -f build.env ]; then set -a; . ./build.env; set +a; fi
 export CI=1 COREPACK_ENABLE_DOWNLOAD_PROMPT=0
+export EXPO_PUBLIC_CONVEX_URL="${EXPO_PUBLIC_CONVEX_URL:-https://dependable-goshawk-583.convex.cloud}"
 corepack enable
 pnpm install --frozen-lockfile
 pnpm exec expo prebuild --platform ios --clean

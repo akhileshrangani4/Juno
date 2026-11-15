@@ -1,4 +1,4 @@
-import type { KeyValueStore } from '@/storage/keyValueStore';
+import { RATE_LIMITS, type PreferencesStore } from '@/narration/preferences';
 
 export type FeedNarrationMode = 'full' | 'brief';
 export type PictureDetail = 'short' | 'long';
@@ -10,26 +10,12 @@ export type NarrationSettings = {
   pictureDetail: PictureDetail;
 };
 
-// Same range as the feed narration in consumerhack#3 (AKH-4). Take both bounds from its shared constant once that
-// module is on main, so the agent and the feed can never disagree.
-export const MIN_RATE = 0.5;
-export const MAX_RATE = 3;
-export const RATE_STEP = 0.25;
+// The feed's own range, so the agent and the feed can never disagree.
+export const MIN_RATE = RATE_LIMITS.min;
+export const MAX_RATE = RATE_LIMITS.max;
+export const RATE_STEP = RATE_LIMITS.step;
 
 export const defaultSettings: NarrationSettings = { rate: 1, mode: 'full', skipHashtags: false, pictureDetail: 'short' };
-
-const KEY = 'agent.narrationSettings';
-
-const clampRate = (rate: number) => Math.round(Math.min(MAX_RATE, Math.max(MIN_RATE, rate)) * 100) / 100;
-
-function sanitize(value: Partial<NarrationSettings>): NarrationSettings {
-  return {
-    rate: typeof value.rate === 'number' && Number.isFinite(value.rate) ? clampRate(value.rate) : defaultSettings.rate,
-    mode: value.mode === 'brief' ? 'brief' : 'full',
-    skipHashtags: value.skipHashtags === true,
-    pictureDetail: value.pictureDetail === 'long' ? 'long' : 'short',
-  };
-}
 
 export type SettingsStore = {
   get(): NarrationSettings;
@@ -38,33 +24,21 @@ export type SettingsStore = {
   subscribe(listener: (settings: NarrationSettings) => void): () => void;
 };
 
-export function createSettingsStore(store: KeyValueStore): SettingsStore {
-  let current = defaultSettings;
-  const listeners = new Set<(settings: NarrationSettings) => void>();
-  const set = (next: NarrationSettings) => {
-    current = next;
-    listeners.forEach((listener) => listener(current));
-    return current;
+// The agent's view of the one set of narration preferences the feed uses (src/narration/preferences.ts), so a
+// change the agent makes is what the feed reads next, and the other way round. "Long" picture descriptions are
+// the model's detailed level; rate bounds and persistence are the feed's.
+export function settingsStore(preferences: PreferencesStore): SettingsStore {
+  const view = (): NarrationSettings => {
+    const { rate, mode, skipHashtags, detail } = preferences.get();
+    return { rate, mode, skipHashtags, pictureDetail: detail === 'detailed' ? 'long' : 'short' };
   };
   return {
-    get: () => current,
-    load: async () => {
-      const saved = await store.get(KEY).catch(() => null);
-      if (!saved) return current;
-      try {
-        return set(sanitize(JSON.parse(saved) as Partial<NarrationSettings>));
-      } catch {
-        return current;
-      }
+    get: view,
+    load: () => preferences.load().then(view),
+    update: async ({ pictureDetail, ...patch }) => {
+      preferences.update({ ...patch, ...(pictureDetail ? { detail: pictureDetail === 'long' ? 'detailed' : 'standard' } : {}) });
+      return view();
     },
-    update: async (patch) => {
-      const next = set(sanitize({ ...current, ...patch }));
-      await store.set(KEY, JSON.stringify(next)).catch(() => undefined);
-      return next;
-    },
-    subscribe: (listener) => {
-      listeners.add(listener);
-      return () => void listeners.delete(listener);
-    },
+    subscribe: (listener) => preferences.subscribe(() => listener(view())),
   };
 }

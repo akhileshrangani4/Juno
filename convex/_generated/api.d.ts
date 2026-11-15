@@ -8,6 +8,12 @@
  * @module
  */
 
+import type * as describe from "../describe.js";
+import type * as describeCache from "../describeCache.js";
+import type * as describeCaptions from "../describeCaptions.js";
+import type * as describeOpenAI from "../describeOpenAI.js";
+import type * as describePrompt from "../describePrompt.js";
+import type * as describeSource from "../describeSource.js";
 import type * as http from "../http.js";
 import type * as memory from "../memory.js";
 import type * as memoryLimits from "../memoryLimits.js";
@@ -24,6 +30,12 @@ import type {
 } from "convex/server";
 
 declare const fullApi: ApiFromModules<{
+  describe: typeof describe;
+  describeCache: typeof describeCache;
+  describeCaptions: typeof describeCaptions;
+  describeOpenAI: typeof describeOpenAI;
+  describePrompt: typeof describePrompt;
+  describeSource: typeof describeSource;
   http: typeof http;
   memory: typeof memory;
   memoryLimits: typeof memoryLimits;

@@ -70,22 +70,25 @@ The same test builds print the call's lifecycle to the device log as `[agent] ..
 
 `pnpm convex:dev` creates or links a personal deployment, pushes `convex/`, regenerates `convex/_generated` and writes `EXPO_PUBLIC_CONVEX_URL` to `.env.local`. With `CONVEX_DEPLOY_KEY` in the environment, `npx convex deploy` pushes to the deployment the key belongs to.
 
-The app talks to the deployment at **https://dependable-goshawk-583.convex.cloud** (not a secret). Set `EXPO_PUBLIC_CONVEX_URL` to it for builds that should have memory and the description cache; the app still runs without it, and the voice agent then works without memory.
+The app talks to the deployment at **https://dependable-goshawk-583.convex.cloud** (not a secret). `scripts/build-ios-simulator.sh` sets it as `EXPO_PUBLIC_CONVEX_URL` unless the environment already sets one, so Revyl builds get post descriptions and memory. The app still runs without it: narration then has no picture descriptions, and the voice agent works without memory.
 
 Server-side keys live only in the deployment's environment. Set them without echoing the value:
 
 ```bash
 npx convex env set SUPERMEMORY_API_KEY "$SUPERMEMORY_API_KEY"   # convex/memory.ts
+npx convex env set OPENAI_API_KEY "$OPENAI_API_KEY"             # convex/describe.ts, picture descriptions
+npx convex env set DESCRIBE_MODEL gpt-6-luna                    # optional, this is the default
 ```
 
 | Variable | Where it is set | Read by |
 | --- | --- | --- |
 | `SUPERMEMORY_API_KEY` | Convex deployment only | `convex/memory.ts` |
 | `VAPI_PRIVATE_KEY` | developer shell only | `pnpm eval:agent` (Vapi chat API) |
-| `OPENAI_API_KEY` | developer shell only | `EVAL_BACKEND=openai pnpm eval:agent` (stand-in) |
+| `OPENAI_API_KEY` | Convex deployment, and developer shell | `convex/describe.ts` (picture descriptions); `EVAL_BACKEND=openai pnpm eval:agent` (stand-in) |
+| `DESCRIBE_MODEL` | Convex deployment only, optional | `convex/describe.ts` (defaults to `gpt-6-luna`) |
 | `BLUESKY_TEST_HANDLE`, `BLUESKY_TEST_APP_PASSWORD` | developer shell only | `pnpm eval:bluesky` |
 
-None of these is ever set in the app or in `.env.local`. The voice agent's Convex code reads only `SUPERMEMORY_API_KEY`; nothing deployed forwards prompts to a model.
+None of these is ever set in the app or in `.env.local`. The voice agent's Convex code reads only `SUPERMEMORY_API_KEY`. The only deployed code that calls a model is `describe:describePost`, which takes a post URI, fetches the post from Bluesky itself, and is capped at $2 of model spend an hour (see [narration.md](narration.md)).
 
 The memory actions are rate limited per device (30 calls per 10 minutes), per caller address (60 per 10 minutes, stored as a hash) and for the whole deployment (600 per hour), and a person can keep at most 50 facts. The numbers live in `src/agent/memoryRateLimits.ts`. The device limit is taken only after the device's secret checks out, so knowing someone's public DID doesn't let a stranger use up their allowance. Known limit: whoever uses up the whole-deployment allowance turns memory off for everyone until the hour is over. The voice agent still works then, without memory.
 
