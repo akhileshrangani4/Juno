@@ -9,11 +9,11 @@ type Props = ViewProps & {
   onTapTop(): void;
   onTapBottom(): void;
   onCircle(direction: CircleDirection): void;
-  onUnrecognized(): void;
+  onUnrecognizedStroke?: (points: Point[]) => void;
   children: ReactNode;
 };
 
-export function GestureSurface({ tapsEnabled, onTapTop, onTapBottom, onCircle, onUnrecognized, children, ...viewProps }: Props) {
+export function GestureSurface({ tapsEnabled, onTapTop, onTapBottom, onCircle, onUnrecognizedStroke, children, ...viewProps }: Props) {
   const stroke = useRef<Point[]>([]);
   const height = useRef(0);
 
@@ -32,7 +32,7 @@ export function GestureSurface({ tapsEnabled, onTapTop, onTapBottom, onCircle, o
       if (event.canceled) return;
       const direction = recognizeCircle(stroke.current);
       if (direction) onCircle(direction);
-      else onUnrecognized();
+      else onUnrecognizedStroke?.(stroke.current);
     },
   });
 

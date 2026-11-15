@@ -86,7 +86,7 @@ export function MainScreen() {
   const onTapTop = () => (mode === 'scroll' ? step('previous') : narrator.speak(messages.gestures));
   const onTapBottom = () => (mode === 'scroll' ? step('next') : router.push('/sign-in'));
   const onCircle = (direction: CircleDirection) => switchMode(direction === 'clockwise' ? 'agent' : 'scroll');
-  const onUnrecognized = () => {
+  const onUnrecognizedStroke = () => {
     haptic('unrecognized');
     setStrokeCue(true);
     clearTimeout(strokeCueTimer.current);
@@ -122,7 +122,7 @@ export function MainScreen() {
         onTapTop={onTapTop}
         onTapBottom={onTapBottom}
         onCircle={onCircle}
-        onUnrecognized={onUnrecognized}
+        onUnrecognizedStroke={onUnrecognizedStroke}
         accessible
         accessibilityRole={Platform.OS === 'ios' ? DIRECT_TOUCH : 'adjustable'}
         accessibilityLabel={scrolling ? 'Feed' : 'Voice agent'}
