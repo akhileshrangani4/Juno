@@ -89,7 +89,14 @@ export const maya = makePost({
 export const nextPost = makePost({ uri: 'at://did:plc:sam/app.bsky.feed.post/2', cid: 'cid-2', text: 'Second post here.' });
 
 export function setup(
-  options: { signedIn?: boolean; focus?: Post | null; memory?: MemoryClient | null; memoryOffer?: MemoryOffer | null; provider?: jest.Mocked<SocialProvider> } = {},
+  options: {
+    signedIn?: boolean;
+    focus?: Post | null;
+    memory?: MemoryClient | null;
+    memoryOffer?: MemoryOffer | null;
+    provider?: jest.Mocked<SocialProvider>;
+    readBacksHeard?: boolean;
+  } = {},
 ) {
   const provider = options.provider ?? makeProvider();
   const scheduler = makeScheduler();
@@ -119,6 +126,13 @@ export function setup(
     now: () => new Date(Date.parse('2026-11-15T12:00:00.000Z') + scheduler.now()),
   };
   const handlers = createToolHandlers(deps);
+  // Stands in for the agent's voice, which hears each read-back played to the end, unless the test says it was cut off.
+  const run = handlers.run;
+  handlers.run = async (name, args) => {
+    const outcome = await run(name, args);
+    if (outcome.readBack && options.readBacksHeard !== false) handlers.readBackHeard(outcome.readBack);
+    return outcome;
+  };
   const say = (utterance: string) => conversation.add(utterance);
   const setFocus = (post: Post | null) => {
     focus = post;

@@ -3,6 +3,7 @@ import { maya, nextPost, setup as setupTools } from '@/testing/agent';
 import { agentMessages } from '../agentMessages';
 import { AgentSession, CONNECT_TIMEOUT_MS, COUNTDOWN_FALLBACK_MS, type EndReason } from '../AgentSession';
 import { UNDO_WINDOW_MS } from '../publisher';
+import { TRANSCRIPT_WAIT_MS } from '../toolHandlers';
 import { vapiTools } from '../tools';
 import type { CallListener, VapiMessage, VoiceCall } from '../voiceCall';
 
@@ -23,7 +24,7 @@ function fakeCall(connect: 'ok' | 'fail' | 'hang' = 'ok') {
 }
 
 function setup(options: { connect?: 'ok' | 'fail' | 'hang'; microphone?: 'granted' | 'denied'; noCall?: boolean } = {}) {
-  const tools = setupTools();
+  const tools = setupTools({ readBacksHeard: false });
   const { call, emit, drop } = fakeCall(options.connect);
   const exits: { reason: EndReason; message: string }[] = [];
   const cues: string[] = [];
@@ -49,7 +50,14 @@ function setup(options: { connect?: 'ok' | 'fail' | 'hang'; microphone?: 'grante
     emit({ type: 'tool-calls', toolCallList: [{ id: 'call', type: 'function', function: { name, arguments: JSON.stringify(args) } }] });
     await new Promise<void>((resolve) => setImmediate(() => resolve()));
   };
-  return { ...tools, session, call, emit, drop, exits, cues, statuses, logs, userSays, toolCall };
+  // The app's last say() played to the end, as Vapi reports it.
+  const playsReadBack = () => {
+    emit({ type: 'speech-update', role: 'assistant', status: 'started' });
+    emit({ type: 'assistant.speechStarted', source: 'force-say', text: '' });
+    emit({ type: 'transcript', role: 'assistant', transcriptType: 'final', transcript: call.say.mock.calls.at(-1)?.[0] as string });
+    emit({ type: 'speech-update', role: 'assistant', status: 'stopped' });
+  };
+  return { ...tools, session, call, emit, drop, exits, cues, statuses, logs, userSays, toolCall, playsReadBack };
 }
 
 const draftIdOf = (call: jest.Mock) => (call.mock.calls.map(([content]) => content as string).find((content) => content.includes('draftId=')) ?? '').match(/draftId="([^"]+)"/)?.[1];
@@ -133,10 +141,11 @@ describe('AgentSession', () => {
   });
 
   it('starts the five seconds after the notice is spoken and cancels on a heard undo', async () => {
-    const { session, call, userSays, toolCall, emit, scheduler, provider } = setup();
+    const { session, call, userSays, toolCall, emit, scheduler, provider, playsReadBack } = setup();
     await session.start();
     userSays('post hello from my new app');
     await toolCall('draft_post', { text: 'Hello from my new app.' });
+    playsReadBack();
     userSays('yes');
     await toolCall('publish_draft', { draftId: draftIdOf(call.addMessage) });
     expect(call.say).toHaveBeenLastCalledWith('Posting in five seconds. Say undo to stop it.', true);
@@ -183,13 +192,13 @@ describe('AgentSession', () => {
       expect(logs).toContain('publish confirmed {"by":"words"}');
     });
 
-    it("lets Vapi's force-say decide, whatever the words", async () => {
+    it("lets Vapi's force-say decide who spoke, but a read-back whose words never came back wasn't heard", async () => {
       const { source, speech, assistantSays, confirm, lastSaid, logs } = await drafted();
       source('force-say', 1);
       speech(1);
       assistantSays('Words the formatter rewrote beyond recognition.');
       await confirm();
-      expect(lastSaid()).toBe(countdown);
+      expect(lastSaid()).toBe(readBackAgain);
       expect(logs).toContain('assistant speech during read-back {"speaker":"app","by":"source","source":"force-say","turn":1}');
     });
 
@@ -364,11 +373,12 @@ describe('AgentSession', () => {
     });
 
     it('a stray tool call of the model after a re-read is refused and costs nothing: yes then publishes', async () => {
-      const { segment, answer, toolCall, call, provider, logs } = await drafted();
+      const { segment, answer, toolCall, call, provider, logs, scheduler } = await drafted();
       segment(1, 'model', 'Do you want to post it?');
       expect(await answer('yes')).toBe(readBack.replace('Shall I post it?', 'Say "post it" to send it, or "cancel".'));
       segment(2, 'force-say', readBack.replace('Shall I post it?', 'Say "post it" to send it, or "cancel".'));
       await toolCall('like_post');
+      await scheduler.advance(TRANSCRIPT_WAIT_MS);
       expect(provider.like).not.toHaveBeenCalled();
       expect(call.addMessage).toHaveBeenLastCalledWith(expect.stringMatching(/^Result of like_post: WAITING_FOR_ANSWER/), false);
       expect(logs).toContain('tool refused {"reason":"awaitingAnswer"}');
@@ -410,10 +420,11 @@ describe('AgentSession', () => {
   });
 
   it('holds a send counting down when the second half of a split yes asks for a change', async () => {
-    const { session, call, userSays, toolCall, emit, scheduler, provider } = setup();
+    const { session, call, userSays, toolCall, emit, scheduler, provider, playsReadBack } = setup();
     await session.start();
     userSays('post hello from my new app');
     await toolCall('draft_post', { text: 'Hello from my new app.' });
+    playsReadBack();
     userSays('Yes.');
     await toolCall('publish_draft', { draftId: draftIdOf(call.addMessage) });
     emit({ type: 'speech-update', role: 'assistant', status: 'started' });
@@ -427,10 +438,11 @@ describe('AgentSession', () => {
   });
 
   it('sends after five seconds and tells the model it was sent', async () => {
-    const { session, call, userSays, toolCall, emit, scheduler, provider } = setup();
+    const { session, call, userSays, toolCall, emit, scheduler, provider, playsReadBack } = setup();
     await session.start();
     userSays('post hello from my new app');
     await toolCall('draft_post', { text: 'Hello from my new app.' });
+    playsReadBack();
     userSays('Yes please.');
     await toolCall('publish_draft', { draftId: draftIdOf(call.addMessage) });
     emit({ type: 'speech-update', role: 'assistant', status: 'started' });
@@ -441,10 +453,11 @@ describe('AgentSession', () => {
   });
 
   it('cancels a post still in its five seconds when the agent goes to sleep', async () => {
-    const { session, call, userSays, toolCall, scheduler, provider, exits } = setup();
+    const { session, call, userSays, toolCall, scheduler, provider, exits, playsReadBack } = setup();
     await session.start();
     userSays('post hello');
     await toolCall('draft_post', { text: 'Hello' });
+    playsReadBack();
     userSays('yes');
     await toolCall('publish_draft', { draftId: draftIdOf(call.addMessage) });
     session.stop();
@@ -484,5 +497,204 @@ describe('AgentSession', () => {
     await session.start();
     drop();
     expect(exits.map((exit) => exit.reason)).toEqual(['dropped']);
+  });
+
+  // The four ways the Overseer found to publish what the user didn't knowingly approve (reports/CONS-6-pr21.md),
+  // and its should-fix cases. Each fails on ae175f3.
+  describe("nothing publishes without the user's knowing yes (Overseer review of #21)", () => {
+    async function heardDraft(tool: 'draft_post' | 'draft_reply' | 'draft_repost', text = 'Hello from my new app.') {
+      const world = setup();
+      await world.session.start();
+      world.userSays(tool === 'draft_repost' ? 'repost this' : `${tool === 'draft_post' ? 'post' : 'reply'} ${text}`);
+      await world.toolCall(tool, tool === 'draft_repost' ? {} : { text });
+      const id = draftIdOf(world.call.addMessage)!;
+      world.playsReadBack();
+      const lastSaid = () => world.call.say.mock.calls.at(-1)?.[0] as string;
+      const sent = () => world.provider.createPost.mock.calls.length + world.provider.reply.mock.calls.length + world.provider.repost.mock.calls.length + world.provider.deletePost.mock.calls.length;
+      const settle = async () => {
+        await world.scheduler.advance(TRANSCRIPT_WAIT_MS);
+        await world.scheduler.advance(COUNTDOWN_FALLBACK_MS);
+        await world.scheduler.advance(UNDO_WINDOW_MS);
+        await world.scheduler.advance(30_000);
+      };
+      return { ...world, id, lastSaid, sent, settle };
+    }
+
+    describe('B1: a reply or repost is bound to the post it was drafted on', () => {
+      it('drops a repost when the agent moves to the next post, so "repost this" there never reposts the old one', async () => {
+        const { userSays, toolCall, lastSaid, provider, session, settle, call } = await heardDraft('draft_repost');
+        userSays('no, next');
+        await toolCall('go_to_post', { direction: 'next' });
+        session.focusChanged(nextPost);
+        expect(lastSaid()).toMatch(/^I dropped the repost of Maya's post\. Nothing was sent\. /);
+        userSays('repost this');
+        await toolCall('publish_draft', { draftId: 'd1' });
+        await settle();
+        expect(provider.repost).not.toHaveBeenCalled();
+        expect(call.say.mock.calls.filter(([text]) => /dropped/.test(text as string))).toHaveLength(1);
+      });
+
+      it('drops a reply when a swipe moves focus, and says so; "send it" afterwards sends nothing', async () => {
+        const { userSays, lastSaid, provider, session, setFocus, settle, call } = await heardDraft('draft_reply', "That's lovely");
+        setFocus(nextPost);
+        session.focusChanged(nextPost);
+        expect(lastSaid()).toBe('I dropped your reply to Maya. Nothing was sent.');
+        expect(call.addMessage).toHaveBeenLastCalledWith(expect.stringMatching(/^Focus changed\. The app dropped the pending reply/), false);
+        userSays('send it');
+        await settle();
+        expect(provider.reply).not.toHaveBeenCalled();
+      });
+
+      it('drops a reply whose post left focus even before the app hears about the move', async () => {
+        const { userSays, lastSaid, provider, setFocus, settle, toolCall, id } = await heardDraft('draft_reply', "That's lovely");
+        setFocus(nextPost);
+        userSays('share this');
+        expect(lastSaid()).toBe('I dropped your reply to Maya. Nothing was sent.');
+        await toolCall('publish_draft', { draftId: id });
+        await settle();
+        expect(provider.reply).not.toHaveBeenCalled();
+      });
+
+      it('names who the reply or repost goes to when it starts counting down', async () => {
+        const reply = await heardDraft('draft_reply', "That's lovely");
+        reply.userSays('send it');
+        expect(reply.lastSaid()).toBe('Sending your reply to Maya in five seconds. Say undo to stop it.');
+        const repost = await heardDraft('draft_repost');
+        repost.userSays('yes');
+        expect(repost.lastSaid()).toBe("Reposting Maya's post in five seconds. Say undo to stop it.");
+      });
+
+      it('keeps a new post, which has no target, when focus moves, and says it is kept', async () => {
+        const { userSays, toolCall, lastSaid, session, settle, provider } = await heardDraft('draft_post');
+        userSays('next');
+        await toolCall('go_to_post', { direction: 'next' });
+        session.focusChanged(nextPost);
+        expect(lastSaid()).toMatch(/^Your draft is kept, not sent\. /);
+        userSays('post it');
+        await settle();
+        expect(provider.createPost).toHaveBeenCalledWith({ text: 'Hello from my new app.' });
+      });
+    });
+
+    describe('B2: nothing is heard or sent once the conversation is over', () => {
+      it.each([
+        [
+          'the agent ends it',
+          async (world: Awaited<ReturnType<typeof heardDraft>>) => {
+            world.userSays('goodbye');
+            await world.toolCall('end_conversation');
+          },
+        ],
+        ['silence', async (world: Awaited<ReturnType<typeof heardDraft>>) => world.emit({ type: 'status-update', status: 'ended', endedReason: 'silence-timed-out' })],
+        ['the user', async (world: Awaited<ReturnType<typeof heardDraft>>) => world.session.stop('user')],
+        ['an error', async (world: Awaited<ReturnType<typeof heardDraft>>) => world.drop()],
+      ])('after %s, a late yes or post it publishes nothing and the user hears the draft was not sent', async (_how, end) => {
+        const world = await heardDraft('draft_post');
+        await end(world);
+        world.userSays('yes');
+        world.userSays('post it');
+        await world.settle();
+        expect(world.sent()).toBe(0);
+        expect(world.exits[0].message).toMatch(/^Your draft was not sent\. /);
+        expect(world.scheduler.pending()).toBe(0);
+      });
+
+      it('a confirmation waiting for its transcript when the call ends never sends', async () => {
+        const world = await heardDraft('draft_post');
+        await world.toolCall('publish_draft', { draftId: world.id });
+        world.session.stop('user');
+        world.userSays('yes');
+        await world.settle();
+        expect(world.sent()).toBe(0);
+      });
+    });
+
+    describe('B3: every confirmation needs this exact read-back heard to the end', () => {
+      it('reads a draft again when yes comes with no sign the read-back was spoken at all', async () => {
+        const world = setup();
+        await world.session.start();
+        world.userSays('post hello from my new app');
+        await world.toolCall('draft_post', { text: 'Hello from my new app.' });
+        world.userSays('yes');
+        expect(world.call.say).toHaveBeenLastCalledWith('Posting to your followers: Hello from my new app. Say "post it" to send it, or "cancel".', true);
+        await world.toolCall('publish_draft', { draftId: draftIdOf(world.call.addMessage) });
+        await world.scheduler.advance(COUNTDOWN_FALLBACK_MS);
+        await world.scheduler.advance(UNDO_WINDOW_MS);
+        expect(world.provider.createPost).not.toHaveBeenCalled();
+        expect(world.logs).toContain('publish refused {"reason":"notHeard","by":"words"}');
+      });
+
+      it('never deletes on a yes said over a delete read-back that it cut off', async () => {
+        const mine = { ...maya, uri: 'at://me/post/9', author: { ...maya.author, id: 'did:plc:me' } };
+        const world = setup();
+        world.provider.getMyLatestPost.mockResolvedValue(mine);
+        await world.session.start();
+        world.userSays('delete my last post');
+        await world.toolCall('draft_delete_my_last_post');
+        world.emit({ type: 'speech-update', role: 'assistant', status: 'started', turn: 1 });
+        world.emit({ type: 'assistant.speechStarted', source: 'force-say', turn: 1, text: '' });
+        world.emit({ type: 'transcript', role: 'assistant', transcriptType: 'final', transcript: 'Deleting your post from' });
+        world.userSays('yes delete it');
+        await world.toolCall('publish_draft', { draftId: draftIdOf(world.call.addMessage) });
+        await world.scheduler.advance(COUNTDOWN_FALLBACK_MS);
+        await world.scheduler.advance(UNDO_WINDOW_MS);
+        expect(world.provider.deletePost).not.toHaveBeenCalled();
+        expect(world.call.say.mock.calls.at(-1)?.[0]).toMatch(/^Deleting your post from .*Say "delete it" to delete it, or "cancel"\.$/);
+      });
+    });
+
+    describe("B4: the model's speech voids the read-back the moment it starts", () => {
+      it('refuses a yes that lands while the model is still asking its own question, before its transcript', async () => {
+        const { emit, userSays, settle, sent, logs } = await heardDraft('draft_post');
+        emit({ type: 'speech-update', role: 'assistant', status: 'started', turn: 2 });
+        userSays('yes');
+        await settle();
+        expect(sent()).toBe(0);
+        expect(logs).toContain('yes voided by assistant speech {"by":"timing and words","source":null,"turn":2}');
+      });
+
+      it('refuses it as soon as Vapi names the model as the source', async () => {
+        const { emit, userSays, settle, sent } = await heardDraft('draft_post');
+        emit({ type: 'assistant.speechStarted', source: 'model', turn: 2, text: '' });
+        userSays('yes');
+        await settle();
+        expect(sent()).toBe(0);
+      });
+    });
+
+    describe('should-fix', () => {
+      it('waits for the words behind any tool Vapi sends first, so goodbye ends the call and says the draft was not sent', async () => {
+        const { toolCall, userSays, call, exits } = await heardDraft('draft_post');
+        await toolCall('end_conversation');
+        expect(call.stop).not.toHaveBeenCalled();
+        userSays('goodbye, end the call');
+        await new Promise<void>((resolve) => setImmediate(() => resolve()));
+        expect(call.stop).toHaveBeenCalled();
+        expect(exits[0].message).toBe(`Your draft was not sent. ${agentMessages.asleep}`);
+      });
+
+      it('waits for the words behind a move Vapi sends first, and moves', async () => {
+        const { toolCall, userSays, focus } = await heardDraft('draft_post');
+        await toolCall('go_to_post', { direction: 'next' });
+        userSays('next');
+        await new Promise<void>((resolve) => setImmediate(() => resolve()));
+        expect(focus()).toBe(nextPost);
+      });
+
+      it("counts words in a force-say segment past the end of every due say() as the model's", async () => {
+        const world = setup();
+        await world.session.start();
+        world.userSays('post hello from my new app');
+        await world.toolCall('draft_post', { text: 'Hello from my new app.' });
+        world.emit({ type: 'speech-update', role: 'assistant', status: 'started', turn: 1 });
+        world.emit({ type: 'assistant.speechStarted', source: 'force-say', turn: 1, text: '' });
+        world.emit({ type: 'transcript', role: 'assistant', transcriptType: 'final', transcript: 'Posting to your followers: Hello from my new app. Shall I post it?' });
+        world.emit({ type: 'transcript', role: 'assistant', transcriptType: 'final', transcript: 'Want me to like it too?' });
+        world.userSays('yes');
+        await world.scheduler.advance(COUNTDOWN_FALLBACK_MS);
+        await world.scheduler.advance(UNDO_WINDOW_MS);
+        expect(world.provider.createPost).not.toHaveBeenCalled();
+      });
+    });
   });
 });

@@ -58,7 +58,7 @@ describe('AgentVoice', () => {
     expect(v.attribute('Words the formatter rewrote beyond recognition.')).toMatchObject({ speaker: 'app', finished: [] });
   });
 
-  it("allows Vapi's transcriber to drop a word of the read-back, but not to add or change one", () => {
+  it("allows Vapi's transcriber to drop or add one word in eight of the read-back, and no more", () => {
     const dropped = voice();
     dropped.v.appSays('Posting to your followers: Good night everyone. Shall I post it?', 'd1');
     dropped.v.speechStarted(1);
@@ -73,7 +73,7 @@ describe('AgentVoice', () => {
     const added = voice();
     added.v.appSays('Posting to your followers: Good night everyone. Shall I post it?', 'd1');
     added.v.speechStarted(1);
-    expect(added.v.attribute('posting to your followers, good night to everyone.')).toMatchObject({ speaker: 'model', finished: [] });
+    expect(added.v.attribute('posting to your followers, good night to you everyone.')).toMatchObject({ speaker: 'model', finished: [] });
 
     const trailing = voice();
     trailing.v.appSays('Posting to your followers: Good night everyone. Shall I post it?', 'd1');
@@ -112,5 +112,51 @@ describe('AgentVoice', () => {
     advance(60_000);
     v.speechStarted(1);
     expect(v.attribute(readBack)).toMatchObject({ speaker: 'model', finished: [] });
+  });
+
+  it('never lets a negation or a number be the word dropped in transit', () => {
+    const negation = voice();
+    negation.v.appSays('Replying to Maya: I am not coming tonight. Shall I send the reply?', 'd1');
+    negation.v.speechStarted(1);
+    expect(negation.v.attribute('Replying to Maya: I am coming tonight. Shall I send the reply?')).toMatchObject({ speaker: 'model', finished: [] });
+
+    const number = voice();
+    number.v.appSays('Posting to your followers: Meet me by the gate at 4 today. Shall I post it?', 'd1');
+    number.v.speechStarted(1);
+    expect(number.v.attribute('Posting to your followers: Meet me by the gate today. Shall I post it?')).toMatchObject({ speaker: 'model', finished: [] });
+
+    const ordinary = voice();
+    ordinary.v.appSays('Posting to your followers: Meet me by the gate at 4 today. Shall I post it?', 'd1');
+    ordinary.v.speechStarted(1);
+    expect(ordinary.v.attribute('Posting to your followers: Meet me by gate at four thirty today. Shall I post it?')).toMatchObject({ speaker: 'app', finished: ['d1'] });
+  });
+
+  it('hears read-backs as Vapi transcribed them on real calls: 1st for first, a "you know" added', () => {
+    const reply = voice();
+    reply.v.appSays('Replying to Sam\'s post that starts "Coffee first, then everything else.": That is lovely. Shall I send the reply?', 'd1');
+    reply.v.speechStarted(1);
+    reply.v.attribute("Replying to Sam's post that starts coffee 1st then everything else.");
+    reply.v.attribute('That is lovely.');
+    expect(reply.v.attribute('Shall I send the reply?')).toMatchObject({ speaker: 'app', finished: ['d1'] });
+
+    const del = voice();
+    del.v.appSays("Deleting your post from 1 hour ago: Testing the new app. A deleted post can't be brought back. Say \"delete it\" to delete it, or \"cancel\".", 'd2');
+    del.v.speechStarted(2);
+    del.v.attribute('deleting your post from, you know, 1 hour ago, testing the new app.');
+    expect(del.v.attribute("A deleted post can't be brought back. Say, delete it to delete it or cancel.")).toMatchObject({ speaker: 'app', finished: ['d2'] });
+
+    const added = voice();
+    added.v.appSays('Replying to Maya: I am coming tonight. Shall I send the reply?', 'd3');
+    added.v.speechStarted(3);
+    expect(added.v.attribute('Replying to Maya: I am not coming tonight. Shall I send the reply?')).toMatchObject({ speaker: 'model', finished: [] });
+  });
+
+  it("puts speech that starts with no say() due down to the model at once, before any transcript", () => {
+    const { v } = voice();
+    expect(v.speechStarted(2)).toMatchObject({ speaker: 'model', turn: 2 });
+    expect(v.sourceReported('model', 3)).toMatchObject({ speaker: 'model', by: 'source', source: 'model' });
+    v.appSays(readBack, 'd1');
+    expect(v.speechStarted(4)).toBeNull();
+    expect(v.sourceReported('force-say', 4)).toBeNull();
   });
 });

@@ -6,7 +6,9 @@ import { setup } from '@/testing/agent';
 
 import { buildAssistant, FIRST_MESSAGE } from '../assistant';
 import { describeAccount, describeFocus, describeMemories, describeSettings } from '../postContext';
-import type { ToolOutcome } from '../toolHandlers';
+import { TRANSCRIPT_WAIT_MS, type ToolOutcome } from '../toolHandlers';
+
+import { unreportedClaims } from './claims';
 
 // Runs the real assistant configuration without a microphone and plays the phone's part: every tool call goes
 // to the real tool handlers against a mocked SocialProvider, and each result goes back as the message the phone
@@ -273,6 +275,7 @@ it('drives the assistant through the scripted utterances', async () => {
     const holdCountdown = step.thenDuringCountdown === true;
     const before = { sent: sent(), deleted: deleted(), timings: timings.length };
     world.say(utterance);
+    const turnStart = log.join('\n').length;
     add('User', utterance);
     const used: string[] = [];
     const args: Record<string, unknown>[] = [];
@@ -311,7 +314,11 @@ it('drives the assistant through the scripted utterances', async () => {
           const parsed = JSON.parse(call.function.arguments || '{}');
           args.push(parsed);
           add('Tool call', `\`${call.function.name}(${call.function.arguments || ''})\``);
-          const outcome: ToolOutcome = await world.handlers.run(call.function.name, parsed);
+          // A call made before the user has said anything after a read-back waits for words that never come here.
+          const running = world.handlers.run(call.function.name, parsed);
+          const settled = await Promise.race([running.then(() => true), new Promise<boolean>((resolve) => setImmediate(() => resolve(false)))]);
+          if (!settled) await world.scheduler.advance(TRANSCRIPT_WAIT_MS);
+          const outcome: ToolOutcome = await running;
           if (outcome.refused) refused.push(outcome.refused);
           if (outcome.speak) add('App says (agent voice)', outcome.speak);
           if (outcome.readBack) world.handlers.readBackHeard(outcome.readBack);
@@ -337,7 +344,9 @@ it('drives the assistant through the scripted utterances', async () => {
       if (backend === 'vapi' && !respond && !notices.length) break;
     }
     calls.push({ utterance, tools: used, reply: said.join(' ') });
-    if (/\b(?:posted|published|sent|reposted|went out|is being sent|on its way)\b/i.test(said.join(' ')) && !/\b(?:not|n't|nothing)\b/i.test(said.join(' ')) && !toldSent) falseClaims.push(utterance);
+    const told = log.join('\n');
+    const claims = unreportedClaims(said.join(' '), { sent: toldSent, undone: /UNDONE|DISCARDED/.test(told.slice(turnStart)), liked: /LIKED:/.test(told.slice(turnStart)) });
+    if (claims.length) falseClaims.push(`${utterance}: ${claims.join(' | ')}`);
     if (countingDown) {
       await world.scheduler.advance(10_000);
       const late = world.notify.mock.calls.splice(0).map(([text]) => text as string);

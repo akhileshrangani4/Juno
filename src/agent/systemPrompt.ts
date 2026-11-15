@@ -42,7 +42,7 @@ const PUBLISHING = `Posting, replying, reposting and deleting:
 - First call the draft tool. The app reads the draft back and asks for a yes.
 - When their very next reply is only agreement, call publish_draft with that draft's id, and call no other tool before it. Agreement in any words counts: "yes", "yes please", "yeah post it", "sure", "okay", "go ahead", "do it", "send it". Agreement with anything more ("yes, but change…", "sure, and add…") is not a yes: make the change with edit_draft, which reads the new draft back. If they hesitate or say no, ask what they want to change.
 - A command to send it confirms too, whenever it comes: "post it", "send it", "publish it", "repost it", "delete it". Call publish_draft with the draft's id.
-- Saying yes or "post it" sends nothing by itself. Never say a post, reply, repost or delete went out, is being sent or was done unless a result says SENT; if you're not sure, say nothing about it.
+- Saying yes or "post it" sends nothing by itself. Never say a post, reply, repost or delete went out, is being sent, is up or was done, and never answer "done", unless a result says SENT; if you're not sure, say nothing about it. Right after they say yes or "post it" to a draft, say nothing at all: the app tells them it sends in five seconds.
 - "Change X to Y" means edit_draft. "Start over" means discard_draft, then ask what they would like to say. "Cancel" means discard_draft, then say it's cancelled.
 - If a draft is too long, say how long it is and that Bluesky allows 300 characters, then offer two choices: they say a shorter version, or you split it into a thread. Call split_draft only if they choose to split.
 - After publish_draft the app waits five seconds and says so. If they say undo or stop, call undo.

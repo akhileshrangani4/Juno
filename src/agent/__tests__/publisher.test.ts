@@ -38,6 +38,7 @@ describe('Publisher', () => {
       then: 'instruct',
       reread: true,
     });
+    publisher.readBackHeard(draft.draft.id, 3);
     const confirmed = publisher.confirm(draft.draft.id, 4, 'Yes, post it.');
     expect(confirmed).toMatchObject({ ok: true, announcement: 'Posting in five seconds. Say undo to stop it.' });
     publisher.startCountdown();
@@ -61,6 +62,7 @@ describe('Publisher', () => {
     const { publisher, scheduler, sent } = setup();
     const draft = publisher.draftText('post', 'Hello', null, 1);
     if (!draft.ok) throw new Error('expected a draft');
+    publisher.readBackHeard(draft.draft.id, 1);
     publisher.confirm(draft.draft.id, 2, 'yes');
     publisher.startCountdown();
     await scheduler.advance(4000);
@@ -105,6 +107,7 @@ describe('Publisher', () => {
     expect(split.draft.parts.every((part) => graphemeLength(part) <= POST_LIMIT)).toBe(true);
     expect(split.draft.parts.join(' ')).toBe(text);
     expect(split.readBack).toMatch(/^Posting to your followers: This will be a thread of 2 posts\. Post 1: This is/);
+    publisher.readBackHeard(split.draft.id, 2);
     publisher.confirm(split.draft.id, 3, 'yes');
     publisher.startCountdown();
     await scheduler.advance(UNDO_WINDOW_MS);
@@ -203,6 +206,7 @@ describe('Publisher', () => {
     if (!draft.ok) throw new Error('expected a draft');
     publisher.assistantSpoke(1);
     expect(publisher.confirm(draft.draft.id, 2, 'yes')).toMatchObject({ ok: false, reason: 'expired' });
+    publisher.readBackHeard(draft.draft.id, 2);
     publisher.assistantSpoke(3);
     expect(publisher.confirm(draft.draft.id, 3, 'yes')).toMatchObject({ ok: true });
   });
@@ -213,6 +217,7 @@ describe('Publisher', () => {
     if (!draft.ok) throw new Error('expected a draft');
     const twoTurnsLater = publisher.confirm(draft.draft.id, 3, 'yes');
     expect(twoTurnsLater).toMatchObject({ ok: false, reason: 'expired', speak: 'Posting to your followers: Hello. Say "post it" to send it, or "cancel".' });
+    publisher.readBackHeard(draft.draft.id, 3);
     expect(publisher.confirm(draft.draft.id, 4, 'yes')).toMatchObject({ ok: true });
   });
 
@@ -222,6 +227,7 @@ describe('Publisher', () => {
     if (!draft.ok) throw new Error('expected a draft');
     publisher.interrupt();
     expect(publisher.confirm(draft.draft.id, 2, 'yes')).toMatchObject({ ok: false, reason: 'expired' });
+    publisher.readBackHeard(draft.draft.id, 2);
     expect(publisher.confirm(draft.draft.id, 3, 'yes')).toMatchObject({ ok: true });
   });
 
@@ -239,6 +245,7 @@ describe('Publisher', () => {
     });
     const draft = publisher.draftText('post', 'Hello', null, 1);
     if (!draft.ok) throw new Error('expected a draft');
+    publisher.readBackHeard(draft.draft.id, 1);
     publisher.confirm(draft.draft.id, 2, 'yes');
     publisher.startCountdown();
     await scheduler.advance(UNDO_WINDOW_MS);

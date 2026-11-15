@@ -160,7 +160,10 @@ export class AgentSession {
     const uri = post?.uri ?? null;
     if (uri === this.focusUri) return;
     this.focusUri = uri;
-    if (this.live) this.deps.call?.addMessage(`Focus changed. The post in focus is now: ${describeFocus(post)}`, false);
+    if (!this.live) return;
+    const dropped = this.deps.handlers.focusMoved(post);
+    if (dropped) this.speak(dropped, undefined, true);
+    this.deps.call?.addMessage(`Focus changed.${dropped ? ` The app dropped the pending reply or repost, which was for the previous post, and told the user.` : ''} The post in focus is now: ${describeFocus(post)}`, false);
   }
 
   private onError(error: unknown) {
@@ -168,7 +171,9 @@ export class AgentSession {
     if (this.live) this.finish('dropped');
   }
 
+  // Once the session has finished nothing it hears counts: a late transcript can't confirm or hold anything.
   private onMessage(message: VapiMessage) {
+    if (this.finished) return;
     switch (message.type) {
       case 'transcript':
         if (message.transcriptType !== 'final' || typeof message.transcript !== 'string') return;
@@ -179,7 +184,7 @@ export class AgentSession {
         for (const call of (message.toolCallList as ToolCall[] | undefined) ?? []) this.queue = this.queue.then(() => this.runTool(call));
         return;
       case 'assistant.speechStarted':
-        this.voice.sourceReported(message.source, message.turn);
+        this.heardSpeech(this.voice.sourceReported(message.source, message.turn));
         return;
       case 'speech-update':
         if (message.role === 'assistant' && message.status === 'started') this.heardSpeech(this.voice.speechStarted(message.turn));
@@ -201,7 +206,8 @@ export class AgentSession {
     this.deps.conversation.add(transcript);
     const confirmed = this.deps.handlers.confirmFromWords(transcript);
     if (confirmed) {
-      this.deps.log('publish confirmed', { by: 'words' });
+      if (confirmed.refused) this.deps.log('publish refused', { reason: confirmed.refused, by: 'words' });
+      else this.deps.log('publish confirmed', { by: 'words' });
       return this.deliver('publish_draft', confirmed);
     }
     const heard = this.deps.handlers.heard(transcript);
@@ -234,7 +240,7 @@ export class AgentSession {
   // Everything the app says in the agent's voice goes through here, so its transcript is known to be the app's. A
   // tool's outcome interrupts: Vapi drops anything the model is saying or about to say, and says this now.
   private speak(text: string, readBack?: string, interrupt = false) {
-    this.voice.appSays(text, readBack);
+    this.voice.appSays(text, readBack, interrupt);
     this.deps.call?.say(text, interrupt);
   }
 
@@ -253,6 +259,7 @@ export class AgentSession {
 
   private deliver(name: string, outcome: ToolOutcome) {
     const { call } = this.deps;
+    if (this.finished) return;
     if (outcome.after === 'end') return this.stop('agent');
     if (outcome.after === 'signIn') return this.stop('signIn');
     if (outcome.speak) this.speak(outcome.speak, outcome.readBack, true);
@@ -265,7 +272,7 @@ export class AgentSession {
   }
 
   private startCountdown() {
-    if (!this.countdownArmed) return;
+    if (!this.countdownArmed || this.finished) return;
     this.countdownArmed();
     this.countdownArmed = null;
     this.deps.handlers.publisher.startCountdown();
@@ -279,10 +286,11 @@ export class AgentSession {
     this.abandonConnect = null;
     this.countdownArmed?.();
     this.countdownArmed = null;
-    const cancelled = this.deps.handlers.publisher.cancelPending();
-    this.deps.log('exit', { reason, cancelledPending: !!cancelled });
+    // Every countdown, timer and confirmation ends here: nothing is published once the user can't hear it or undo it.
+    const { cancelled, dropped } = this.deps.handlers.close();
+    this.deps.log('exit', { reason, cancelledPending: !!cancelled, droppedDraft: !!dropped });
     this.deps.status('ended');
-    this.deps.exit(reason, `${cancelled ? agentMessages.notSent : ''}${EXIT_MESSAGES[reason]}`);
+    this.deps.exit(reason, `${cancelled ? agentMessages.notSent : dropped ? agentMessages.draftNotSent : ''}${EXIT_MESSAGES[reason]}`);
   }
 }
 
