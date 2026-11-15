@@ -37,7 +37,14 @@ jest.mock('@atproto/api', () => ({
       this.options.persistSession?.('create', this.session);
     });
     resumeSession = jest.fn(async (session: any) => {
-      if (session.refreshJwt === 'expired') throw new Error('expired');
+      if (session.refreshJwt === 'expired') {
+        this.options.persistSession?.('expired', undefined);
+        throw new Error('ExpiredToken');
+      }
+      if (session.refreshJwt === 'offline') {
+        this.options.persistSession?.('network-error', session);
+        throw new TypeError('Network request failed');
+      }
       this.session = session;
     });
     logout = jest.fn(async () => {
@@ -96,16 +103,29 @@ describe('BlueskyProvider', () => {
     expect(page.cursor).toBe('next');
   });
 
-  it('restores a stored session and survives a missing or expired one', async () => {
+  it('restores a stored session, and reports a missing one', async () => {
     const { provider, store } = setup();
-    expect(await provider.restoreSession()).toBeNull();
+    expect(await provider.restoreSession()).toEqual({ status: 'none' });
     expect(await provider.hasStoredSession()).toBe(false);
     await store.set('bluesky.session', JSON.stringify({ did: 'did:plc:me', handle: 'me.bsky.social', accessJwt: 'a', refreshJwt: 'r', active: true }));
     expect(await provider.hasStoredSession()).toBe(true);
-    expect(await provider.restoreSession()).toEqual({ id: 'did:plc:me', handle: 'me.bsky.social' });
-    const expired = setup();
-    await expired.store.set('bluesky.session', JSON.stringify({ did: 'd', handle: 'h', accessJwt: 'a', refreshJwt: 'expired', active: true }));
-    expect(await expired.provider.restoreSession()).toBeNull();
+    expect(await provider.restoreSession()).toEqual({ status: 'restored', account: { id: 'did:plc:me', handle: 'me.bsky.social' } });
+  });
+
+  it('reports a session the server refused as invalid and forgets it', async () => {
+    const { provider, store } = setup();
+    await store.set('bluesky.session', JSON.stringify({ did: 'did:plc:me', handle: 'me.bsky.social', accessJwt: 'a', refreshJwt: 'expired', active: true }));
+    expect(await provider.restoreSession()).toEqual({ status: 'invalid', account: { id: 'did:plc:me', handle: 'me.bsky.social' } });
+    expect(await store.get('bluesky.session')).toBeNull();
+  });
+
+  it('reports an unreachable server without touching the stored session', async () => {
+    const { provider, store } = setup();
+    const saved = JSON.stringify({ did: 'did:plc:me', handle: 'me.bsky.social', accessJwt: 'a', refreshJwt: 'offline', active: true });
+    await store.set('bluesky.session', saved);
+    expect(await provider.restoreSession()).toEqual({ status: 'unreachable' });
+    expect(await store.get('bluesky.session')).toBe(saved);
+    expect(await provider.hasStoredSession()).toBe(true);
   });
 
   it('clears the stored session on sign out', async () => {
