@@ -239,8 +239,9 @@ export class BlueskyProvider implements SocialProvider {
 
   async getReplies(postUri: string): Promise<Reply[]> {
     const params = { uri: postUri, depth: REPLY_DEPTH, parentHeight: 0 };
+    if (this.expired) throw new SessionExpiredError('The Bluesky session has ended');
     const agent = this.signed?.agent;
-    const { data } = agent ? await agent.getPostThread(params) : await this.publicAgent.app.bsky.feed.getPostThread(params);
+    const { data } = await reach(() => (agent ? agent.getPostThread(params) : this.publicAgent.app.bsky.feed.getPostThread(params)));
     return flattenReplies(data.thread, agent?.did);
   }
 

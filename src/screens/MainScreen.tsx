@@ -11,7 +11,7 @@ import { useVoiceAgent } from '@/agent/useVoiceAgent';
 import { registerCommentsController } from '@/comments/commentsControl';
 import { useComments } from '@/comments/useComments';
 import { haptic } from '@/feedback/haptics';
-import { likeUriOf, toggleLike, useLikeLedger, whose } from '@/feed/likes';
+import { likeInFlight, likeUriOf, toggleLike, useLikeLedger, whose } from '@/feed/likes';
 import { useFeed } from '@/feed/useFeed';
 import type { CircleDirection } from '@/gestures/circle';
 import { createRateLimiter } from '@/gestures/rateLimit';
@@ -56,7 +56,11 @@ export function MainScreen() {
   const [narration, setNarration] = useState('');
   const prefix = useRef('');
   const entering = useRef(false);
-  const pendingLikes = useRef(new Set<string>());
+  // The mode as of now, for results that land later: set together with the mode, never a render behind it.
+  const modeNow = useRef<Mode>('scroll');
+  // Like failures that came while the call was still connecting: the agent says them once it is live, or the device
+  // says them when the app is back to scrolling.
+  const heldForAgent = useRef<string[]>([]);
   const [allowStrokeCue] = useState(() => createRateLimiter(STROKE_CUE_INTERVAL_MS));
   const [strokeCue, setStrokeCue] = useState(false);
   const strokeCueTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
@@ -64,15 +68,27 @@ export function MainScreen() {
 
   useEffect(() => () => clearTimeout(strokeCueTimer.current), []);
 
+  const changeMode = (next: Mode) => {
+    modeNow.current = next;
+    setMode(next);
+  };
+  const takeHeld = () => heldForAgent.current.splice(0).join(' ');
+
   const onAgentExit = (reason: EndReason, message: string) => {
-    prefix.current = message;
-    setMode('scroll');
+    prefix.current = [message, takeHeld()].filter(Boolean).join(' ');
+    changeMode('scroll');
     if (reason === 'signIn') router.push('/sign-in');
   };
   const agent = useVoiceAgent({ active: mode === 'agent', post, feed: { state, go }, narrator, onExit: onAgentExit });
   const agentStatus = agent.status;
 
-  useEffect(() => onDevWake(() => setMode('agent')), []);
+  useEffect(() => onDevWake(() => changeMode('agent')), []);
+
+  useEffect(() => {
+    if (agentStatus !== 'listening') return;
+    const held = takeHeld();
+    if (held && !agent.say(held)) heldForAgent.current.unshift(held);
+  });
 
   const status = post ? null : state.error ? messages.feedError : state.exhausted ? (state.stalled ? messages.unavailable : messages.empty) : messages.loadingFirst;
 
@@ -177,22 +193,23 @@ export function MainScreen() {
       return;
     }
     haptic(next === 'agent' ? 'agentAwake' : 'agentAsleep');
-    if (next === 'scroll') prefix.current = messages.agentAsleep;
+    if (next === 'scroll') prefix.current = [messages.agentAsleep, takeHeld()].filter(Boolean).join(' ');
     else comments.close();
-    setMode(next);
+    changeMode(next);
   };
 
   const target = thread ? reply : post;
   const liked = target ? !!likeUriOf(target) : false;
-  const focus = useRef({ mode, uri: target?.uri ?? null });
+  const focusedUri = useRef(target?.uri ?? null);
   useEffect(() => {
-    focus.current = { mode, uri: target?.uri ?? null };
+    focusedUri.current = target?.uri ?? null;
   });
 
   // A two-finger hold or the Like action. The haptic and sound say at once which way it went, over any narration; the
   // result belongs to the post it was made on. A success adds the word only if that post is still in focus and
-  // nothing is being said; a failure is always said, naming the post. While the agent is awake, nothing is spoken on
-  // the device: a failure goes through the agent's voice.
+  // nothing is being said. A failure is always said in full, naming the post: after what is being said, or before the
+  // next post if the user moves on. While the agent is awake nothing is spoken on the device: a failure goes through
+  // the agent's voice, and one that comes while the call is connecting waits for it.
   const like = async () => {
     if (!target) {
       haptic('edge');
@@ -202,20 +219,20 @@ export function MainScreen() {
       haptic('edge');
       return tell(commentMessages.signInToLike);
     }
-    if (pendingLikes.current.has(target.uri)) return haptic('edge');
+    if (likeInFlight(target)) return haptic('edge');
     const liking = !likeUriOf(target);
     haptic(liking ? 'like' : 'unlike');
     earcons.play(liking ? 'like' : 'unlike');
-    pendingLikes.current.add(target.uri);
     const result = await toggleLike(provider, target, actionHistory);
-    pendingLikes.current.delete(target.uri);
-    const now = focus.current;
     if (result.outcome === 'failed') {
-      haptic('edge');
-      const message = likeFailure(whose(target), result.wasLiked, result.offline);
-      return now.mode === 'agent' ? tellInAgentMode(message) : narrator.speak(message);
+      haptic('likeFailed');
+      const message = likeFailure(whose(target), result.wasLiked, result.reason);
+      if (modeNow.current === 'scroll') return postNarrator.notice(message);
+      if (!agent.say(message)) heldForAgent.current.push(message);
+      return;
     }
-    if (now.mode === 'agent' || now.uri !== target.uri || postNarrator.speaking()) return;
+    if (result.outcome !== 'liked' && result.outcome !== 'unliked') return;
+    if (modeNow.current === 'agent' || focusedUri.current !== target.uri || postNarrator.speaking()) return;
     narrator.speak(result.outcome === 'liked' ? commentMessages.liked : commentMessages.unliked);
   };
 

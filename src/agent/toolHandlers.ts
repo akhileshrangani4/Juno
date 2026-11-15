@@ -83,6 +83,8 @@ const ACKNOWLEDGEMENT = /^\W*(?:(?:thanks|thank you|okay|ok|great)\W*)+$/i;
 // never reaches back to an earlier action.
 const NOT_SENT: UndoEntry = { label: 'failed', undo: async () => "NOTHING_TO_UNDO: The last post didn't go out, so there is nothing to undo. Tell the user." };
 
+const LIKE_BUSY = "BUSY: A like or unlike of this post is still being sent. Nothing changed. Tell the user in a few words and that they can try again in a moment.";
+const LIKE_UNDONE = 'UNDONE_WHILE_SENDING: The user said undo while this was being sent, and the undo tells them what happened. Say nothing.';
 const ALREADY_REMOVED: UndoEntry = { label: 'removed', undo: async () => 'NOTHING_TO_UNDO: The last action was already stopped or removed. Tell the user.' };
 
 const NOT_SIGNED_IN =
@@ -370,13 +372,29 @@ export function createToolHandlers(deps: AgentDeps) {
       }
       case 'like_post': {
         if (!focus) return { respond: true, result: NO_FOCUS };
-        await likePost(deps.provider, focus, history);
-        return { respond: true, result: `LIKED: Liked ${authorName(focus)}'s post. Confirm in a word or two.` };
+        switch (await likePost(deps.provider, focus, history)) {
+          case 'liked':
+            return { respond: true, result: `LIKED: Liked ${authorName(focus)}'s post. Confirm in a word or two.` };
+          case 'alreadyLiked':
+            return { respond: true, result: 'ALREADY_LIKED: The user already likes this post. Nothing changed. Tell them.' };
+          case 'busy':
+            return { respond: true, result: LIKE_BUSY };
+          case 'undone':
+            return { respond: false, result: LIKE_UNDONE };
+        }
       }
       case 'unlike_post': {
         if (!focus) return { respond: true, result: NO_FOCUS };
-        const removed = await unlikePost(deps.provider, focus, history);
-        return { respond: true, result: removed ? 'UNLIKED: Removed the like. Confirm in a few words.' : "NOT_LIKED: This post wasn't liked. Tell the user." };
+        switch (await unlikePost(deps.provider, focus, history)) {
+          case 'unliked':
+            return { respond: true, result: 'UNLIKED: Removed the like. Confirm in a few words.' };
+          case 'notLiked':
+            return { respond: true, result: "NOT_LIKED: This post wasn't liked. Tell the user." };
+          case 'busy':
+            return { respond: true, result: LIKE_BUSY };
+          case 'undone':
+            return { respond: false, result: LIKE_UNDONE };
+        }
       }
       case 'draft_post':
       case 'draft_reply': {

@@ -14,6 +14,11 @@ export class ActionHistory {
     return this.entries.pop();
   }
 
+  // Takes back an entry for an action that turned out to do nothing, wherever it is by now.
+  remove(entry: UndoEntry): void {
+    this.entries = this.entries.filter((candidate) => candidate !== entry);
+  }
+
   clear(): void {
     this.entries = [];
   }

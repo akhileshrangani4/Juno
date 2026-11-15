@@ -120,6 +120,8 @@ describe('BlueskyProvider with OAuth', () => {
     await expect(provider.like(post)).rejects.toBeInstanceOf(OfflineError);
     session.fetchHandler.mockRejectedValueOnce(new TypeError('Network request failed'));
     await expect(provider.unlike(post, { uri: `at://${DID}/app.bsky.feed.like/1` })).rejects.toBeInstanceOf(OfflineError);
+    session.fetchHandler.mockRejectedValueOnce(new TypeError('Network request failed'));
+    await expect(provider.getReplies(post.uri)).rejects.toBeInstanceOf(OfflineError);
     expect(expired).not.toHaveBeenCalled();
     expect(store.keys()).toContain('bluesky.oauth.account');
     expect(await provider.like(post)).toEqual({ uri: `at://${DID}/app.bsky.feed.like/1` });
@@ -211,6 +213,7 @@ describe('BlueskyProvider with OAuth', () => {
     expect(expired).toHaveBeenCalledTimes(1);
     expect(expired).toHaveBeenCalledWith({ id: DID, handle: 'maya.bsky.social', displayName: 'Maya' });
     await expect(relaunch.provider.getTimeline()).rejects.toBeInstanceOf(SessionExpiredError);
+    await expect(relaunch.provider.getReplies('at://post/1')).rejects.toBeInstanceOf(SessionExpiredError);
     expect(relaunch.store.keys()).toEqual([]);
     expect(await relaunch.provider.signIn('maya.bsky.social')).toMatchObject({ status: 'success' });
     expect((await relaunch.provider.getTimeline()).posts).toHaveLength(2);

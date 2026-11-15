@@ -2,7 +2,7 @@ import { ActionHistory } from '@/actions/history';
 import { OfflineError, type Post } from '@/social/types';
 import { makePost } from '@/testing/fixtures';
 
-import { forgetLikes, likeUriOf, recordLike, toggleLike } from '../likes';
+import { forgetLikes, LIKE_TIMEOUT_MS, likeInFlight, likeUriOf, recordLike, toggleLike } from '../likes';
 
 let n = 0;
 const freshPost = (likeUri: string | null = null): Post => {
@@ -40,11 +40,11 @@ describe('toggleLike', () => {
     const history = new ActionHistory();
     const post = freshPost();
     provider.like.mockRejectedValueOnce(new OfflineError('down'));
-    expect(await toggleLike(provider, post, history)).toEqual({ outcome: 'failed', wasLiked: false, offline: true });
+    expect(await toggleLike(provider, post, history)).toEqual({ outcome: 'failed', wasLiked: false, reason: 'offline' });
     expect(likeUriOf(post)).toBeNull();
     const liked = freshPost('at://me/like/9');
     provider.unlike.mockRejectedValueOnce(new Error('server error'));
-    expect(await toggleLike(provider, liked, history)).toEqual({ outcome: 'failed', wasLiked: true, offline: false });
+    expect(await toggleLike(provider, liked, history)).toEqual({ outcome: 'failed', wasLiked: true, reason: 'other' });
     expect(likeUriOf(liked)).toBe('at://me/like/9');
     expect(history.size).toBe(0);
   });
@@ -86,6 +86,31 @@ describe('toggleLike', () => {
     resolve({ uri: 'at://a/like/2' });
     await liking;
     expect(likeUriOf(late)).toBeNull();
+    expect(history.size).toBe(0);
+  });
+});
+
+describe('a like that gets no answer', () => {
+  afterEach(() => jest.useRealTimers());
+
+  it('is given up on after the timeout, takes its history entry back, and updates the like state if the answer comes later', async () => {
+    jest.useFakeTimers();
+    let answer!: (record: { uri: string }) => void;
+    const provider = fakeProvider();
+    provider.like.mockImplementationOnce(() => new Promise((resolve) => (answer = resolve)));
+    const history = new ActionHistory();
+    const post = freshPost();
+    const liking = toggleLike(provider, post, history);
+    expect(history.size).toBe(1);
+    expect(likeInFlight(post)).toBe(true);
+    jest.advanceTimersByTime(LIKE_TIMEOUT_MS);
+    expect(await liking).toEqual({ outcome: 'failed', wasLiked: false, reason: 'timeout' });
+    expect(history.size).toBe(0);
+    expect(likeInFlight(post)).toBe(false);
+    expect(likeUriOf(post)).toBeNull();
+    answer({ uri: 'at://me/like/late' });
+    await Promise.resolve();
+    expect(likeUriOf(post)).toBe('at://me/like/late');
     expect(history.size).toBe(0);
   });
 });

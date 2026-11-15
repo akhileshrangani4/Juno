@@ -80,8 +80,7 @@ export function GestureSurface({ tapsEnabled, onTapTop, onTapBottom, onCircle, o
       {
         onLikeWarning: () => latest.current.onTwoFingerHoldWarning?.(),
         onLike: () => latest.current.onTwoFingerHold?.(),
-        onTalkStart: () => latest.current.onTalkHold?.start(),
-        onTalkEnd: (cancelled) => latest.current.onTalkHold?.end(cancelled),
+        talk: () => latest.current.onTalkHold,
         claim: () => {
           claimed.current = true;
           GestureStateManager.activate(handlerTag.current);

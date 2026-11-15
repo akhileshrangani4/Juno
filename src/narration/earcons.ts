@@ -3,7 +3,7 @@ import { Platform } from 'react-native';
 
 import type { EarconKind } from './buildNarration';
 
-// The post earcons, and the sounds that confirm a hold to like or to remove a like at once, over any narration.
+// The post earcons, and the sounds that confirm a two-finger like or removed like at once, over any narration.
 export type SoundKind = EarconKind | 'like' | 'unlike';
 
 export interface EarconPlayer {

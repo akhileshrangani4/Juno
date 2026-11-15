@@ -7,8 +7,8 @@ import type { Point } from './circle';
 //   Lifting after that is never a tap.
 // - talkHoldMs: a lone finger held still for 0.8 s starts the talk hold, 0.2 s after the tap window closes, so a slow
 //   tap is never mistaken for it. Once started, the talk hold owns the touch until the finger lifts: drifting while
-//   speaking doesn't cut the user off. A finger resting before a circle for that long opens the microphone instead,
-//   which is harmless.
+//   speaking doesn't cut the user off. With no talk handler connected nothing starts: a finger resting while the user
+//   listens still makes whatever stroke it goes on to draw, and a still press that ends is ignored.
 // - joinMs: the second finger may land up to 0.5 s after the first and still make a two-finger hold. Later than that,
 //   the press does nothing until every finger lifts.
 // - holdWarnMs: 1 s after the second finger lands, a light haptic says the like is about to fire. Lifting either
@@ -22,11 +22,13 @@ export const PRESS = { tapMaxMs: 600, talkHoldMs: 800, joinMs: 500, holdWarnMs: 
 
 export type Touch = Point & { id: number };
 
+export type TalkHold = { start(): void; end(cancelled: boolean): void };
+
 export type PressHandlers = {
   onLikeWarning?: () => void;
   onLike?: () => void;
-  onTalkStart?: () => void;
-  onTalkEnd?: (cancelled: boolean) => void;
+  // The talk hold's handler, if one is connected when the hold would start.
+  talk?: () => TalkHold | undefined;
   // A hold fired: the surface claims the touch so nothing else (a tap, a stroke) can fire for it.
   claim(): void;
 };
@@ -42,6 +44,7 @@ export class PressTracker {
   private phase: Phase = 'idle';
   private origins = new Map<number, Point>();
   private firstAt = 0;
+  private talking: TalkHold | null = null;
   private timers: (() => void)[] = [];
 
   constructor(
@@ -56,10 +59,12 @@ export class PressTracker {
       this.phase = 'one';
       this.firstAt = this.now();
       this.after(PRESS.talkHoldMs, () => {
-        if (this.phase !== 'one') return;
+        const talk = this.phase === 'one' ? this.handlers.talk?.() : undefined;
+        if (!talk) return;
         this.phase = 'talking';
+        this.talking = talk;
         this.handlers.claim();
-        this.handlers.onTalkStart?.();
+        talk.start();
       });
       if (this.origins.size === 1) return;
     }
@@ -79,14 +84,14 @@ export class PressTracker {
 
   up(touches: Touch[]): void {
     for (const touch of touches) this.origins.delete(touch.id);
-    if (this.phase === 'talking' && !this.origins.size) this.handlers.onTalkEnd?.(false);
+    if (this.phase === 'talking' && !this.origins.size) this.talking?.end(false);
     else if (this.phase === 'one' || this.phase === 'two') this.spend();
     if (!this.origins.size) this.reset();
   }
 
   // The press ended without the tracker seeing every finger lift: another gesture won, or the system took the touch.
   cancel(): void {
-    if (this.phase === 'talking') this.handlers.onTalkEnd?.(true);
+    if (this.phase === 'talking') this.talking?.end(true);
     this.reset();
   }
 
@@ -109,6 +114,7 @@ export class PressTracker {
 
   private reset() {
     this.clearTimers();
+    this.talking = null;
     this.origins.clear();
     this.phase = 'idle';
   }

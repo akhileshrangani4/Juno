@@ -8,14 +8,32 @@ type Record = { uri: string };
 let mockPost = maya;
 let mockLike: () => Promise<Record> = async () => ({ uri: 'at://me/like/1' });
 const mockProvider = { like: jest.fn(() => mockLike()), unlike: jest.fn(async () => true), getReplies: jest.fn(async () => []) };
-const mockNarrator = { speak: jest.fn(), append: jest.fn(), stop: jest.fn(), speaking: jest.fn(() => false), setRate: jest.fn(), onDone: jest.fn(() => () => undefined) };
+const mockDone: (() => void)[] = [];
+const mockNarrator = {
+  speak: jest.fn(),
+  append: jest.fn(),
+  stop: jest.fn(),
+  speaking: jest.fn(() => false),
+  setRate: jest.fn(),
+  onDone: jest.fn((listener: () => void) => {
+    mockDone.push(listener);
+    return () => undefined;
+  }),
+};
 const mockPlay = jest.fn((_kind: string) => 0);
 const mockAgentSay = jest.fn((_text: string) => true);
+let mockAgentStatus = 'listening';
+let mockAgentExit: ((reason: string, message: string) => void) | null = null;
 let mockSurface: { onCircle(direction: string): void; onTwoFingerHold(): Promise<void>; onTwoFingerHoldWarning(): void; onTalkHold?: unknown } | null = null;
 
 jest.mock('@/narration/useNarrator', () => ({ useNarrator: () => mockNarrator }));
 jest.mock('@/narration/earcons', () => ({ createEarconPlayer: () => ({ play: (kind: string) => mockPlay(kind) }) }));
-jest.mock('@/agent/useVoiceAgent', () => ({ useVoiceAgent: (args: { active: boolean }) => ({ status: args.active ? 'listening' : null, say: mockAgentSay }) }));
+jest.mock('@/agent/useVoiceAgent', () => ({
+  useVoiceAgent: (args: { active: boolean; onExit(reason: string, message: string): void }) => {
+    mockAgentExit = args.onExit;
+    return { status: args.active ? mockAgentStatus : null, say: mockAgentSay };
+  },
+}));
 jest.mock('@/session/SessionContext', () => ({ useSession: () => ({ provider: mockProvider, account: { id: 'did:plc:me', handle: 'me.bsky.social' } }) }));
 jest.mock('@/feed/useFeed', () => ({
   useFeed: () => ({ state: { posts: [mockPost], index: 0, cursor: null, exhausted: true, loading: false, error: null }, post: mockPost, go: jest.fn() }),
@@ -68,6 +86,8 @@ describe('two-finger hold to like', () => {
     mockPost = maya;
     mockLike = async () => ({ uri: 'at://me/like/1' });
     mockNarrator.speaking.mockReturnValue(false);
+    mockAgentSay.mockReturnValue(true);
+    mockAgentStatus = 'listening';
   });
 
   it('warns with a light haptic before the like fires, and leaves the one-finger hold unconnected', async () => {
@@ -139,7 +159,7 @@ describe('two-finger hold to like', () => {
       pending.reject(new OfflineError('down'));
       await liking;
     });
-    expect(haptic).toHaveBeenLastCalledWith('edge');
+    expect(haptic).toHaveBeenLastCalledWith('likeFailed');
     expect(spoken()).toEqual(["Couldn't like Maya's post. Bluesky can't be reached. Check your connection."]);
     expect(actionHistory.size).toBe(0);
   });
@@ -172,5 +192,95 @@ describe('two-finger hold to like', () => {
     expect(spoken()).toEqual([]);
     expect(mockAgentSay).not.toHaveBeenCalled();
     expect(mockPlay).toHaveBeenLastCalledWith('like');
+  });
+
+  it('says a failure in full after the speech in progress, without cutting it off', async () => {
+    const failing = deferred();
+    mockLike = () => failing.promise;
+    await render(<MainScreen />);
+    let liking: Promise<void> = Promise.resolve();
+    await act(async () => {
+      liking = mockSurface!.onTwoFingerHold();
+    });
+    mockNarrator.speaking.mockReturnValue(true);
+    mockNarrator.speak.mockClear();
+    mockNarrator.stop.mockClear();
+    await act(async () => {
+      failing.reject(new OfflineError('down'));
+      await liking;
+    });
+    expect(spoken()).toEqual([]);
+    expect(mockNarrator.stop).not.toHaveBeenCalled();
+    mockNarrator.speaking.mockReturnValue(false);
+    await act(async () => mockDone.forEach((done) => done()));
+    expect(spoken()).toEqual(["Couldn't like Maya's post. Bluesky can't be reached. Check your connection."]);
+  });
+
+  it('says a failure before the next post when the user moves on while something is being said', async () => {
+    const failing = deferred();
+    mockLike = () => failing.promise;
+    const screen = await render(<MainScreen />);
+    let liking: Promise<void> = Promise.resolve();
+    await act(async () => {
+      liking = mockSurface!.onTwoFingerHold();
+    });
+    mockNarrator.speaking.mockReturnValue(true);
+    await act(async () => {
+      failing.reject(new Error('server error'));
+      await liking;
+    });
+    mockNarrator.speak.mockClear();
+    mockPost = nextPost;
+    await screen.rerender(<MainScreen />);
+    expect(spoken()).toHaveLength(1);
+    expect(spoken()[0]).toMatch(/^Couldn't like Maya's post\. Nothing changed\. \S/);
+  });
+
+  it('holds a failure that comes while the call is connecting until the agent can say it', async () => {
+    mockAgentStatus = 'connecting';
+    mockAgentSay.mockReturnValue(false);
+    const failing = deferred();
+    mockLike = () => failing.promise;
+    const screen = await render(<MainScreen />);
+    let liking: Promise<void> = Promise.resolve();
+    await act(async () => {
+      liking = mockSurface!.onTwoFingerHold();
+    });
+    await act(async () => mockSurface!.onCircle('clockwise'));
+    mockNarrator.speak.mockClear();
+    await act(async () => {
+      failing.reject(new Error('server error'));
+      await liking;
+    });
+    expect(spoken()).toEqual([]);
+    expect(haptic).toHaveBeenLastCalledWith('likeFailed');
+    expect(haptic).not.toHaveBeenCalledWith('edge');
+    mockAgentSay.mockClear();
+    mockAgentSay.mockReturnValue(true);
+    mockAgentStatus = 'listening';
+    await screen.rerender(<MainScreen />);
+    expect(mockAgentSay).toHaveBeenCalledWith("Couldn't like Maya's post. Nothing changed.");
+    expect(spoken()).toEqual([]);
+  });
+
+  it('says a held failure on the device once the app is back to scrolling, if the call never came up', async () => {
+    mockAgentStatus = 'connecting';
+    mockAgentSay.mockReturnValue(false);
+    const failing = deferred();
+    mockLike = () => failing.promise;
+    await render(<MainScreen />);
+    let liking: Promise<void> = Promise.resolve();
+    await act(async () => {
+      liking = mockSurface!.onTwoFingerHold();
+    });
+    await act(async () => mockSurface!.onCircle('clockwise'));
+    await act(async () => {
+      failing.reject(new Error('server error'));
+      await liking;
+    });
+    mockNarrator.speak.mockClear();
+    await act(async () => mockAgentExit!('failed', "Couldn't connect."));
+    expect(spoken()).toHaveLength(1);
+    expect(spoken()[0]).toMatch(/^Couldn't connect\. Couldn't like Maya's post\. Nothing changed\. \S/);
   });
 });

@@ -107,6 +107,31 @@ describe('PostNarrator', () => {
     expect(spoken(log)).not.toContain('append: Gone with the post.');
   });
 
+  it('says a notice at once when quiet, else after the speech ends or before the next post, and never drops it on stop', () => {
+    const { narrator, log } = fakeNarrator();
+    let done = () => undefined as void;
+    let talking = false;
+    narrator.speaking = () => talking;
+    narrator.onDone = (listener) => {
+      done = listener;
+      return () => undefined;
+    };
+    const quiet = new PostNarrator({ narrator, descriptions: new DescriptionCache(jest.fn(async () => null)), earcons: { play: () => 0 }, preferences: new PreferencesStore(createMemoryStore()), now });
+    quiet.notice('First.');
+    expect(spoken(log)).toEqual(['speak: First.']);
+    talking = true;
+    quiet.notice('Second.');
+    expect(spoken(log)).toEqual(['speak: First.']);
+    talking = false;
+    done();
+    expect(spoken(log)).toEqual(['speak: First.', 'speak: Second.']);
+    talking = true;
+    quiet.notice('Third.');
+    quiet.stop();
+    quiet.focus(makePost({ uri: 'at://p/2' }));
+    expect(spoken(log).at(-1)).toBe('speak: Third. Alice Chen, 2 hours ago. Hello world.');
+  });
+
   it('plays the earcon first and starts speaking as it ends, folding in a description that lands meanwhile', async () => {
     jest.useFakeTimers();
     const { postNarrator, log, earcons, describe } = setup({ earconMs: 200 });

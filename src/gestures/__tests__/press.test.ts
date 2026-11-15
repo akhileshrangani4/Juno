@@ -1,6 +1,6 @@
 import { PRESS, PressTracker } from '../press';
 
-function setup() {
+function setup({ talk = true } = {}) {
   let now = 0;
   let timers: { at: number; run: () => void; live: boolean }[] = [];
   const log: string[] = [];
@@ -8,8 +8,13 @@ function setup() {
     {
       onLikeWarning: () => log.push(`warn@${now}`),
       onLike: () => log.push(`like@${now}`),
-      onTalkStart: () => log.push(`talk@${now}`),
-      onTalkEnd: (cancelled) => log.push(`talkEnd${cancelled ? '(cancelled)' : ''}@${now}`),
+      talk: () =>
+        talk
+          ? {
+              start: () => log.push(`talk@${now}`),
+              end: (cancelled: boolean) => log.push(`talkEnd${cancelled ? '(cancelled)' : ''}@${now}`),
+            }
+          : undefined,
       claim: () => log.push(`claim@${now}`),
     },
     (run, ms) => {
@@ -165,6 +170,16 @@ describe('one-finger hold (talk)', () => {
     tracker.up([finger(2)]);
     tracker.up([finger(1)]);
     expect(log).toEqual([`claim@${PRESS.talkHoldMs}`, `talk@${PRESS.talkHoldMs}`, 'talkEnd@5000']);
+  });
+
+  it('claims nothing with no talk handler connected, so a resting finger can still become a stroke', () => {
+    const { tracker, log, to, finger } = setup({ talk: false });
+    tracker.down([finger(1)]);
+    to(3000);
+    expect(log).toEqual([]);
+    tracker.move([finger(1, 300, 600)]);
+    tracker.up([finger(1, 300, 600)]);
+    expect(log).toEqual([]);
   });
 
   it('ends cancelled when the system takes the touch', () => {

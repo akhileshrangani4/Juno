@@ -1,4 +1,5 @@
 import { ActionHistory } from '@/actions/history';
+import { forgetLikes } from '@/feed/likes';
 import type { Post, SocialProvider } from '@/social/types';
 import { createMemoryStore } from '@/storage/keyValueStore';
 import { makePost } from '@/testing/fixtures';
@@ -102,6 +103,7 @@ export function setup(
     history?: ActionHistory;
   } = {},
 ) {
+  if (!options.history) forgetLikes();
   const history = options.history ?? new ActionHistory();
   const provider = options.provider ?? makeProvider();
   const scheduler = makeScheduler();
