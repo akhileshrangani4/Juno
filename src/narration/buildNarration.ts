@@ -1,12 +1,27 @@
 import { APP_NAME } from '../appName';
 import type { Post, PostImage, PostMedia } from '../social/types';
 
+import { languageName, translationCheck, type Languages } from './language';
+
 export type NarrationMode = 'full' | 'brief' | 'verbatim' | 'hashtags' | 'detailedImage';
 export type DetailLevel = 'standard' | 'detailed';
 export type EarconKind = 'image' | 'video' | 'repost' | 'reply';
 
-export type ImageDescription = { description: string; beyondAlt: string };
-export type DescriptionParts = { images: ImageDescription[]; video: string | null; hashtagTopic: string | null };
+// Model output in a language the user reads, always spoken under a label naming the language it came from.
+export type Translated = { language: string; text: string };
+export type ImageDescription = { description: string; beyondAlt: string; altTranslation?: Translated | null };
+export type DescriptionParts = {
+  images: ImageDescription[];
+  video: string | null;
+  hashtagTopic: string | null;
+  videoAltTranslation?: Translated | null;
+  translation?: Translated | null;
+  // The language of post text the model found foreign but gave no usable translation for: spoken as a failure,
+  // never read in the listener's voice.
+  untranslatedLanguage?: string | null;
+};
+// For a post that may be in a language the user does not read: its translation is still on its way, or failed.
+export type TranslationState = 'pending' | 'failed' | null;
 
 export type DescriptionInput = {
   uri: string;
@@ -16,9 +31,17 @@ export type DescriptionInput = {
   video: { thumbUrl: string | null; alt: string | null; captions: { lang: string; cid: string }[]; aspectRatio: { width: number; height: number } | null } | null;
   link: { url: string; title: string } | null;
   hashtags: string[];
+  // What the model translates: the text as it is spoken, with inline hashtags kept as #tag.
+  body: string;
+  // What the language check reads (textNeedsTranslation).
+  languageText: string;
+  langs: string[];
 };
 
-export type ScriptOptions = { now: Date; mode?: NarrationMode; parts?: DescriptionParts | null; skipHashtags?: boolean };
+// A reply read inside a post's comments: its place in the thread and whose reply it answers (null for a direct reply to the post).
+export type ReplyPosition = { index: number; total: number; answering: string | null };
+
+export type ScriptOptions = { now: Date; mode?: NarrationMode; parts?: DescriptionParts | null; skipHashtags?: boolean; reply?: ReplyPosition; translation?: TranslationState };
 
 const ORDINALS = ['First', 'Second', 'Third', 'Fourth', 'Fifth', 'Sixth', 'Seventh', 'Eighth', 'Ninth', 'Tenth', 'Eleventh', 'Twelfth', 'Thirteenth', 'Fourteenth', 'Fifteenth', 'Sixteenth', 'Seventeenth', 'Eighteenth', 'Nineteenth', 'Twentieth'];
 const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
@@ -73,6 +96,7 @@ const handleName = (handle: string) => handle.replace(/^@/, '').replace(/\.bsky\
 
 const EMOJI = '(?:\\p{Regional_Indicator}{2}|\\p{Extended_Pictographic}(?:\\uFE0F|\\p{Emoji_Modifier})*(?:\\u200D\\p{Extended_Pictographic}(?:\\uFE0F|\\p{Emoji_Modifier})*)*)';
 const REPEATED_EMOJI = new RegExp(`(${EMOJI})(?:\\s*\\1)+`, 'gu');
+const EMOJI_ANYWHERE = new RegExp(EMOJI, 'gu');
 
 export function collapseEmojiRuns(text: string): string {
   return text.replace(REPEATED_EMOJI, '$1');
@@ -119,6 +143,10 @@ function findSpans(post: Post): Span[] {
 
 export type TextAnalysis = {
   body: string;
+  // The body as a model translates it: the same, except inline hashtags keep their # so they stay untranslated.
+  source: string;
+  // Only the author's own words, for judging their language: no hashtags, mentions, links or emoji.
+  languageText: string;
   pileTags: string[];
   allTags: string[];
   trailingLinks: string[];
@@ -169,20 +197,36 @@ export function analyzeText(post: Post): TextAnalysis {
     tail = span.start;
   }
 
-  let body = '';
-  let cursor = 0;
-  for (const span of spans) {
-    body += text.slice(cursor, span.start);
-    cursor = span.end;
-    if (removed.has(span)) continue;
-    if (span.kind === 'link') body += `link to ${hostOf(span.url)}`;
-    else if (span.kind === 'anchor') body += text.slice(span.start, span.end);
-    else if (span.kind === 'mention') body += span.name ?? handleName(span.handle);
-    else body += splitTag(span.tag);
-  }
-  body += text.slice(cursor);
+  const assemble = (form: 'spoken' | 'source' | 'language') => {
+    let body = '';
+    let cursor = 0;
+    for (const span of spans) {
+      body += text.slice(cursor, span.start);
+      cursor = span.end;
+      if (form === 'language') body += span.kind === 'anchor' ? text.slice(span.start, span.end) : ' ';
+      else if (removed.has(span)) continue;
+      else if (span.kind === 'anchor') body += text.slice(span.start, span.end);
+      else if (span.kind === 'link') body += `link to ${hostOf(span.url)}`;
+      else if (span.kind === 'mention') body += span.name ?? handleName(span.handle);
+      else body += form === 'source' ? `#${span.tag}` : splitTag(span.tag);
+    }
+    body += text.slice(cursor);
+    return form === 'language' ? body.replace(EMOJI_ANYWHERE, ' ').replace(/\s+/g, ' ').trim() : tidy(body);
+  };
 
-  body = collapseEmojiRuns(body.replace(INVISIBLE, ''))
+  return {
+    body: assemble('spoken'),
+    source: assemble('source'),
+    languageText: assemble('language'),
+    pileTags: uniqueTags(pileTags),
+    allTags: uniqueTags(spans.flatMap((span) => (span.kind === 'tag' ? [span.tag] : []))),
+    trailingLinks,
+    anchorLinks: spans.flatMap((span) => (span.kind === 'anchor' ? [span.url] : [])),
+  };
+}
+
+const tidy = (body: string) =>
+  collapseEmojiRuns(body.replace(INVISIBLE, ''))
     .replace(/[ \t]*\n\s*/g, (match: string, offset: number, whole: string) => {
       const before = whole.slice(0, offset).trimEnd();
       const next = whole.slice(offset + match.length);
@@ -195,20 +239,20 @@ export function analyzeText(post: Post): TextAnalysis {
     .replace(/[\s,;·|•\-–—]+$/u, '')
     .trim();
 
-  return {
-    body,
-    pileTags: uniqueTags(pileTags),
-    allTags: uniqueTags(spans.flatMap((span) => (span.kind === 'tag' ? [span.tag] : []))),
-    trailingLinks,
-    anchorLinks: spans.flatMap((span) => (span.kind === 'anchor' ? [span.url] : [])),
-  };
-}
-
 export function authorName(post: Post): string {
   return post.author.displayName?.trim() || handleName(post.author.handle);
 }
 
-function header(post: Post, now: Date | null): string {
+function replyHeader(post: Post, { index, total, answering }: ReplyPosition): string {
+  return sentence([`Reply ${index + 1} of ${total}, from ${authorName(post)}`, answering ? `replying to ${answering}` : null].filter(Boolean).join(', '));
+}
+
+export function replyCount(count: number): string | null {
+  return count > 0 ? `${count} ${count === 1 ? 'reply' : 'replies'}.` : null;
+}
+
+function header(post: Post, now: Date | null, position?: ReplyPosition): string {
+  if (position) return replyHeader(post, position);
   const reply = post.replyTo
     ? post.replyTo.isSelf
       ? 'continuing their thread'
@@ -233,9 +277,31 @@ export function cleanModelText(text: string | null | undefined): string {
 
 const flatten = (text: string) => text.replace(INVISIBLE, '').replace(/\s+/g, ' ').trim();
 
+// The same words every time, so a listener always knows a translation from the author's own words.
+export const translatedLabel = (language: string) => `Translated from ${languageName(language)}:`;
+
+export const translationMessages = {
+  pending: 'This post is in another language and is being translated.',
+  failed: 'This post is in another language and could not be translated right now.',
+  failedIn: (language: string) => `This post is in ${languageName(language)} and could not be translated right now.`,
+};
+
+// "Read it exactly" for a post in another language, when no voice for that language is available.
+export const cannotPronounce = (language: string) => `This voice can't read ${languageName(language)} aloud, so here is the translation.`;
+
+// A translation is spoken only under its label, and only as the model wrote it, cut to length by code.
+// Hashtags come back with their # and are spoken the way the author's own inline hashtags are.
+const translationBody = (translated: Translated | null | undefined) =>
+  translated ? collapseEmojiRuns(flatten(translated.text).replace(TAG_PATTERN, (_, lead: string, tag: string) => lead + splitTag(tag))).slice(0, MODEL_TEXT_MAX).trim() : '';
+
+export function translatedText(translated: Translated | null | undefined): string | null {
+  const text = translationBody(translated);
+  return text ? `${translatedLabel(translated!.language)} ${sentence(text)}` : null;
+}
+
 function imageText(image: PostImage, part: ImageDescription | undefined): string | null {
   const extra = cleanModelText(part?.beyondAlt);
-  const alt = image.alt ? flatten(image.alt) : '';
+  const alt = translatedText(part?.altTranslation) ?? (image.alt ? flatten(image.alt) : '');
   if (alt) return extra ? `${sentence(alt)} ${sentence(extra)}` : sentence(alt);
   const description = cleanModelText(part?.description);
   return description ? sentence(description) : null;
@@ -261,6 +327,7 @@ const quotedPost = (text: string): Post => ({
   repostedBy: null,
   replyRoot: null,
   counts: { likes: 0, reposts: 0, replies: 0 },
+  likeUri: null,
 });
 
 function describeMedia(media: PostMedia, parts: DescriptionParts | null, imageOffset: number): string | null {
@@ -274,7 +341,7 @@ function describeMedia(media: PostMedia, parts: DescriptionParts | null, imageOf
     }
     case 'video': {
       const described = cleanModelText(parts?.video);
-      const alt = media.alt ? flatten(media.alt) : '';
+      const alt = translatedText(parts?.videoAltTranslation) ?? (media.alt ? flatten(media.alt) : '');
       if (alt) return described ? `A video: ${sentence(alt)} ${sentence(described)}` : `A video: ${sentence(alt)}`;
       return described ? `A video. ${sentence(described)}` : 'A video, with no description yet.';
     }
@@ -337,7 +404,14 @@ export function postEarcon(post: Post): EarconKind | null {
   return null;
 }
 
+// The one decision on whether a post's text may need translating, made the same way by the app and the server
+// on the same text: the author's words without hashtags, mentions, links or emoji.
+export function textNeedsTranslation(input: Pick<DescriptionInput, 'languageText' | 'langs'>, languages: Languages | null): boolean {
+  return translationCheck(input.languageText, input.langs, languages).candidate;
+}
+
 export function descriptionInput(post: Post): DescriptionInput {
+  const analysis = analyzeText(post);
   const video = post.media.find((media) => media.kind === 'video');
   const link = post.media.find((media) => media.kind === 'link');
   return {
@@ -347,7 +421,10 @@ export function descriptionInput(post: Post): DescriptionInput {
     images: allImages(post).map(({ url, alt }) => ({ url, alt })),
     video: video ? { thumbUrl: video.thumbUrl, alt: video.alt, captions: video.captions ?? [], aspectRatio: video.aspectRatio ?? null } : null,
     link: link ? { url: link.url, title: link.title } : null,
-    hashtags: analyzeText(post).pileTags,
+    hashtags: analysis.pileTags,
+    body: analysis.source,
+    languageText: analysis.languageText,
+    langs: post.langs ?? [],
   };
 }
 
@@ -381,10 +458,22 @@ function briefMarkers(post: Post, analysis: TextAnalysis, skipHashtags: boolean)
 
 const join = (pieces: (string | null)[]) => pieces.filter(Boolean).join(' ');
 
-export function buildPostScript(post: Post, { now, mode = 'full', parts = null, skipHashtags = false }: ScriptOptions): string {
+// What stands for the post's text: the author's own words, a labeled translation of them, or a note that a
+// translation is on its way or failed. Never anything else written by a model.
+function spokenBody(analysis: TextAnalysis, parts: DescriptionParts | null, translation: TranslationState, brief: boolean): string | null {
+  const translated = translationBody(parts?.translation);
+  if (translated) return `${translatedLabel(parts!.translation!.language)} ${brief ? briefSentence(translated) : sentence(translated)}`;
+  if (parts?.untranslatedLanguage) return translationMessages.failedIn(parts.untranslatedLanguage);
+  if (translation && !parts) return translationMessages[translation];
+  if (!analysis.body) return null;
+  return brief ? briefSentence(analysis.body) : sentence(analysis.body);
+}
+
+export function buildPostScript(post: Post, { now, mode = 'full', parts = null, skipHashtags = false, translation = null, reply }: ScriptOptions): string {
   if (mode === 'verbatim') return post.text.trim() || 'This post has no text.';
   const analysis = analyzeText(post);
   const repost = post.repostedBy ? `Reposted by ${post.repostedBy}.` : null;
+  const replies = reply ? null : replyCount(post.counts.replies);
   switch (mode) {
     case 'hashtags': {
       const tags = analysis.allTags.map(splitTag);
@@ -393,18 +482,26 @@ export function buildPostScript(post: Post, { now, mode = 'full', parts = null, 
     }
     case 'detailedImage': {
       const media = mediaSentences(post, parts, false);
-      return join([header(post, null), media.length ? media.join(' ') : 'This post has no images or video.']);
+      return join([header(post, null, reply), media.length ? media.join(' ') : 'This post has no images or video.']);
     }
     case 'brief':
-      return join([repost, header(post, null), analysis.body ? briefSentence(analysis.body) : null, briefMarkers(post, analysis, skipHashtags)]);
+      return join([repost, header(post, null, reply), spokenBody(analysis, parts, translation, true), briefMarkers(post, analysis, skipHashtags), replies]);
     case 'full': {
       const media = mediaSentences(post, parts, true);
       const tags = skipHashtags ? null : tagSentence(analysis.pileTags, parts?.hashtagTopic ?? null);
       const links = linkSentence(post, [...analysis.anchorLinks, ...analysis.trailingLinks]);
       const empty = !analysis.body && !media.length && !links && !analysis.pileTags.length;
-      return join([repost, header(post, now), analysis.body ? sentence(analysis.body) : null, ...media, tags, links, empty ? 'This post has no text.' : null]);
+      return join([repost, header(post, now, reply), spokenBody(analysis, parts, translation, false), ...media, tags, links, empty ? 'This post has no text.' : null, replies]);
     }
   }
+}
+
+// What is added once a post's description or translation arrives after its reading started. For a post that
+// was waiting on a translation, the text comes first: the labeled translation, or the author's own words when
+// the model found the post is in a language the user reads after all.
+export function lateAddition(post: Post, parts: DescriptionParts, translation: TranslationState, { brief = false, media = true } = {}): string | null {
+  const text = !translation ? null : parts.untranslatedLanguage ? translationMessages.failedIn(parts.untranslatedLanguage) : spokenBody(analyzeText(post), parts, null, brief);
+  return join([text, media ? lateDescription(post, parts) : null]) || null;
 }
 
 export function lateDescription(post: Post, parts: DescriptionParts): string | null {
@@ -429,7 +526,7 @@ export function lateDescription(post: Post, parts: DescriptionParts): string | n
 }
 
 const GESTURES =
-  'Tap the bottom half of the screen for the next post. Tap the top half for the previous post. Draw a circle clockwise anywhere on the screen to wake the voice agent. Draw a circle counter-clockwise to put it to sleep and go back to scrolling.';
+  'Tap the bottom half of the screen for the next post. Tap the top half for the previous post. Swiping right or left does the same. Swipe up to hear the replies, and swipe down to come back. Hold two fingers on the screen to like a post. Draw a circle clockwise anywhere on the screen to wake the voice agent. Draw a circle counter-clockwise to put it to sleep and go back to scrolling.';
 
 export const INTRO_SUMMARY = `Welcome to ${APP_NAME}. It reads your social feed aloud, one post at a time.`;
 
@@ -458,6 +555,8 @@ export const messages = {
   fullMode: 'Full narration.',
   earconsOn: 'Post sounds on.',
   earconsOff: 'Post sounds off.',
+  translationOn: (language: string) => `Posts in other languages will be translated into ${language}.`,
+  translationOff: 'Posts will be read as written, without translating.',
   rate: (rate: number) => `Speed ${times(rate)}.`,
   screenReaderRate: "Speech speed follows VoiceOver's speaking rate. Change it with the Speaking Rate setting in the VoiceOver rotor.",
   fastest: (rate: number) => `Already at the fastest speed, ${times(rate)}.`,

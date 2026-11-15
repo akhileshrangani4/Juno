@@ -118,6 +118,7 @@ const everyMethod: Record<Exclude<keyof SocialProvider, 'id' | 'name'>, (provide
   deletePost: (provider) => provider.deletePost(post),
   getMyLatestPost: (provider) => provider.getMyLatestPost(),
   serviceAuth: (provider) => provider.serviceAuth({ aud: MEMORY_AUDIENCE, lxm: MEMORY_METHOD }),
+  getReplies: (provider) => provider.getReplies(post.uri),
 };
 
 describe('OAuth scopes', () => {
@@ -148,6 +149,7 @@ describe('OAuth scopes', () => {
         'repo:app.bsky.feed.repost?action=delete',
         `rpc:app.bsky.actor.getProfile?aud=${APPVIEW}`,
         `rpc:app.bsky.feed.getAuthorFeed?aud=${APPVIEW}`,
+        `rpc:app.bsky.feed.getPostThread?aud=${APPVIEW}`,
         `rpc:app.bsky.feed.getPosts?aud=${APPVIEW}`,
         `rpc:app.bsky.feed.getTimeline?aud=${APPVIEW}`,
         `rpc:${MEMORY_METHOD}?aud=${MEMORY_AUDIENCE}`,
@@ -161,7 +163,7 @@ describe('OAuth scopes', () => {
     expect(oauthScopes('https://other-deployment-1.convex.site').at(-1)).toBe(`rpc:${MEMORY_METHOD}?aud=did:web:other-deployment-1.convex.site%23juno_memory`);
   });
 
-  it('ask for nothing beyond those calls and the post thread read that comments will use', () => {
+  it('ask for nothing beyond those calls', () => {
     expect(OAUTH_SCOPES).toEqual([
       'atproto',
       'repo:app.bsky.feed.post?action=create',

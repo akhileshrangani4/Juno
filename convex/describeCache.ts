@@ -1,7 +1,8 @@
-import type { DescriptionInput } from '../src/narration/buildNarration';
+import type { DescriptionInput, DescriptionParts, Translated } from '../src/narration/buildNarration';
+import { isLanguageCode, primary, reads, type Languages } from '../src/narration/language';
 
 export type PostInput = DescriptionInput;
-export type Parts = { images: { description: string; beyondAlt: string }[]; video: string | null; hashtagTopic: string | null };
+export type Parts = DescriptionParts;
 export type Usage = { inputTokens: number; cachedTokens: number; cacheWriteTokens: number; outputTokens: number; costUsd: number | null };
 
 // Spend is bounded by an hourly budget counted from recorded cost, not from call counts. Every claim
@@ -88,8 +89,19 @@ export const hashAddress = (ip: string) => digest('describe-address', ip);
 // The counter value once a reservation is given back, or swapped for what the call really cost.
 export const settleReservation = (counterUsd: number, reservedUsd: number, actualUsd: number | null) => Math.max(0, counterUsd - reservedUsd + (actualUsd ?? 0));
 
-export function needsModel(post: PostInput): boolean {
-  return post.images.length > 0 || post.video !== null || post.hashtags.length > TOPIC_THRESHOLD;
+// A post with only text makes a model call only when its text may need translating.
+export function needsModel(post: PostInput, translateText = false): boolean {
+  return translateText || post.images.length > 0 || post.video !== null || post.hashtags.length > TOPIC_THRESHOLD;
+}
+
+const MAX_KEEP = 10;
+
+// The listener's languages as the client sent them, or null when translation is off or the request is malformed.
+// The target always counts as a language the listener reads.
+export function requestLanguages(target: string | null | undefined, keep: string[] | undefined): Languages | null {
+  if (!target || !isLanguageCode(target)) return null;
+  const kept = (keep ?? []).slice(0, MAX_KEEP).filter(isLanguageCode);
+  return { target: primary(target), keep: [...new Set([target, ...kept].map(primary))] };
 }
 
 // did:plc only: a did:web names a host the caller controls, and resolving it would make this deployment
@@ -134,26 +146,61 @@ const comparable = (text: string) => text.toLowerCase().replace(/[^\p{L}\p{N}]+/
 
 // Text in a picture must reach the listener. When the author wrote alt text, only the alt text and
 // beyond_alt are spoken, so any visible text that neither contains is added to beyond_alt here.
+// Text in a language the listener does not read is followed by the model's translation of it.
 function beyondAlt(alt: string, entry: Record<string, unknown>): string {
   const extra = clip(entry.beyond_alt);
   const covered = comparable(`${alt} ${extra}`);
+  const translations = Array.isArray(entry.visible_text_translations) ? entry.visible_text_translations : [];
   const missing = (Array.isArray(entry.visible_text) ? entry.visible_text : [])
-    .map((text) => clip(text, 300))
-    .filter((text) => comparable(text) && !covered.includes(comparable(text)));
-  const reads = missing.length ? `Text in the image reads ${missing.map((text) => `“${text}”`).join(', ')}.` : '';
-  return clip([extra, reads].filter(Boolean).join(' '));
+    .map((text, i) => ({ text: clip(text, 300), meaning: meaningOf(clip(text, 300), clip(translations[i], 300)) }))
+    .filter(({ text }) => comparable(text) && !covered.includes(comparable(text)));
+  const quoted = missing.map(({ text, meaning }) => (meaning ? `“${text}”, which means “${meaning}”` : `“${text}”`));
+  const text = quoted.length ? `Text in the image reads ${quoted.join(', ')}.` : '';
+  return clip([extra, text].filter(Boolean).join(' '));
 }
 
-export function normalizeParts(raw: unknown, post: PostInput): Parts {
+// The bare translation of a piece of image text. A model that wrote the whole "“X”, which means “Y”" gets Y
+// back; anything that still carries the original, or only repeats it, is no translation.
+function meaningOf(text: string, meaning: string): string {
+  const bare = meaning
+    .replace(/^.*\bwhich means\b[:,]?\s*/isu, '')
+    .replace(/^["'“”‘’«»\s]+|["'“”‘’«»\s.,]+$/gu, '')
+    .trim();
+  return bare && !comparable(bare).includes(comparable(text)) ? bare : '';
+}
+
+// A translation is kept only when the model names a language the listener does not read, so a post in the
+// listener's own language is never paraphrased into it.
+function translated(languages: Languages | null, language: unknown, text: unknown, max = MAX_PART): Translated | null {
+  if (!languages || typeof language !== 'string' || !isLanguageCode(language) || reads(languages, language)) return null;
+  const clean = clip(text, max);
+  return clean ? { language: primary(language), text: clean } : null;
+}
+
+export function normalizeParts(raw: unknown, post: PostInput, languages: Languages | null = null, translateText = false): Parts {
   const value = (typeof raw === 'object' && raw !== null ? raw : {}) as Record<string, unknown>;
   const images = Array.isArray(value.images) ? value.images : [];
-  return {
+  const parts: Parts = {
     images: post.images.map((image, i) => {
       const entry = (typeof images[i] === 'object' && images[i] !== null ? images[i] : {}) as Record<string, unknown>;
-      return { description: clip(entry.description), beyondAlt: image.alt ? beyondAlt(image.alt, entry) : '' };
+      const altTranslation = image.alt ? translated(languages, entry.alt_language, entry.alt_translation) : null;
+      return { description: clip(entry.description), beyondAlt: image.alt ? beyondAlt(image.alt, entry) : '', ...(altTranslation ? { altTranslation } : {}) };
     }),
     video: post.video ? clip(value.video) || null : null,
     hashtagTopic: post.hashtags.length > TOPIC_THRESHOLD ? clip(value.hashtag_topic, 80) || null : null,
+  };
+  if (!languages) return parts;
+  // Post text the model calls foreign but gives back empty or unchanged is a failed translation, so it is
+  // never read as it stands in the listener's voice.
+  const language = typeof value.text_language === 'string' ? value.text_language.trim() : '';
+  const foreign = translateText && !(isLanguageCode(language) && reads(languages, language));
+  const text = translateText ? translated(languages, language, value.text_translation, MAX_TEXT) : null;
+  const translation = text && comparable(text.text) !== comparable(post.body) ? text : null;
+  return {
+    ...parts,
+    videoAltTranslation: post.video?.alt ? translated(languages, value.video_alt_language, value.video_alt_translation) : null,
+    translation,
+    untranslatedLanguage: foreign && !translation ? (isLanguageCode(language) ? primary(language) : 'und') : null,
   };
 }
 

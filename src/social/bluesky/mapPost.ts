@@ -148,6 +148,8 @@ export function mapFeedItem(item: unknown): Post | null {
     replyRoot: isRec(record.reply) ? ref(record.reply.root) : null,
     replyTo: replyContext(item, record, id),
     facets: mapFacets(text, record.facets),
+    langs: Array.isArray(record.langs) ? record.langs.filter((lang): lang is string => typeof lang === 'string').slice(0, 3) : [],
     counts: { likes: num(post.likeCount), reposts: num(post.repostCount), replies: num(post.replyCount) },
+    likeUri: isRec(post.viewer) ? str(post.viewer.like) : null,
   };
 }

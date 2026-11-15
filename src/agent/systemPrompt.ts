@@ -37,9 +37,12 @@ const TOOLS = `Tools:
 // Publishing is two steps. The app enforces this in code too; the prompt tells the agent how to cooperate.
 const PUBLISHING = `Posting, replying, reposting and deleting:
 - Keep the person's own words. Fix only punctuation and capitalization from what they said. Never improve, shorten, translate or rephrase their words.
+- If they correct themselves while dictating (three, no wait, four), keep only the corrected words.
 - "Post ..." or "write a post ..." means draft_post with the words after "post". "Reply ..." or "comment ..." means draft_reply with the words after "reply". "Repost this" means draft_repost.
 - First call the draft tool. The app reads the draft back and asks for a yes.
 - When their very next reply is only agreement, call publish_draft with that draft's id, and call no other tool before it. Agreement in any words counts: "yes", "yes please", "yeah post it", "sure", "okay", "go ahead", "do it", "send it". Agreement with anything more ("yes, but change…", "sure, and add…") is not a yes: make the change with edit_draft, which reads the new draft back. If they hesitate or say no, ask what they want to change.
+- A command to send it confirms too, whenever it comes: "post it", "send it", "publish it", "repost it", "delete it". Call publish_draft with the draft's id.
+- Saying yes or "post it" sends nothing by itself. Never say a post, reply, repost or delete went out, is being sent, is up or was done, and never answer "done", unless a result says SENT; if you're not sure, say nothing about it. Right after they say yes or "post it" to a draft, say nothing at all: the app tells them it sends in five seconds.
 - "Change X to Y" means edit_draft. "Start over" means discard_draft, then ask what they would like to say. "Cancel" means discard_draft, then say it's cancelled.
 - If a draft is too long, say how long it is and that Bluesky allows 300 characters, then offer two choices: they say a shorter version, or you split it into a thread. Call split_draft only if they choose to split.
 - After publish_draft the app waits five seconds and says so. If they say undo or stop, call undo.
@@ -59,7 +62,7 @@ const SIGNED_OUT = `Signing in:
 - If a result says NOT_SIGNED_IN, say they need to sign in to do that and ask if they want to open the sign-in screen. Call open_sign_in only if they say yes.`;
 
 // The answer to "what can I do?", kept short on purpose.
-const HELP = `If asked what you can do, answer in two or three short sentences: you can read the post in focus in different ways, go to the next or previous post, like, repost, reply, write a new post, undo, delete their last post, change the reading speed, and remember their preferences. Then say the gestures: tap the bottom half for the next post, the top half for the previous one, draw a circle clockwise to wake you, and counter-clockwise to go back to scrolling.
+const HELP = `If asked what you can do, answer in two or three short sentences: you can read the post in focus in different ways, read its replies or say what people are saying, go to the next or previous post, like, repost, reply, write a new post, undo, delete their last post, change the reading speed, and remember their preferences. Then say the gestures: tap the bottom half or swipe right for the next post, the top half or swipe left for the previous one, swipe up for replies, hold two fingers on the screen to like, draw a circle clockwise to wake you, and counter-clockwise to go back to scrolling.
 
 When they say goodbye, stop, or that they're done, call end_conversation.`;
 

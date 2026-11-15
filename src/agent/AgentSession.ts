@@ -1,7 +1,7 @@
 import type { Post } from '@/social/types';
 
 import { agentMessages } from './agentMessages';
-import { AgentVoice } from './agentVoice';
+import { AgentVoice, type Attribution } from './agentVoice';
 import { describeFocus } from './postContext';
 import type { Conversation, ToolHandlers, ToolOutcome } from './toolHandlers';
 import type { VapiMessage, VoiceCall } from './voiceCall';
@@ -32,9 +32,16 @@ export type SessionDeps = {
 
 export class ConversationLog implements Conversation {
   private readonly utterances: string[] = [];
+  private readonly listeners = new Set<() => void>();
 
   add(utterance: string) {
     this.utterances.push(utterance.trim());
+    this.listeners.forEach((listener) => listener());
+  }
+
+  onUtterance(listener: () => void): () => void {
+    this.listeners.add(listener);
+    return () => void this.listeners.delete(listener);
   }
 
   turn() {
@@ -75,6 +82,8 @@ export class AgentSession {
   private countdownArmed: (() => void) | null = null;
   private announcementStarted = false;
   private focusUri: string | null = null;
+  // Gives up waiting for the call to connect, with its timeout, when the session ends first.
+  private abandonConnect: (() => void) | null = null;
   private queue: Promise<void> = Promise.resolve();
   private readonly voice: AgentVoice;
 
@@ -96,6 +105,10 @@ export class AgentSession {
       if (this.finished) return;
       await new Promise<void>((resolve, reject) => {
         const cancel = deps.schedule(() => reject(new Error('Timed out connecting')), CONNECT_TIMEOUT_MS);
+        this.abandonConnect = () => {
+          cancel();
+          resolve();
+        };
         deps.call!.start(assistant, { onMessage: (message) => this.onMessage(message), onEnd: () => this.finish('dropped'), onError: (error) => this.onError(error) }).then(
           () => {
             cancel();
@@ -108,11 +121,13 @@ export class AgentSession {
         );
       });
     } catch (error) {
+      if (this.finished) return;
       deps.log('connect failed', { error: error instanceof Error ? error.message : String(error) });
       deps.call.stop();
       return this.finish('failed');
     }
-    if (this.finished) return deps.call.stop();
+    this.abandonConnect = null;
+    if (this.finished) return;
     this.live = true;
     deps.log('connected');
     deps.status('listening');
@@ -145,7 +160,10 @@ export class AgentSession {
     const uri = post?.uri ?? null;
     if (uri === this.focusUri) return;
     this.focusUri = uri;
-    if (this.live) this.deps.call?.addMessage(`Focus changed. The post in focus is now: ${describeFocus(post)}`, false);
+    if (!this.live) return;
+    const dropped = this.deps.handlers.focusMoved(post);
+    if (dropped) this.speak(dropped, undefined, true);
+    this.deps.call?.addMessage(`Focus changed.${dropped ? ` The app dropped the pending reply or repost, which was for the previous post, and told the user.` : ''} The post in focus is now: ${describeFocus(post)}`, false);
   }
 
   private onError(error: unknown) {
@@ -153,7 +171,9 @@ export class AgentSession {
     if (this.live) this.finish('dropped');
   }
 
+  // Once the session has finished nothing it hears counts: a late transcript can't confirm or hold anything.
   private onMessage(message: VapiMessage) {
+    if (this.finished) return;
     switch (message.type) {
       case 'transcript':
         if (message.transcriptType !== 'final' || typeof message.transcript !== 'string') return;
@@ -164,10 +184,10 @@ export class AgentSession {
         for (const call of (message.toolCallList as ToolCall[] | undefined) ?? []) this.queue = this.queue.then(() => this.runTool(call));
         return;
       case 'assistant.speechStarted':
-        this.voice.sourceReported(message.source, message.turn);
+        this.heardSpeech(this.voice.sourceReported(message.source, message.turn));
         return;
       case 'speech-update':
-        if (message.role === 'assistant' && message.status === 'started') this.voice.speechStarted(message.turn);
+        if (message.role === 'assistant' && message.status === 'started') this.heardSpeech(this.voice.speechStarted(message.turn));
         if (message.role !== 'assistant' || !this.countdownArmed) return;
         if (message.status === 'started') this.announcementStarted = true;
         if (message.status === 'stopped' && this.announcementStarted) this.startCountdown();
@@ -182,29 +202,46 @@ export class AgentSession {
   }
 
   private onUserSaid(transcript: string) {
+    this.heardSpeech(this.voice.settle());
     this.deps.conversation.add(transcript);
+    const confirmed = this.deps.handlers.confirmFromWords(transcript);
+    if (confirmed) {
+      if (confirmed.refused) this.deps.log('publish refused', { reason: confirmed.refused, by: 'words' });
+      else this.deps.log('publish confirmed', { by: 'words' });
+      return this.deliver('publish_draft', confirmed);
+    }
     const heard = this.deps.handlers.heard(transcript);
     if (!heard) return;
     this.countdownArmed?.();
     this.countdownArmed = null;
     this.deps.log(heard.kind === 'held' ? 'held from transcript' : 'undone from transcript');
-    this.speak(heard.speak);
+    this.speak(heard.speak, heard.readBack, true);
     this.deps.call?.addMessage(heard.message, false);
   }
 
-  // The model's own words (not the app's, which go through speak) void a read-back the user hasn't answered. While
-  // one is waiting for an answer, every assistant transcript is logged with who it was put down to, never its words.
   private onAssistantSaid(transcript: string) {
-    const awaiting = this.deps.handlers.publisher.awaitingAnswer;
-    const { speaker, by, source, turn } = this.voice.attribute(transcript);
-    if (awaiting) this.deps.log('assistant speech during read-back', { speaker, by, source, turn });
-    if (speaker === 'model' && this.deps.handlers.assistantSaid()) this.deps.log('yes voided by assistant speech', { by, source, turn });
+    this.heardSpeech(this.voice.attribute(transcript));
   }
 
-  // Everything the app says in the agent's voice goes through here, so its transcript is known to be the app's.
-  private speak(text: string) {
-    this.voice.appSays(text);
-    this.deps.call?.say(text);
+  // The model's own words (not the app's, which go through speak) void a read-back the user hasn't answered, and a
+  // read-back spoken to the end lets an explicit command confirm that draft. While one is waiting for an answer,
+  // every assistant transcript is logged with who it was put down to, never its words.
+  private heardSpeech(attribution: Attribution | null) {
+    if (!attribution) return;
+    const { speaker, by, source, turn, finished } = attribution;
+    if (this.deps.handlers.publisher.awaitingAnswer) this.deps.log('assistant speech during read-back', { speaker, by, source, turn });
+    if (speaker === 'model' && this.deps.handlers.assistantSaid()) this.deps.log('yes voided by assistant speech', { by, source, turn });
+    for (const draftId of finished) {
+      this.deps.handlers.readBackHeard(draftId);
+      this.deps.log('read-back heard in full', { by, source, turn });
+    }
+  }
+
+  // Everything the app says in the agent's voice goes through here, so its transcript is known to be the app's. A
+  // tool's outcome interrupts: Vapi drops anything the model is saying or about to say, and says this now.
+  private speak(text: string, readBack?: string, interrupt = false) {
+    this.voice.appSays(text, readBack, interrupt);
+    this.deps.call?.say(text, interrupt);
   }
 
   private async runTool(call: ToolCall) {
@@ -214,7 +251,7 @@ export class AgentSession {
     const started = Date.now();
     const outcome = await this.deps.handlers.run(name, args);
     this.deps.log('tool done', { name, ms: Date.now() - started });
-    if (outcome.refused) this.deps.log('publish refused', { reason: outcome.refused });
+    if (outcome.refused) this.deps.log(outcome.refused === 'awaitingAnswer' ? 'tool refused' : 'publish refused', { reason: outcome.refused });
     if (outcome.after === 'countdown') this.deps.log('publish confirmed');
     if (this.finished) return;
     this.deliver(name, outcome);
@@ -222,9 +259,10 @@ export class AgentSession {
 
   private deliver(name: string, outcome: ToolOutcome) {
     const { call } = this.deps;
+    if (this.finished) return;
     if (outcome.after === 'end') return this.stop('agent');
     if (outcome.after === 'signIn') return this.stop('signIn');
-    if (outcome.speak) this.speak(outcome.speak);
+    if (outcome.speak) this.speak(outcome.speak, outcome.readBack, true);
     call?.addMessage(`Result of ${name}: ${outcome.result}`, outcome.respond);
     if (outcome.after === 'countdown') {
       // The five seconds start once the "Posting in five seconds" notice has been spoken.
@@ -234,7 +272,7 @@ export class AgentSession {
   }
 
   private startCountdown() {
-    if (!this.countdownArmed) return;
+    if (!this.countdownArmed || this.finished) return;
     this.countdownArmed();
     this.countdownArmed = null;
     this.deps.handlers.publisher.startCountdown();
@@ -244,12 +282,15 @@ export class AgentSession {
     if (this.finished) return;
     this.finished = true;
     this.live = false;
+    this.abandonConnect?.();
+    this.abandonConnect = null;
     this.countdownArmed?.();
     this.countdownArmed = null;
-    const cancelled = this.deps.handlers.publisher.cancelPending();
-    this.deps.log('exit', { reason, cancelledPending: !!cancelled });
+    // Every countdown, timer and confirmation ends here: nothing is published once the user can't hear it or undo it.
+    const { cancelled, dropped } = this.deps.handlers.close();
+    this.deps.log('exit', { reason, cancelledPending: !!cancelled, droppedDraft: !!dropped });
     this.deps.status('ended');
-    this.deps.exit(reason, `${cancelled ? agentMessages.notSent : ''}${EXIT_MESSAGES[reason]}`);
+    this.deps.exit(reason, `${cancelled ? agentMessages.notSent : dropped ? agentMessages.draftNotSent : ''}${EXIT_MESSAGES[reason]}`);
   }
 }
 

@@ -1,3 +1,5 @@
+import { ActionHistory } from '@/actions/history';
+import { forgetLikes } from '@/feed/likes';
 import type { Post, SocialProvider } from '@/social/types';
 import { createMemoryStore } from '@/storage/keyValueStore';
 import { makePost } from '@/testing/fixtures';
@@ -28,6 +30,7 @@ export function makeProvider(overrides: Partial<SocialProvider> = {}): jest.Mock
     deletePost: jest.fn(async () => undefined),
     getMyLatestPost: jest.fn(async () => null),
     serviceAuth: jest.fn(async () => 'proof'),
+    getReplies: jest.fn(async () => []),
     ...overrides,
   } as jest.Mocked<SocialProvider>;
 }
@@ -89,8 +92,20 @@ export const maya = makePost({
 export const nextPost = makePost({ uri: 'at://did:plc:sam/app.bsky.feed.post/2', cid: 'cid-2', text: 'Second post here.' });
 
 export function setup(
-  options: { signedIn?: boolean; focus?: Post | null; memory?: MemoryClient | null; memoryOffer?: MemoryOffer | null; provider?: jest.Mocked<SocialProvider> } = {},
+  options: {
+    signedIn?: boolean;
+    focus?: Post | null;
+    memory?: MemoryClient | null;
+    memoryOffer?: MemoryOffer | null;
+    provider?: jest.Mocked<SocialProvider>;
+    replies?: string[];
+    loadedReplies?: string[];
+    history?: ActionHistory;
+    readBacksHeard?: boolean;
+  } = {},
 ) {
+  if (!options.history) forgetLikes();
+  const history = options.history ?? new ActionHistory();
   const provider = options.provider ?? makeProvider();
   const scheduler = makeScheduler();
   const conversation = new ConversationLog();
@@ -109,6 +124,11 @@ export function setup(
     },
     description: async () => null,
     cachedDescription: () => null,
+    loadedReplies: jest.fn(() => options.loadedReplies ?? null),
+    replies: jest.fn(async () => options.replies ?? []),
+    history,
+    mayNeedTranslation: () => false,
+    translationState: () => null,
     settings,
     memory: options.memory === undefined ? makeMemory() : options.memory,
     memoryOffer: options.memoryOffer ?? null,
@@ -119,9 +139,16 @@ export function setup(
     now: () => new Date(Date.parse('2026-11-15T12:00:00.000Z') + scheduler.now()),
   };
   const handlers = createToolHandlers(deps);
+  // Stands in for the agent's voice, which hears each read-back played to the end, unless the test says it was cut off.
+  const run = handlers.run;
+  handlers.run = async (name, args) => {
+    const outcome = await run(name, args);
+    if (outcome.readBack && options.readBacksHeard !== false) handlers.readBackHeard(outcome.readBack);
+    return outcome;
+  };
   const say = (utterance: string) => conversation.add(utterance);
   const setFocus = (post: Post | null) => {
     focus = post;
   };
-  return { provider, scheduler, conversation, notify, settings, handlers, say, deps, focus: () => focus, setFocus };
+  return { provider, scheduler, conversation, notify, settings, handlers, say, deps, history, focus: () => focus, setFocus };
 }

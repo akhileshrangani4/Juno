@@ -11,6 +11,15 @@ export const SILENCE_TIMEOUT_SECONDS = 30;
 export const MAX_DURATION_SECONDS = 600;
 export const FIRST_MESSAGE = "I'm listening.";
 
+// Words the transcriber should expect. On a real call Deepgram heard "post" at the start of an utterance as
+// "host" ("Host, hello again.", "Host it."), so the agent missed drafts and "post it" never confirmed.
+export const KEYTERMS = [APP_NAME, 'post', 'post it', 'repost', 'reply', 'undo', 'cancel'] as const;
+
+// The model behind the voice agent, chosen by measuring tool use, publish safety and time to first word against
+// gpt-4.1 (docs/building.md, "The voice agent's model"). Reasoning stays off, because any effort adds time before the
+// first word and OpenAI then refuses the temperature; the fast tier keeps the first word close to gpt-4.1's.
+export const AGENT_MODEL = 'gpt-5.6-sol';
+
 // assistant.speechStarted names who is speaking each turn (the app's say() or the model); see agentVoice.ts.
 export const clientMessages = ['tool-calls', 'transcript', 'status-update', 'speech-update', 'assistant.speechStarted'] as const;
 
@@ -21,13 +30,15 @@ export function buildAssistant(context: PromptContext) {
     firstMessageMode: 'assistant-speaks-first' as const,
     model: {
       provider: 'openai' as const,
-      model: 'gpt-4.1',
+      model: AGENT_MODEL,
+      reasoningEffort: 'none' as const,
+      serviceTier: 'fast' as const,
       temperature: 0.2,
       messages: [{ role: 'system' as const, content: buildSystemPrompt(context) }],
       tools: vapiTools,
     },
     voice: { provider: 'vapi' as const, voiceId: 'Elliot' },
-    transcriber: { provider: 'deepgram' as const, model: 'nova-3', language: 'en' as const },
+    transcriber: { provider: 'deepgram' as const, model: 'nova-3', language: 'en' as const, keyterm: [...KEYTERMS] },
     silenceTimeoutSeconds: SILENCE_TIMEOUT_SECONDS,
     maxDurationSeconds: MAX_DURATION_SECONDS,
     messagePlan: {

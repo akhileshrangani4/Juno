@@ -18,14 +18,16 @@ The element covers the whole screen and is the only element, so focus lands on i
 
 Users can turn direct touch off per app in the VoiceOver rotor. For them, and as a general fallback, the element also answers:
 
-| Screen reader action | Scroll mode | Agent mode |
-| --- | --- | --- |
-| Double tap (`onAccessibilityTap`) | Next post | Account settings |
-| Actions rotor (swipe up or down to pick, double tap to run) | Next post, Previous post, Read this post again, Wake the agent, Brief or Full narration, Speech speed, Turn post sounds off or on | Back to scrolling, Hear the instructions, Account settings |
-| Two-finger double tap (magic tap) | Wake the agent | Back to scrolling |
-| Two-finger scrub (escape) | Warning buzz and "You are already scrolling." | Back to scrolling |
+| Screen reader action | Feed | Comments | Agent mode |
+| --- | --- | --- | --- |
+| Double tap (`onAccessibilityTap`) | Next post | Next reply | Account settings |
+| Actions rotor (swipe up or down to pick, double tap to run) | Next post, Previous post, Like or Remove like, Open comments, Read this post again, Wake the agent, Brief or Full narration, Speech speed, Turn post sounds off or on, Gesture help | Next reply, Previous reply, Like or Remove like, Back to posts, Read this reply again, Brief or Full narration, Speech speed, Turn post sounds off or on, Gesture help | Back to scrolling, Like or Remove like, Hear the instructions, Account settings |
+| Two-finger double tap (magic tap) | Wake the agent | Wake the agent | Back to scrolling |
+| Two-finger scrub (escape) | Warning buzz and "You are already scrolling." | Back to posts | Back to scrolling |
 
-The rotor lists only these human-labeled actions (`surfaceActions` in `src/screens/surfaceActions.ts` and `narrationActions` in `src/narration/requests.ts`, both unit tested). Without a screen reader the narration actions offer Speak faster and Speak slower instead of Speech speed; with VoiceOver on, VoiceOver's own rate governs speech, so Speech speed only says so. On iOS the element is not `adjustable`, so a swipe up or down moves through the rotor's actions, not through posts.
+The like action's label follows the state of the post or reply in focus: "Like" when the user hasn't liked it, "Remove like" when they have.
+
+The rotor lists only these human-labeled actions (`surfaceActions` in `src/screens/surfaceActions.ts`, unit tested for every view and both like states, and `narrationActions` in `src/narration/requests.ts`). Without a screen reader the narration actions offer Speak faster and Speak slower instead of Speech speed; with VoiceOver on, VoiceOver's own rate governs speech, so Speech speed only says so. A narration action in the comments view reads the current reply again in the new way. On iOS the element is not `adjustable`, so a swipe up or down moves through the rotor's actions, not through posts.
 
 The current narration is also the element's accessibility value, so VoiceOver reads the post again whenever focus returns to the feed, and "Read this post again" replays it on demand if an announcement was cut off.
 
@@ -43,8 +45,24 @@ Known gap: screen reader announcements cannot be stopped mid-sentence by the app
 
 | Event | Haptic | Voice |
 | --- | --- | --- |
-| Next post | light tap | the post |
-| Previous post | rigid tap | the post |
+| Next post (bottom-half tap or swipe right) | light tap | the post, ending with "12 replies." when it has replies |
+| Previous post (top-half tap or swipe left) | rigid tap | the post |
+| Two fingers held 1 second (a like is about to fire) | one light tap | none; lifting either finger now cancels the like |
+| Like (two fingers held 1.4 seconds) | success buzz and three rising notes, at once | "Liked." only if that post is still in focus and nothing is being said; otherwise the sound stands for it |
+| Remove like (the same on a liked post) | soft tap and three falling notes, at once | "Like removed.", on the same terms |
+| Two-finger hold while signed out | warning buzz | "You need to sign in to like posts...", and nothing changes |
+| Like or unlike fails | three quick hard taps | always said in full, naming the post it was made on: "Couldn't like Maya's post. Nothing changed." or "Couldn't remove your like on Maya's reply. Nothing changed." It never cuts off what is being said: it follows the speech in progress, or comes just before the next post if the user moves on first. |
+| Like or unlike can't reach Bluesky (network down) | three quick hard taps | "Couldn't like Maya's post. Bluesky can't be reached. Check your connection." The user stays signed in. |
+| Like or unlike gets no answer within 10 seconds | three quick hard taps | "Bluesky hasn't answered, so the like on Maya's post isn't confirmed yet." Only what the user hears changes: the request keeps waiting, the post can't be liked again meanwhile, and if the like lands it counts like any other and undo reverses it. |
+| Two-finger hold while a like on the same post is still on the network | warning buzz | none |
+| Open comments (swipe up) | light then medium tap | "12 replies. Swipe down to go back." then the first reply, or "No replies yet. Swipe down to go back." |
+| Replies still loading after 0.7 seconds | none | "Loading replies." |
+| Replies fail to load | warning buzz | "Could not load the replies. Back to posts." then the post |
+| Next or previous reply | light or rigid tap, as for posts | "Reply 2 of 12, from Maya, replying to Sam." then the reply's text and media |
+| First reply, last reply | warning buzz | "This is the first reply." or "That was the last reply. Swipe down to go back." Comments never close by themselves |
+| Back to posts (swipe down in comments) | medium then light tap | "Back to posts." then the same post |
+| Swipe up while already in comments | warning buzz | "You are already in the replies. Swipe down to go back." |
+| Swipe down on the feed | one selection tick | "The camera is coming soon." |
 | First post, end of feed, still loading | warning buzz | says which |
 | Ten pages in a row hidden by the content filter | warning buzz | "No more posts could be shown right now." (not "end of the feed") |
 | Agent connecting | one soft tap | "Waking the agent." (narration stops at once) |
@@ -62,9 +80,45 @@ Known gap: screen reader announcements cannot be stopped mid-sentence by the app
 
 `src/gestures/circle.ts` is pure math with unit tests. A stroke is resampled to evenly spaced points, then the signed angle swept around the stroke's centroid is added up. A stroke counts as a circle when it sweeps at least 300 degrees, at least 85 percent of the turning is in one direction, and it is at least 60 points across. That accepts unclosed, overshot, squashed, shaky and drifting circles, and rejects lines, zigzags, U shapes and figure eights. Screen coordinates have y pointing down, so a positive sweep is clockwise.
 
-A pan gesture collects the stroke and a tap gesture handles the halves; they race, so a finger that moves more than 12 points is a stroke and never a tap.
+## Gesture map
 
-A long post scrolls inside the card at the same time as the pan collects the stroke, so a circle drawn over it is still recognized. When a stroke is not a circle, `classifyStroke` (`src/gestures/stroke.ts`, unit tested) decides whether it was a scroll: the card reported a scroll during the stroke and the stroke stayed within 30 degrees of vertical. A scroll gets no cue. A horizontal or diagonal stroke over the same post still gets "Gesture not recognized", even if it nudged the scroll. The card does not bounce at its ends, so a vertical drag on a post that fits, or one already at its end, scrolls nothing and still gets the cue.
+| Gesture | Feed | Comments | Agent mode |
+| --- | --- | --- | --- |
+| Tap the top half, or swipe left | Previous post | Previous reply | Hear the instructions (tap); a swipe gets a warning buzz |
+| Tap the bottom half, or swipe right | Next post | Next reply | Account settings (tap); a swipe gets a warning buzz |
+| Swipe up | Open comments | Says comments are already open | Warning buzz |
+| Swipe down | "The camera is coming soon." | Back to posts | Warning buzz |
+| Two fingers held still (1.4 seconds) | Like or remove like on the post | Like or remove like on the reply | Like or remove like on the post; the sound and haptic confirm it, a failure is said in the agent's voice once the call is live |
+| One finger held still (0.8 seconds) | Nothing yet (kept for talking to the agent) | Nothing yet | Nothing yet |
+| Clockwise circle | Wake the agent | Wake the agent | Says the agent is already awake |
+| Counter-clockwise circle | Says you are already scrolling | Says you are already scrolling | Back to scrolling |
+
+The rule is that the opposite gesture goes back: swipe up enters comments and swipe down leaves them, and the narrator says so on the way in. There is no double-tap gesture anywhere.
+
+A pan gesture collects the stroke, a tap gesture handles the halves, and a press gesture follows every finger to decide the holds (`PressTracker` in `src/gestures/press.ts`, unit tested with a fake clock). All three race and none waits for another, so a tap runs the moment the finger lifts, and a hold that fires claims the touch so nothing else can fire for it. A like is public, so the numbers keep it hard to make by accident, for people who tap slowly, rest a finger while listening, and put two fingers down one after the other:
+
+- A tap lifts within 0.6 seconds. Deliberate taps mostly last 0.1 to 0.4 seconds.
+- A finger that moves more than 10 points is a stroke, not a tap or a hold. The stroke gesture takes over at 12.
+- One finger held still for 0.8 seconds starts the talk hold (`onTalkHold`), which this version leaves unconnected. With nothing connected the press claims nothing: a finger that rests while the user listens and then draws a circle or a swipe makes that circle or swipe, and a still press that simply ends is ignored, never paging, liking, or counting as a failed stroke. Once a talk handler is connected, the hold starts 0.2 seconds after the tap window closes, so a slow tap is never taken for it, and keeps the touch until the finger lifts.
+- Two fingers like. The second may land up to 0.5 seconds after the first; later than that, the press does nothing. Timed from the second finger, a light tap at 1 second warns that the like is coming, and the like fires at 1.4 seconds, which leaves 0.4 seconds to lift and cancel after the warning. Either finger may drift 15 points, since placing the second finger rocks the first; more than that is a drag or a pinch and cancels the like, as does lifting either finger early. A second finger landing during a one-finger stroke never likes.
+
+When the finger lifts, `classifyStroke` (`src/gestures/stroke.ts`) sorts the stroke in this order:
+1. **Circle** (`recognizeCircle`, unchanged). Circles come first, so the start of a circle is never taken for a swipe.
+2. **Scroll.** The card scrolled during the stroke, the stroke stayed within 30 degrees of vertical, and it took longer than a flick (0.35 seconds). A scroll fires nothing, not even `onUnrecognizedStroke`.
+3. **Swipe** (`recognizeSwipe` in `src/gestures/swipe.ts`). A swipe is at least 60 points long, within 30 degrees of one axis, at least 80 percent straight (its length divided by the distance travelled), and over within 1.5 seconds. The limit is generous, so an unhurried swipe still counts.
+4. **Unrecognized** otherwise: `onUnrecognizedStroke` fires and the main screen plays the cue.
+
+Long posts and swipe up: on a post that fits the card, any swipe up opens comments. On a long post, a quick flick up (under 0.35 seconds) opens comments, and a slower vertical drag scrolls the post. While a screen reader is on, touch scrolling of the card is off. A VoiceOver user hears the whole post and has the actions above, so for them a vertical stroke never turns into a scroll.
+
+A long post scrolls inside the card at the same time as the pan collects the stroke, so a circle drawn over it is still recognized. The card does not bounce at its ends, so a vertical drag on a post that fits, or one already at its end, scrolls nothing and counts as a swipe.
+
+## Comments
+
+Replies come from the post's thread through `SocialProvider.getReplies`, which uses the public AppView when signed out. They are read in thread order, depth first, so each reply is followed by its answers. A reply that answers another reply says who it answers. The content filter applies to replies too, and a hidden reply's answers are hidden with it. Each post's replies are fetched once per session. Leaving and coming back keeps your place. Waking the agent closes the comments.
+
+The voice agent reaches the same replies: "read the comments" reads up to ten aloud, and "what are people saying" hands the replies to the agent, marked as other people's words, to sum up in a sentence or two. While the agent is awake or connecting, nothing from these gestures is spoken on the device: the like sound and haptic confirm a like, and a failure or the sign-in message goes through the agent's voice. A like failure that comes while the call is still connecting is held: the agent says it once the call is live, or, if the call never comes up, the device says it when the app is back to scrolling. This is decided when the result arrives, from the mode as it is at that moment, so a like still on the network when the agent wakes follows the same rule.
+
+Liking by voice and by two-finger hold is one implementation (`likePost` and `unlikePost` in `src/feed/likes.ts`) and writes to one action history for the whole session (`src/actions/history.ts`), with or without a call. So "undo" always reverses the user's latest action, whichever way it was made, including a like made before the agent was woken, and the agent says what it undid: "Removed your like on Maya's post." or "Liked Maya's post again." Undo never deletes something already public on its own: for a post or reply that has gone out and is past its five seconds, it reads back what would be deleted ("Deleting your reply to Maya from just now: ... Shall I delete it?") and deletes only after a yes, through the same delete draft as "delete my last post". A like, an unlike or a repost is reversed at once, a draft is thrown away, and a send still counting down or in flight is stopped or removed at once, ahead of anything newer, with the newer action named as still there. When a send finishes, what was sent takes the draft's place in the order, never the top. Undo goes by recency across everything the user did, by gesture or by voice: a draft (from its read-back to its send, moved to the top whenever the user edits or confirms it), a publish, a like, an unlike or a delete. So after a draft is read back and a post is liked, "undo" removes the like and the draft stays; said again, it throws the draft away. A like goes on the history the moment it is sent, before Bluesky answers, and stays there until Bluesky really answers, however long that takes, so undo never passes over it to an older action. An undo said before Bluesky answers is promised at once ("Bluesky hasn't answered yet; the like is removed as soon as it does") and carried out when the answer comes; nothing more is said if that works, and if removing it then fails, the failure is said, naming the post, and the like can be undone again. A like that fails or changes nothing takes its entry back. Only one like or unlike of a post is on the network at a time, by gesture or by voice, so a post never gets two like records, and "like this" on a post that is already liked says so. What the app knows about the viewer's likes, and the action history, are cleared on sign-out, on switching to another account or to the guest feed, and when the session stops being valid.
 
 ## Onboarding
 
@@ -146,14 +200,15 @@ Black background, white 30 point bold text, a thick yellow border around the foc
 1. VoiceOver on: do taps on each half and both circles work without double tapping? (Direct touch.)
 2. VoiceOver on: does the app's announcement cut off VoiceOver's reading of the hint, or the other way round?
 3. VoiceOver direct touch disabled in the rotor: double tap, the Actions rotor (do the names read naturally?), Read this post again, magic tap, scrub.
-4. A circle drawn over a long post that scrolls: does the post scroll a little and the circle still switch modes? Does a plain vertical scroll stay silent and leave the narration playing?
-5. Later, when Android is in scope: TalkBack swipe up and down, double tap, actions menu, two-finger circle.
-6. Haptic patterns: are the six patterns distinguishable?
-7. Speech and earcons with the ringer switch on silent. The earcon player sets the audio session to play in silent mode, which should also make expo-speech audible; confirm both.
-8. Earcons: are the four sounds quiet, short, and easy to tell apart, and does speech start right after them without a noticeable gap?
-9. Speech rate with VoiceOver off: do "Speak faster" and "Speak slower" change speed audibly, and is the top step close to three times normal?
-10. Does a description that arrives late get appended after the post without cutting it off?
-11. Sign in: does focus land on the status line after each step, and does "Bluesky's sign-in page will open" finish before the sheet appears? Does the system's "Juno wants to use bsky.social to sign in" alert read correctly?
-12. Inside the sheet: does VoiceOver read Bluesky's page, do saved passwords, passkeys and Face ID fill it, and does the sheet return to Juno announcing the result?
-13. Create an account: does the human check show a puzzle on a real iPhone, or does iOS's automatic verification pass it?
-14. Gesture practice with VoiceOver on: does focus land on the practice area, do taps and circles pass through, and can the Repeat and Skip practice buttons be reached by touch? Is the Gesture help action on the feed reachable from the rotor while direct touch is on?
+4. A circle drawn over a long post that scrolls: does the post scroll a little and the circle still switch modes? Does a slow vertical drag only scroll, stay silent, and leave the narration playing, and does a quick flick up open comments? Is 0.35 seconds the right line between them?
+5. Swipes with VoiceOver direct touch on: do all four swipes and the two-finger hold reach the app? Is placing two fingers within half a second natural, and is the warning tap at 1 second early enough to lift? Does a resting finger ever cause a like?
+6. Later, when Android is in scope: TalkBack swipe up and down, double tap, actions menu, two-finger circle.
+7. Haptic patterns: are the fourteen patterns distinguishable?
+8. Speech and earcons with the ringer switch on silent. The earcon player sets the audio session to play in silent mode, which should also make expo-speech audible; confirm both.
+9. Earcons: are the four post sounds and the like and remove-like sounds quiet, short, and easy to tell apart, do the like sounds play over narration without stopping it, and does speech start right after them without a noticeable gap?
+10. Speech rate with VoiceOver off: do "Speak faster" and "Speak slower" change speed audibly, and is the top step close to three times normal?
+11. Does a description that arrives late get appended after the post or reply without cutting it off?
+12. Sign in: does focus land on the status line after each step, and does "Bluesky's sign-in page will open" finish before the sheet appears? Does the system's "Juno wants to use bsky.social to sign in" alert read correctly?
+13. Inside the sheet: does VoiceOver read Bluesky's page, do saved passwords, passkeys and Face ID fill it, and does the sheet return to Juno announcing the result?
+14. Create an account: does the human check show a puzzle on a real iPhone, or does iOS's automatic verification pass it?
+15. Gesture practice with VoiceOver on: does focus land on the practice area, do taps and circles pass through, and can the Repeat and Skip practice buttons be reached by touch? Is the Gesture help action on the feed reachable from the rotor while direct touch is on?

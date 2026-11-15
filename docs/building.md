@@ -27,16 +27,17 @@ pnpm web                                                                 # run i
 
 ## Binaries
 
-Two scripts produce Release binaries with the JavaScript bundle embedded, so they run without a Metro server:
+Three scripts produce Release binaries with the JavaScript bundle embedded, so they run without a Metro server:
 
 | Script | Output |
 | --- | --- |
 | `scripts/build-ios-simulator.sh` (needs macOS and Xcode) | `ios/build/Build/Products/Release-iphonesimulator/Juno.app` |
+| `scripts/build-ios-device.sh` (needs macOS, Xcode and an Apple ID, see [below](#on-a-physical-iphone-with-a-free-apple-id)) | `ios/build/Build/Products/Release-iphoneos/Juno.app` |
 | `scripts/build-android-apk.sh` (needs JDK 17+ and the Android SDK) | `android/app/build/outputs/apk/release/app-release.apk` |
 
 `EXPO_PUBLIC_*` variables are inlined at build time, so set them in the build environment.
 
-`patches/expo-dev-launcher@58.0.20.patch` removes a call to `axisBehavior`, an iOS 27.1 toolbar API that Xcode 27.0 (Revyl's runner) does not have. Drop the patch when expo-dev-launcher is upgraded past 58.0.20 with a fix, or when the iOS runner moves to Xcode 27.1 or later; pnpm refuses to install if the patched version changes, so an upgrade forces the decision.
+`patches/expo-dev-launcher@58.0.20.patch` removes a call to `axisBehavior`, an iOS 27.1 toolbar API that Xcode 27.0 (Revyl's runner) does not have. Drop the patch when expo-dev-launcher is upgraded past 58.0.20 with a fix, or when the iOS runner moves to Xcode 27.1 or later; pnpm refuses to install if the patched version changes, so an upgrade forces the decision. Xcode 27.2 has the API, and the patch still applies cleanly there, so it does no harm to local builds.
 
 ### On Revyl from a Capy thread
 
@@ -88,7 +89,7 @@ The lines that show whether the publish checks misfire on a real call:
 How to see them:
 
 - **Development build (`eas build --profile development`) with Metro running:** the lines appear in the terminal running `npx expo start`.
-- **Any build made with `EXPO_PUBLIC_DEV_AGENT_LINK=1`, without Metro:** the lines go to the iPhone's system log as errors. On a Mac, connect the iPhone, open the Console app, select the iPhone in the sidebar, press Start, and type `[agent]` in the search field. From a terminal, with libimobiledevice installed: `idevicesyslog | grep '\[agent\]'`.
+- **Any build made with `EXPO_PUBLIC_DEV_AGENT_LINK=1`, without Metro:** the lines go to the iPhone's system log as errors. On a Mac, connect the iPhone, open the Console app, select the iPhone in the sidebar, press Start, and type `[agent]` in the search field. From a terminal, with libimobiledevice installed: `idevicesyslog | grep '\[agent\]'`. From a terminal with nothing installed, launch the app through Xcode's tools so its log comes back to the Mac: `DEVICECTL_CHILD_OS_ACTIVITY_DT_MODE=enable xcrun devicectl device process launch --console --terminate-existing --device <udid> com.akhileshrangani.consumerhack | grep '\[agent\]'` (`xcrun devicectl list devices` shows the udid). The log stops when the app is closed by hand, so relaunch it the same way.
 - **Simulator:** `xcrun simctl spawn booted log stream --predicate 'eventMessage CONTAINS "[agent]"'`.
 
 Release builds without the variable print these lines with `console.log`, which iOS doesn't keep, so use a build with the variable for the first real calls.
@@ -96,6 +97,35 @@ Release builds without the variable print these lines with `console.log`, which 
 ### For a physical phone
 
 `eas.json` has `development` (dev client), `preview` and `production` profiles: `npx eas-cli build --profile development --platform ios`. This needs an Expo account and, for iOS, an Apple developer account.
+
+### On a physical iPhone with a free Apple ID
+
+`scripts/build-ios-device.sh` builds a signed Release app with the JavaScript bundle embedded, so it runs away from the Mac and without Metro. It needs no paid developer membership and no Expo account.
+
+1. **Mac:** Xcode, signed in under Xcode → Settings → Accounts. A free Apple ID gets a personal team and an "Apple Development" certificate. Node and CocoaPods must be on the PATH. The script runs pnpm through `corepack pnpm`, so it doesn't need `corepack enable` or a global pnpm.
+2. **iPhone:** connect it with a data cable, unlock it, tap Trust, and turn on Settings → Privacy & Security → Developer Mode (the phone restarts). `xcrun devicectl list devices` should then show it as `connected`.
+3. **Build:** set `APPLE_TEAM_ID` to your team identifier, which is the OU field of the signing certificate, and keep it out of tracked files. Put the `EXPO_PUBLIC_*` values in `build.env` as in [Build settings for Revyl](#build-settings-for-revyl).
+
+   ```bash
+   export APPLE_TEAM_ID=$(security find-certificate -c "Apple Development" -p | openssl x509 -noout -subject -nameopt sep_multiline | sed -n 's/^ *OU=//p')
+   bash scripts/build-ios-device.sh
+   ```
+
+   The script passes the team, automatic signing and `-allowProvisioningUpdates` to `xcodebuild` on the command line, so nothing is written into the generated project. It finds the workspace and the built `.app` by pattern, and prints the app's path on its last line. If the bundle identifier is already registered to another team, set `IOS_BUNDLE_ID` to a unique one for that build only. The override is passed to every target `xcodebuild` builds, the Pods targets included, and that has not been tested. Bluesky sign-in doesn't depend on the bundle identifier, because its redirect is the Convex site host (see [Bluesky OAuth client metadata](#bluesky-oauth-client-metadata)).
+4. **Install and launch:**
+
+   ```bash
+   xcrun devicectl device install app --device <udid> ios/build/Build/Products/Release-iphoneos/Juno.app
+   xcrun devicectl device process launch --device <udid> "${IOS_BUNDLE_ID:-com.akhileshrangani.consumerhack}"
+   ```
+
+   The first launch is refused until the phone trusts the developer: Settings → General → VPN & Device Management → the "Apple Development" entry → Trust.
+
+What a personal team means for this app:
+
+- **Entitlements:** none to remove. The generated entitlements file is empty, and background audio is an Info.plist key, not an entitlement. A capability added later, such as push notifications, associated domains or app groups, can't be signed by a personal team, and the build would then fail at signing.
+- **Expiry:** the install stops opening after 7 days. Rebuild and install again. Installing over an existing build keeps the sign-in.
+- **Disk:** a build uses about 5 GB in the checkout (`node_modules` about 1 GB, `ios/Pods` 1.5 GB, `ios/build` 2.7 GB), plus Xcode's device support files the first time a phone connects. Delete `ios/build` after installing.
 
 ## App icon and launch screen
 
@@ -183,5 +213,30 @@ The scopes in `OAUTH_SCOPES` are the least the provider needs: create and delete
 ## Testing the voice agent without a microphone
 
 `pnpm eval:agent` runs `src/agent/__eval__/vapiChat.eval.ts` on a developer machine: it sends a scripted conversation to the real assistant configuration through Vapi's chat API with `VAPI_PRIVATE_KEY` from your shell, runs every tool call through the real tool handlers against a mocked Bluesky account, and writes the transcript to `agent-eval-transcript.md` (or `EVAL_TRANSCRIPT`). Vapi's chat API needs a card on the Vapi account and is billed. With `EVAL_BACKEND=openai` and `OPENAI_API_KEY` it sends the same prompt and tools to the same model at OpenAI instead: a stand-in that tests the prompt and tools but not Vapi's own orchestration.
+
+Each step of the script says what correct looks like, and the transcript opens with a pass or fail per step. The safety steps are the ones where publishing would be wrong: a hedge after a read-back, a yes with a change attached, "yes, delete it" on a post, a yes to the agent's own question, and a change during the five seconds. These check that the model held back, not only that the app's guard caught it. The last three steps are harder requests: two actions in one sentence, "send that to Maya" (no tool fits, so the agent should ask or explain rather than guess), and a correction in the middle of dictation. The stand-in streams, so it also records each turn's time to the first token, its total time and its cost. `EVAL_RESULTS=<file>` writes those as JSON.
+
+## The voice agent's model
+
+The model is `AGENT_MODEL` in `src/agent/assistant.ts`: gpt-5.6-sol, the most capable OpenAI model Vapi offers, with reasoning off (`reasoningEffort: 'none'`), OpenAI's fast tier (`serviceTier: 'fast'`) and temperature 0.2. It replaced gpt-4.1 in AKH-42 after Akhilesh found the agent too dumb at times. On the publishing flow from AKH-48 it held back at least as well as gpt-4.1 on every safety step, starts each answer about 0.16 seconds later and costs about 60% more per turn. The comparison is in AKH-42's pull requests. To compare models, override the shipped one:
+
+```sh
+EVAL_BACKEND=openai EVAL_MODEL=gpt-5.6-sol EVAL_REASONING_EFFORT=none EVAL_SERVICE_TIER=fast pnpm eval:agent
+EVAL_BACKEND=openai EVAL_MODEL=gpt-4.1 EVAL_REASONING_EFFORT= pnpm eval:agent   # a model without reasoning
+```
+
+Things that constrain the choice:
+- Take model ids from Vapi's list (docs.vapi.ai/providers/model/openai), not OpenAI's. Some OpenAI models, such as gpt-6.1-sol, aren't offered through Vapi.
+- On the GPT-5.x and GPT-6 models, OpenAI accepts a temperature other than 1 only with reasoning off, which is why `reasoningEffort: 'none'` sits beside the model. Remove it and `serviceTier` if you switch to a model without reasoning, such as gpt-4.1. With function tools on Chat Completions, gpt-6-luna refuses any reasoning effort above `none`.
+- Vapi refuses `reasoningEffort: 'none'` for gpt-5.5 (observed 2026-11-15 when creating an assistant).
+- Reasoning at `low` added about 0.3 to 0.75 seconds per request in AKH-42's measurements.
+- Vapi's fast service tier (`serviceTier: 'fast'`) costs twice as much per token. Vapi's OpenAI provider page (docs.vapi.ai/providers/model/openai, read 2026-11-15) lists it for gpt-6-luna, gpt-5.6-sol, gpt-5.6-terra, gpt-5.6-luna and gpt-5.5 and says it is ignored for other models.
+- Before AKH-48, gpt-5.6-sol (6 of 6 runs) and gpt-5.6-terra (3 of 7) never posted after a hedge ("okay let me think") followed by "go ahead". On the fixed flow gpt-5.6-sol posts there, and on "post it".
+
+Before shipping a new model, confirm Vapi accepts the configuration by creating and then deleting a test assistant through Vapi's API, with `VAPI_PRIVATE_KEY` from your shell.
+
+### Billing the model to your own OpenAI account
+
+Vapi can call OpenAI with your own API key. Add it in the Vapi dashboard under Integrations. Vapi then stops charging for the model, and OpenAI bills your account directly at its own prices. Some models may only be available through Vapi once a provider key is added. The key is entered only in Vapi's dashboard: it never goes into the app, `build.env`, `.env`, or this repository, and the app never sees it. Akhilesh added his OpenAI key there on 2026-11-15, so the agent's model is billed to his OpenAI account.
 
 `pnpm eval:bluesky` publishes a real post and reply through the tool handlers to the account in `BLUESKY_TEST_HANDLE`/`BLUESKY_TEST_APP_PASSWORD`, undoes and deletes them, and checks each step on Bluesky. Use a throwaway account.
