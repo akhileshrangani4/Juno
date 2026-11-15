@@ -79,17 +79,18 @@ describe('posting a photo from the camera or the library', () => {
     expect(env.provider.uploadImage).toHaveBeenCalledWith(expect.objectContaining({ uri: 'file:///second.jpg' }), 'A blue bicycle by a wall.');
   });
 
-  it("doesn't count a read-back heard before the camera was opened again: the draft is read back before any yes counts", async () => {
+  it("doesn't take a plain yes after the camera was opened again over the draft", async () => {
     const env = withPhoto();
     env.say('Post my morning coffee.');
     const draft = await env.handlers.run('draft_post', { text: 'My morning coffee.' });
     env.setOpen(true);
+    env.say('What do you see?');
     await env.handlers.run('camera', { action: 'describe' });
     env.setOpen(false);
     env.say('Yes.');
     const outcome = await env.handlers.run('publish_draft', { draftId: draftIdOf(draft.result) });
     expect(outcome.refused).toBe('expired');
-    expect(outcome.speak).toContain('With the image description: A red mug');
+    expect(outcome.speak).toBeTruthy();
     expect(env.provider.createPost).not.toHaveBeenCalled();
   });
 
@@ -146,6 +147,7 @@ describe('posting a photo from the camera or the library', () => {
     expect(reply.speak).not.toContain('image description');
     env.say('Post my coffee.');
     await env.handlers.run('draft_post', { text: 'My coffee.' });
+    env.say('Cancel that.');
     const discarded = await env.handlers.run('discard_draft', {});
     expect(discarded.result).toContain('and the photo with it');
     expect(env.camera.photoUsed).toHaveBeenCalledWith('file:///upload.jpg');

@@ -7,7 +7,9 @@ type Schema = { type: 'object'; properties: Record<string, unknown>; required?: 
 
 const none: Schema = { type: 'object', properties: {} };
 
-const definitions: { name: string; description: string; parameters: Schema }[] = [
+// answersReadBack: the tool acts on the draft just read back (or is undo), so the model may call it before the user
+// has answered; any other tool called then, with no words from the user, is refused (toolHandlers.ts).
+const definitions: { name: string; description: string; parameters: Schema; answersReadBack?: true }[] = [
   {
     name: 'read_post',
     description: 'Read the post in focus aloud. The app speaks it itself. Use for "read that again", "what does it say", "read the hashtags", "describe the picture".',
@@ -62,6 +64,7 @@ const definitions: { name: string; description: string; parameters: Schema }[] =
       properties: { find: { type: 'string', description: 'The words to replace, as in the draft.' }, replace: { type: 'string', description: "The user's new words." } },
       required: ['find', 'replace'],
     },
+    answersReadBack: true,
   },
   {
     name: 'edit_image_description',
@@ -75,15 +78,17 @@ const definitions: { name: string; description: string; parameters: Schema }[] =
         replace: { type: 'string', description: "The user's new words for them." },
       },
     },
+    answersReadBack: true,
   },
-  { name: 'split_draft', description: 'Split a draft that is too long into a thread of posts. Only when the user chooses to split.', parameters: none },
-  { name: 'discard_draft', description: 'Throw away the current draft, for "cancel" or "start over".', parameters: none },
+  { name: 'split_draft', description: 'Split a draft that is too long into a thread of posts. Only when the user chooses to split.', parameters: none, answersReadBack: true },
+  { name: 'discard_draft', description: 'Throw away the current draft, for "cancel" or "start over".', parameters: none, answersReadBack: true },
   {
     name: 'publish_draft',
     description: 'Publish a draft the app read back, only when the reply right after the read-back was a plain yes. The app waits five seconds so they can say undo.',
     parameters: { type: 'object', properties: { draftId: { type: 'string', description: 'The draft id from the draft result.' } }, required: ['draftId'] },
+    answersReadBack: true,
   },
-  { name: 'undo', description: 'Undo the last action: stop a post still in its five seconds, or remove the last like, repost, post or reply.', parameters: none },
+  { name: 'undo', description: 'Undo the last action: stop a post still in its five seconds, or remove the last like, repost, post or reply.', parameters: none, answersReadBack: true },
   {
     name: 'change_narration',
     description: 'Change how the app reads posts, now and while scrolling. Pass only what changes.',
@@ -135,6 +140,7 @@ const definitions: { name: string; description: string; parameters: Schema }[] =
       },
       required: ['action'],
     },
+    answersReadBack: true,
   },
   { name: 'open_sign_in', description: 'End the conversation and open the sign-in screen. Only after the user agrees.', parameters: none },
   { name: 'end_conversation', description: 'End the conversation and go back to scrolling, when the user says goodbye, stop, or that they are done.', parameters: none },
@@ -168,8 +174,21 @@ export type ToolName =
 
 export const toolNames = definitions.map((definition) => definition.name as ToolName);
 
+export const answersReadBack = new Set(definitions.filter((definition) => definition.answersReadBack).map((definition) => definition.name));
+
+// A client-side tool can't hand a result back to the model, so after every call Vapi asks the model to respond on
+// its own, and it talks over the app (around a read-back that voids the user's yes, or claiming a post went out).
+// An empty request-complete message is spoken instead of that response, and an empty request-start replaces Vapi's
+// "one moment" filler, so after a tool call the agent says only what the app says (its say()) and answers only when
+// the app's result asks it to (add-message with triggerResponseEnabled).
+const SILENT = [
+  { type: 'request-start' as const, content: '' },
+  { type: 'request-complete' as const, content: '' },
+];
+
 export const vapiTools = definitions.map(({ name, description, parameters }) => ({
   type: 'function' as const,
   async: true,
   function: { name, description, parameters },
+  messages: SILENT,
 }));

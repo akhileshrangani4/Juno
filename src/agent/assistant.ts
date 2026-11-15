@@ -14,6 +14,10 @@ export const FIRST_MESSAGE = "I'm listening.";
 // When the call starts because a photo was kept or chosen, the agent opens by asking for the post's words.
 export const PHOTO_FIRST_MESSAGE = cameraMessages.photoReady;
 
+// Words the transcriber should expect. On a real call Deepgram heard "post" at the start of an utterance as
+// "host" ("Host, hello again.", "Host it."), so the agent missed drafts and "post it" never confirmed.
+export const KEYTERMS = [APP_NAME, 'post', 'post it', 'repost', 'reply', 'undo', 'cancel'] as const;
+
 // The model behind the voice agent, measured against the newer models Vapi offers (docs/building.md, "The voice
 // agent's model"). A GPT-5.x or GPT-6 model also needs reasoningEffort: 'none' here, or OpenAI refuses the
 // temperature and the first word comes later.
@@ -35,7 +39,7 @@ export function buildAssistant(context: PromptContext) {
       tools: vapiTools,
     },
     voice: { provider: 'vapi' as const, voiceId: 'Elliot' },
-    transcriber: { provider: 'deepgram' as const, model: 'nova-3', language: 'en' as const },
+    transcriber: { provider: 'deepgram' as const, model: 'nova-3', language: 'en' as const, keyterm: [...KEYTERMS] },
     silenceTimeoutSeconds: SILENCE_TIMEOUT_SECONDS,
     maxDurationSeconds: MAX_DURATION_SECONDS,
     messagePlan: {

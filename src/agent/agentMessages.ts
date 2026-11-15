@@ -16,6 +16,8 @@ export const agentMessages = {
   dropped: 'The agent disconnected. Back to scrolling.',
   signIn: 'Opening the sign-in screen.',
   notSent: 'Your post was not sent. ',
+  draftNotSent: 'Your draft was not sent. ',
+  draftKept: 'Your draft is kept, not sent.',
   undone: 'Stopped. Nothing was sent.',
   undoWhileSending: "One moment, it's going out right now.",
   stoppedBeforeSend: 'Stopped it before it went out.',

@@ -1,6 +1,6 @@
 import { makePost } from '@/testing/fixtures';
 
-import { graphemeLength, isAffirmative, POST_LIMIT, Publisher, readBackOf, splitIntoParts, UNDO_WINDOW_MS } from '../publisher';
+import { graphemeLength, isAffirmative, isCommand, POST_LIMIT, Publisher, readBackOf, splitIntoParts, UNDO_WINDOW_MS, withoutVocative } from '../publisher';
 import { maya, makeScheduler } from '@/testing/agent';
 
 function setup() {
@@ -31,7 +31,14 @@ describe('Publisher', () => {
     if (!draft.ok) throw new Error('expected a draft');
     expect(publisher.confirm(draft.draft.id, 1, 'yes')).toEqual({ ok: false, reason: 'sameTurn' });
     expect(publisher.confirm(draft.draft.id, 2, 'no, wait')).toEqual({ ok: false, reason: 'notAffirmative' });
-    expect(publisher.confirm(draft.draft.id, 3, 'Yes, post it.')).toEqual({ ok: false, reason: 'expired', readBack: 'Posting to your followers: Hello from my new app. Shall I post it?' });
+    expect(publisher.confirm(draft.draft.id, 3, 'Yes, post it.')).toEqual({
+      ok: false,
+      reason: 'expired',
+      speak: 'Posting to your followers: Hello from my new app. Say "post it" to send it, or "cancel".',
+      then: 'instruct',
+      reread: true,
+    });
+    publisher.readBackHeard(draft.draft.id, 3);
     const confirmed = publisher.confirm(draft.draft.id, 4, 'Yes, post it.');
     expect(confirmed).toMatchObject({ ok: true, announcement: 'Posting in five seconds. Say undo to stop it.' });
     publisher.startCountdown();
@@ -55,6 +62,7 @@ describe('Publisher', () => {
     const { publisher, scheduler, sent } = setup();
     const draft = publisher.draftText('post', 'Hello', null, 1);
     if (!draft.ok) throw new Error('expected a draft');
+    publisher.readBackHeard(draft.draft.id, 1);
     publisher.confirm(draft.draft.id, 2, 'yes');
     publisher.startCountdown();
     await scheduler.advance(4000);
@@ -99,6 +107,7 @@ describe('Publisher', () => {
     expect(split.draft.parts.every((part) => graphemeLength(part) <= POST_LIMIT)).toBe(true);
     expect(split.draft.parts.join(' ')).toBe(text);
     expect(split.readBack).toMatch(/^Posting to your followers: This will be a thread of 2 posts\. Post 1: This is/);
+    publisher.readBackHeard(split.draft.id, 2);
     publisher.confirm(split.draft.id, 3, 'yes');
     publisher.startCountdown();
     await scheduler.advance(UNDO_WINDOW_MS);
@@ -197,6 +206,7 @@ describe('Publisher', () => {
     if (!draft.ok) throw new Error('expected a draft');
     publisher.assistantSpoke(1);
     expect(publisher.confirm(draft.draft.id, 2, 'yes')).toMatchObject({ ok: false, reason: 'expired' });
+    publisher.readBackHeard(draft.draft.id, 2);
     publisher.assistantSpoke(3);
     expect(publisher.confirm(draft.draft.id, 3, 'yes')).toMatchObject({ ok: true });
   });
@@ -206,7 +216,8 @@ describe('Publisher', () => {
     const draft = publisher.draftText('post', 'Hello', null, 1);
     if (!draft.ok) throw new Error('expected a draft');
     const twoTurnsLater = publisher.confirm(draft.draft.id, 3, 'yes');
-    expect(twoTurnsLater).toMatchObject({ ok: false, reason: 'expired', readBack: 'Posting to your followers: Hello. Shall I post it?' });
+    expect(twoTurnsLater).toMatchObject({ ok: false, reason: 'expired', speak: 'Posting to your followers: Hello. Say "post it" to send it, or "cancel".' });
+    publisher.readBackHeard(draft.draft.id, 3);
     expect(publisher.confirm(draft.draft.id, 4, 'yes')).toMatchObject({ ok: true });
   });
 
@@ -216,6 +227,7 @@ describe('Publisher', () => {
     if (!draft.ok) throw new Error('expected a draft');
     publisher.interrupt();
     expect(publisher.confirm(draft.draft.id, 2, 'yes')).toMatchObject({ ok: false, reason: 'expired' });
+    publisher.readBackHeard(draft.draft.id, 2);
     expect(publisher.confirm(draft.draft.id, 3, 'yes')).toMatchObject({ ok: true });
   });
 
@@ -233,6 +245,7 @@ describe('Publisher', () => {
     });
     const draft = publisher.draftText('post', 'Hello', null, 1);
     if (!draft.ok) throw new Error('expected a draft');
+    publisher.readBackHeard(draft.draft.id, 1);
     publisher.confirm(draft.draft.id, 2, 'yes');
     publisher.startCountdown();
     await scheduler.advance(UNDO_WINDOW_MS);
@@ -243,5 +256,96 @@ describe('Publisher', () => {
     await new Promise<void>((resolve) => setImmediate(() => resolve()));
     expect(publisher.busy).toBe(false);
     expect(publisher.undo()).toBeNull();
+  });
+  describe('an explicit command', () => {
+    const commands = ['post it', 'Post it.', 'post it now', 'Post it now, please.', 'send it', 'publish it', 'share it', 'okay, post it', 'yes, post it', 'go ahead and post it', 'just send it', 'post that', 'post this', 'send the post', 'post my post', 'Host it.'];
+    const notCommands = ["don't post it", 'do not post it', 'should I post it?', 'post it?', 'post it but change it to goodbye', 'post it to Sam', 'post', 'it', 'yes', 'go ahead', 'post hello', 'please', 'not yet, post it later'];
+
+    it('is a verb that fits the draft, on "it", "that", "this" or the post, with nothing attached', () => {
+      for (const said of commands) expect([said, isCommand(said, 'post')]).toEqual([said, true]);
+      for (const said of notCommands) expect([said, isCommand(said, 'post')]).toEqual([said, false]);
+      expect(isCommand('send it', 'reply')).toBe(true);
+      expect(isCommand('send the reply', 'reply')).toBe(true);
+      expect(isCommand('repost it', 'repost')).toBe(true);
+      expect(isCommand('post it', 'repost')).toBe(false);
+      expect(isCommand('host it', 'delete')).toBe(false);
+      expect(isAffirmative('host it')).toBe(false);
+      expect(isCommand('delete it', 'delete')).toBe(true);
+      expect(isCommand('remove my post', 'delete')).toBe(true);
+      expect(isCommand('delete it', 'post')).toBe(false);
+      expect(isCommand('post it', 'delete')).toBe(false);
+    });
+
+    it('confirms a draft read back to the end in an earlier turn, even after other talk, until it changes', () => {
+      const { publisher } = setup();
+      const draft = publisher.draftText('post', 'Hello from my new app.', null, 1);
+      if (!draft.ok) throw new Error('expected a draft');
+      publisher.interrupt();
+      expect(publisher.confirm(draft.draft.id, 2, 'post it')).toMatchObject({ ok: false, reason: 'expired', reread: true });
+      publisher.readBackHeard(draft.draft.id, 2);
+      expect(publisher.confirm(draft.draft.id, 2, 'post it')).toMatchObject({ ok: false, reason: 'sameTurn' });
+      publisher.interrupt();
+      expect(publisher.confirm(draft.draft.id, 5, "don't post it")).toMatchObject({ ok: false });
+      expect(publisher.confirm(draft.draft.id, 5, 'post it')).toMatchObject({ ok: true, announcement: 'Posting in five seconds. Say undo to stop it.' });
+    });
+
+    it('needs the edited draft to be heard to the end again', () => {
+      const { publisher } = setup();
+      const draft = publisher.draftText('post', 'Hello from my new app.', null, 1);
+      if (!draft.ok) throw new Error('expected a draft');
+      publisher.readBackHeard(draft.draft.id, 1);
+      const edited = publisher.edit('Hello', 'Goodbye', 2);
+      if (!edited.ok) throw new Error('expected an edit');
+      publisher.interrupt();
+      expect(publisher.confirm(edited.draft.id, 4, 'post it')).toMatchObject({ ok: false, reason: 'expired', reread: true });
+      publisher.readBackHeard(draft.draft.id, 4);
+      publisher.interrupt();
+      expect(publisher.confirm(edited.draft.id, 5, 'post it')).toMatchObject({ ok: false, reason: 'expired' });
+      publisher.readBackHeard(edited.draft.id, 5);
+      publisher.interrupt();
+      expect(publisher.confirm(edited.draft.id, 6, 'post it')).toMatchObject({ ok: true });
+    });
+
+    it("doesn't send a post on delete it, or delete on post it", () => {
+      const { publisher } = setup();
+      const draft = publisher.draftText('post', 'Hello from my new app.', null, 1);
+      if (!draft.ok) throw new Error('expected a draft');
+      publisher.readBackHeard(draft.draft.id, 1);
+      expect(publisher.confirm(draft.draft.id, 3, 'delete it')).toMatchObject({ ok: false });
+      const del = publisher.draftAction('delete', maya, 4);
+      if (!del.ok) throw new Error('expected a draft');
+      publisher.readBackHeard(del.draft.id, 4);
+      expect(publisher.confirm(del.draft.id, 6, 'post it')).toMatchObject({ ok: false });
+      expect(publisher.confirm(del.draft.id, 7, 'delete it')).toMatchObject({ ok: true });
+    });
+  });
+
+  it('never asks the same question twice: says what to say, then keeps the draft and stops asking', () => {
+    const { publisher } = setup();
+    const draft = publisher.draftText('post', 'Hello from my new app.', null, 1);
+    if (!draft.ok) throw new Error('expected a draft');
+    publisher.readBackHeard(draft.draft.id, 1);
+    publisher.assistantSpoke(1);
+    expect(publisher.confirm(draft.draft.id, 2, 'yes')).toEqual({ ok: false, reason: 'expired', speak: 'Say "post it" to send it, or "cancel".', then: 'instruct', reread: false });
+    expect(publisher.confirm(draft.draft.id, 3, 'yes')).toEqual({
+      ok: false,
+      reason: 'expired',
+      speak: 'I\'ll keep it as a draft and stop asking. Say "post it" whenever you\'re ready, or "cancel".',
+      then: 'keep',
+      reread: false,
+    });
+    expect(publisher.confirm(draft.draft.id, 4, 'yes')).toMatchObject({ then: 'keep' });
+    expect(publisher.currentDraft?.id).toBe(draft.draft.id);
+    expect(publisher.confirm(draft.draft.id, 5, 'post it')).toMatchObject({ ok: true });
+  });
+
+  it('drops the app\'s name said as a form of address before checking for a yes or a command', () => {
+    for (const said of ['Juno, yes', 'yes Juno', 'yes, Juno.', 'okay, Juno, post it', 'Juno post it']) expect([said, isAffirmative(said)]).toEqual([said, true]);
+    expect(isCommand('Juno, post it', 'post')).toBe(true);
+    expect(isCommand('post it, Juno', 'post')).toBe(true);
+    expect(isAffirmative('yes, Juno, but change it to goodbye')).toBe(false);
+    expect(isAffirmative('Juno?')).toBe(false);
+    expect(isAffirmative('Juno')).toBe(false);
+    expect(withoutVocative('Junonia, yes')).toBe('Junonia, yes');
   });
 });
