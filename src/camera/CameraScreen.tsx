@@ -134,6 +134,22 @@ export function CameraScreen({ start }: { start: 'camera' | 'library' }) {
   const devFrame = useDevFrames(controller, state.phase);
   const useDev = devFramesEnabled();
   const inCall = cameraHost()?.agentLive() ?? false;
+  const libraryId = state.phase === 'library' ? (controller.currentLibraryPhoto()?.id ?? null) : null;
+  const [preview, setPreview] = useState<{ id: string; uri: string } | null>(null);
+
+  useEffect(() => {
+    if (!libraryId) return;
+    let current = true;
+    void mediaLibrary
+      .file(libraryId)
+      .catch(() => null)
+      .then((file) => {
+        if (current && file) setPreview({ id: libraryId, uri: file.uri });
+      });
+    return () => {
+      current = false;
+    };
+  }, [libraryId]);
 
   useEffect(() => {
     setActiveCamera(controller);
@@ -201,7 +217,7 @@ export function CameraScreen({ start }: { start: 'camera' | 'library' }) {
 
   const halves = cameraHalves(state.phase);
   const live = state.phase === 'aiming' || state.phase === 'capturing';
-  const libraryPhoto = state.phase === 'library' ? controller.currentLibraryPhoto() : null;
+  const shown = preview && preview.id === libraryId ? preview : null;
   return (
     <SafeAreaView style={styles.screen}>
       <GestureSurface
@@ -237,7 +253,7 @@ export function CameraScreen({ start }: { start: 'camera' | 'library' }) {
               onCameraError={({ nativeEvent }) => controller.cameraFailed(nativeEvent.reason)}
             />
           ) : null}
-          {libraryPhoto ? <Image key={libraryPhoto.id} recyclingKey={libraryPhoto.id} source={{ uri: libraryPhoto.uri }} style={StyleSheet.absoluteFill} contentFit="contain" /> : null}
+          {shown ? <Image key={shown.id} source={{ uri: shown.uri }} style={StyleSheet.absoluteFill} contentFit="contain" /> : null}
         </View>
         <Text style={styles.half} maxFontSizeMultiplier={type.maxScale}>
           {halves ? `▲ ${capitalized(halves.top)}` : ' '}
