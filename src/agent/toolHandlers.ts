@@ -7,7 +7,7 @@ import { memoryRejection, MemorySignInNeededError, MemoryUnavailableError, type 
 import type { MemoryOffer } from './memoryOffer';
 import { detailFor, narrateForFeed, narratePost, usesDescriptions, type ReadMode } from './narrationAdapter';
 import { describeFocus } from './postContext';
-import { isAffirmative, Publisher, type ConfirmOutcome, type Draft, type DraftOutcome } from './publisher';
+import { isAffirmative, Publisher, type ConfirmOutcome, type Draft, type DraftImage, type DraftOutcome } from './publisher';
 import { MAX_FACTS } from './memoryRateLimits';
 import { MAX_RATE, MIN_RATE, RATE_STEP, type NarrationSettings, type SettingsStore } from './settings';
 import type { ToolName } from './tools';
@@ -30,8 +30,19 @@ export type Conversation = {
   recentUtterances(): string[];
 };
 
+// The camera and photo library (src/camera), as the agent reaches them. run() does the action on the phone and the
+// camera speaks for itself, so its result only tells the model what happened.
+export type CameraTools = {
+  run(action: string, subject: string | null): string;
+  // The photo the user kept or chose, waiting to be attached to the next new post.
+  photo(): DraftImage | null;
+  // The photo went out with a post, or the draft it was on was thrown away.
+  photoUsed(): void;
+};
+
 export type AgentDeps = {
   provider: SocialProvider;
+  camera?: CameraTools;
   account(): SocialAccount | null;
   focused(): Post | null;
   move(direction: 'next' | 'previous'): { outcome: MoveOutcome; post: Post | null };
@@ -83,7 +94,7 @@ const MEMORY_NEEDS_SIGN_IN_TOLD =
   "MEMORY_NEEDS_SIGN_IN: Memory still needs them to sign in again, and you already told them in this conversation. Don't say it again; answer in a few words without memory.";
 const MEMORY_UNREACHABLE = "MEMORY_UNREACHABLE: The user's memory can't be reached right now, so nothing was saved, read or forgotten. Say in one short sentence that you can't reach their memory right now, then carry on.";
 const NO_FOCUS = 'NO_POST: No post is in focus. Tell the user there is no post to act on right now.';
-const ACCOUNT_TOOLS = new Set<ToolName>(['like_post', 'unlike_post', 'draft_post', 'draft_reply', 'draft_repost', 'draft_delete_my_last_post', 'publish_draft']);
+const ACCOUNT_TOOLS = new Set<ToolName>(['edit_image_description', 'like_post', 'unlike_post', 'draft_post', 'draft_reply', 'draft_repost', 'draft_delete_my_last_post', 'publish_draft']);
 
 const normalized = (text: string) =>
   text
@@ -235,9 +246,11 @@ export function createToolHandlers(deps: AgentDeps) {
     let parent: ReplyParent | null = draft.kind === 'reply' && draft.target ? draft.target : null;
     const root = parent ? (parent.replyRoot ?? { uri: parent.uri, cid: parent.cid }) : null;
     try {
-      for (const text of draft.parts) {
+      const images = draft.image ? [await provider.uploadImage({ uri: draft.image.uri, mimeType: draft.image.mimeType }, draft.image.alt)] : undefined;
+      for (const [i, text] of draft.parts.entries()) {
         if (undoRequested()) break;
-        const ref = parent ? await provider.reply(parent, { text }) : await provider.createPost({ text });
+        const post = { text, images: i === 0 ? images : undefined };
+        const ref = parent ? await provider.reply(parent, post) : await provider.createPost(post);
         refs.push(ref);
         parent = { ...ref, replyRoot: root ?? refs[0] };
       }
@@ -253,6 +266,7 @@ export function createToolHandlers(deps: AgentDeps) {
       if (!refs.length) return undoneWhileSending(agentMessages.stoppedBeforeSend);
       return removeAfterSend(deleteSent, entry, agentMessages.deletedAfterSend, agentMessages.postStuck);
     }
+    if (draft.image) deps.camera?.photoUsed();
     history.push(entry);
     deps.notify(`Result of publish_draft: SENT. The ${draft.kind === 'reply' ? 'reply was sent' : refs.length > 1 ? 'thread was posted' : 'post was published'}. Confirm in a few words.`);
   }
@@ -346,7 +360,8 @@ export function createToolHandlers(deps: AgentDeps) {
       case 'draft_reply': {
         if (tool === 'draft_reply' && !focus) return { respond: true, result: NO_FOCUS };
         if (!usesOwnWords(text, deps.conversation.recentUtterances())) return { respond: true, result: REWORDED };
-        return draftResult(publisher.draftText(tool === 'draft_post' ? 'post' : 'reply', text, tool === 'draft_reply' ? focus : null, turn));
+        const image = tool === 'draft_post' ? (deps.camera?.photo() ?? null) : null;
+        return draftResult(publisher.draftText(tool === 'draft_post' ? 'post' : 'reply', text, tool === 'draft_reply' ? focus : null, turn, image));
       }
       case 'draft_repost':
         if (!focus) return { respond: true, result: NO_FOCUS };
@@ -361,10 +376,27 @@ export function createToolHandlers(deps: AgentDeps) {
         if (!usesOwnWords(replace, deps.conversation.recentUtterances())) return { respond: true, result: REWORDED };
         return draftResult(publisher.edit(typeof args.find === 'string' ? args.find : '', replace, turn));
       }
+      case 'edit_image_description': {
+        const replace = typeof args.text === 'string' ? args.text : typeof args.replace === 'string' ? args.replace : '';
+        if (!usesOwnWords(replace, deps.conversation.recentUtterances())) return { respond: true, result: REWORDED };
+        const find = typeof args.text === 'string' ? null : typeof args.find === 'string' ? args.find : null;
+        if (!publisher.currentDraft?.image) return { respond: true, result: 'NO_IMAGE: The draft has no photo, so there is no image description to change.' };
+        return draftResult(publisher.editImageDescription(find, replace, turn));
+      }
+      case 'camera': {
+        if (!deps.camera) return { respond: true, result: "CAMERA_UNAVAILABLE: The camera isn't available on this phone. Tell the user." };
+        const action = typeof args.action === 'string' ? args.action : '';
+        const subject = typeof args.subject === 'string' && args.subject.trim() ? args.subject.trim() : null;
+        return { respond: false, result: deps.camera.run(action, subject) };
+      }
       case 'split_draft':
         return draftResult(publisher.split(turn));
-      case 'discard_draft':
-        return { respond: true, result: publisher.discard() ? 'DISCARDED: The draft is gone and nothing was published. Confirm briefly.' : 'NO_DRAFT: There was no draft.' };
+      case 'discard_draft': {
+        const image = publisher.currentDraft?.image;
+        if (!publisher.discard()) return { respond: true, result: 'NO_DRAFT: There was no draft.' };
+        if (image) deps.camera?.photoUsed();
+        return { respond: true, result: `DISCARDED: The draft is gone and nothing was published${image ? ', and the photo with it' : ''}. Confirm briefly.` };
+      }
       case 'publish_draft': {
         const utterance = deps.conversation.lastUtterance();
         const outcome = publisher.confirm(typeof args.draftId === 'string' ? args.draftId : '', turn, utterance);

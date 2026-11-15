@@ -75,6 +75,10 @@ Cloud phones cannot draw a circle. In a build made with `EXPO_PUBLIC_DEV_AGENT_L
 
 The same test builds print the call's lifecycle to the device log as `[agent] ...` lines (connecting, connected, each tool name, ended reason, exit). They never include what was said or any post text.
 
+### A camera without a camera (test builds only)
+
+Cloud phones and simulators have no camera. In a build made with `EXPO_PUBLIC_DEV_FRAME_SOURCE=1`, the camera screen shows the bundled test images in `assets/dev-frames` one after another (15 seconds each) instead of the camera, and each goes through the whole pipeline: the camera module measures it with Apple Vision (`analyzeImage`), the cues and haptic ticks come from those measurements, the view is described, the frame's own question is checked (for example "the mug"), and the shutter "takes" the frame on screen. Every step is printed to the device log as `[camera] ...` lines, with the cue, the description, latency and cost. Without the variable the check in `src/camera/devFrames.ts` is the constant `false`, the bundler drops the block, and neither the code path nor the images are in the build (`expo export` succeeds even with `assets/dev-frames` missing). Leave it out of anything but a test build.
+
 ### Reading the agent's log on a physical iPhone
 
 The lines that show whether the publish checks misfire on a real call:
@@ -166,9 +170,10 @@ npx convex env set DESCRIBE_MODEL gpt-6-luna                    # optional, this
 | `VAPI_PRIVATE_KEY` | developer shell only | `pnpm eval:agent` (Vapi chat API) |
 | `OPENAI_API_KEY` | Convex deployment, and developer shell | `convex/describe.ts` (picture descriptions); `EVAL_BACKEND=openai pnpm eval:agent` (stand-in) |
 | `DESCRIBE_MODEL` | Convex deployment only, optional | `convex/describe.ts` (defaults to `gpt-6-luna`) |
+| `LOOK_MODEL`, `LOOK_DECISION_MODEL` | Convex deployment only, optional | `convex/look.ts`, the camera (both default to `gpt-6-luna`; see [camera.md](camera.md)) |
 | `BLUESKY_TEST_HANDLE`, `BLUESKY_TEST_APP_PASSWORD` | developer shell only | `pnpm eval:bluesky` |
 
-None of these is ever set in the app or in `.env.local`. The voice agent's Convex code reads only `SUPERMEMORY_API_KEY`. The only deployed code that calls a model is `describe:describePost`, which takes a post URI, fetches the post from Bluesky itself, and is capped at $2 of model spend an hour (see [narration.md](narration.md)).
+None of these is ever set in the app or in `.env.local`. The voice agent's Convex code reads only `SUPERMEMORY_API_KEY`. The deployed code that calls a model is `describe:describePost`, which takes a post URI, fetches the post from Bluesky itself, and is capped at $2 of model spend an hour (see [narration.md](narration.md)), and the camera's `look:describeImage` and `look:decide`, capped at $1 an hour together (see [camera.md](camera.md)).
 
 ### Who can use a memory
 

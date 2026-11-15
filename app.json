@@ -15,6 +15,8 @@
       "supportsTablet": false,
       "infoPlist": {
         "NSMicrophoneUsageDescription": "Juno's voice agent listens through the microphone only while it is awake, after you draw a clockwise circle.",
+        "NSCameraUsageDescription": "Juno uses the camera only while you have it open, to tell you what is in front of you, help you aim, and take photos you choose to post.",
+        "NSPhotoLibraryUsageDescription": "Juno reads your photos only when you choose from them, to describe each one to you and post the one you pick.",
         "UIBackgroundModes": [
           "audio"
         ]
@@ -56,7 +58,7 @@
         "@config-plugins/react-native-webrtc",
         {
           "microphonePermission": "Juno's voice agent listens through the microphone only while it is awake, after you draw a clockwise circle.",
-          "cameraPermission": "Juno uses the camera only when you ask it to describe what is in front of you."
+          "cameraPermission": "Juno uses the camera only while you have it open, to tell you what is in front of you, help you aim, and take photos you choose to post."
         }
       ],
       [

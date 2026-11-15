@@ -1,4 +1,4 @@
-import { router } from 'expo-router';
+import { router, useIsFocused } from 'expo-router';
 import { useEffect, useRef, useState } from 'react';
 import { Platform, StyleSheet, Text, View, type AccessibilityActionEvent, type AccessibilityRole } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -7,6 +7,8 @@ import { useScreenReader } from '@/accessibility/useScreenReader';
 import type { AgentStatus, EndReason } from '@/agent/AgentSession';
 import { onDevWake } from '@/agent/devWake';
 import { useVoiceAgent } from '@/agent/useVoiceAgent';
+import { cameraMessages } from '@/camera/cameraMessages';
+import { openCamera, registerCameraHost, setPendingPhoto } from '@/camera/host';
 import { haptic } from '@/feedback/haptics';
 import { useFeed } from '@/feed/useFeed';
 import type { CircleDirection } from '@/gestures/circle';
@@ -49,11 +51,15 @@ export function MainScreen() {
   const [allowStrokeCue] = useState(() => createRateLimiter(STROKE_CUE_INTERVAL_MS));
   const [strokeCue, setStrokeCue] = useState(false);
   const strokeCueTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
+  const focused = useIsFocused();
+  // True while the camera is open over the feed: the feed says nothing behind it.
+  const covered = useRef(false);
 
   useEffect(() => () => clearTimeout(strokeCueTimer.current), []);
 
   const onAgentExit = (reason: EndReason, message: string) => {
-    prefix.current = message;
+    if (covered.current) narrator.speak(message);
+    else prefix.current = message;
     setMode('scroll');
     if (reason === 'signIn') router.push('/sign-in');
   };
@@ -73,6 +79,7 @@ export function MainScreen() {
   }, []);
 
   useEffect(() => {
+    if (!focused || covered.current) return;
     let cancelled = false;
     const show = (text: string) => {
       if (!cancelled) setNarration(text);
@@ -91,10 +98,11 @@ export function MainScreen() {
     }
     return () => {
       cancelled = true;
+      if (covered.current) return;
       postNarrator.stop();
       narrator.stop();
     };
-  }, [mode, post, status, narrator, postNarrator]);
+  }, [mode, post, status, narrator, postNarrator, focused]);
 
   useEffect(() => postNarrator.onScript(setNarration), [postNarrator]);
   useEffect(() => postNarrator.prefetch(state.posts.slice(state.index + 1)), [postNarrator, state.posts, state.index]);
@@ -123,6 +131,45 @@ export function MainScreen() {
     if (next === 'scroll') prefix.current = messages.agentAsleep;
     setMode(next);
   };
+
+  const agentLive = agentStatus === 'listening';
+  const latest = useRef({ agentLive, agent, switchMode, mode });
+  useEffect(() => {
+    latest.current = { agentLive, agent, switchMode, mode };
+  });
+
+  // The camera opens over the feed as its own screen. Leaving it, the feed reads the same post again; keeping a
+  // photo hands it to the voice agent's publishing flow, waking the agent if it is asleep.
+  useEffect(
+    () =>
+      registerCameraHost({
+        cover: () => {
+          covered.current = true;
+          postNarrator.stop();
+        },
+        agentLive: () => latest.current.agentLive,
+        say: (text) => latest.current.agentLive && latest.current.agent.say(text),
+        wakeAgent: () => latest.current.switchMode('agent'),
+        sleepAgent: () => latest.current.switchMode('scroll'),
+        keep: (photo) => {
+          setPendingPhoto(photo);
+          covered.current = false;
+          router.back();
+          const { agentLive: live, agent: current, switchMode: switchTo, mode: currentMode } = latest.current;
+          if (live) return current.notify(cameraMessages.photoReadyForModel, cameraMessages.photoReady);
+          prefix.current = '';
+          if (currentMode !== 'agent') switchTo('agent');
+        },
+        closed: () => {
+          covered.current = false;
+          const { agentLive: live, agent: current } = latest.current;
+          if (live) current.say(cameraMessages.backToFeed);
+          else prefix.current = cameraMessages.backToFeed;
+          router.back();
+        },
+      }),
+    [postNarrator],
+  );
 
   const onTapTop = () => (mode === 'scroll' ? step('previous') : tellInAgentMode(messages.gestures));
   const onTapBottom = () => (mode === 'scroll' ? step('next') : onAgentExit('signIn', 'Opening the sign-in screen.'));
@@ -155,6 +202,8 @@ export function MainScreen() {
         return mode === 'scroll' ? narrator.speak(messages.gestures) : tellInAgentMode(messages.gestures);
       case 'account':
         return mode === 'scroll' ? router.push('/sign-in') : onTapBottom();
+      case 'camera':
+        return void openCamera();
     }
     if (isNarrationAction(nativeEvent.actionName)) {
       const message = applyNarrationAction(nativeEvent.actionName, screenReader);

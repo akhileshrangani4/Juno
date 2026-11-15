@@ -15,6 +15,9 @@ export const UNDO_WINDOW_MS = 5000;
 
 export type DraftKind = 'post' | 'reply' | 'repost' | 'delete';
 
+// A photo attached to a new post, with the alt text other people's screen readers will speak.
+export type DraftImage = { uri: string; mimeType: string; alt: string };
+
 export type Draft = {
   id: string;
   kind: DraftKind;
@@ -22,6 +25,7 @@ export type Draft = {
   parts: string[];
   split: boolean;
   target: Post | null;
+  image?: DraftImage | null;
   readBackTurn: number | null;
   voided?: boolean;
 };
@@ -133,6 +137,11 @@ const VERBS: Record<DraftKind, { doing: string; question: string }> = {
 
 const asSentence = (text: string) => (/[.!?…]['")\]]*$/.test(text.trim()) ? text.trim() : `${text.trim()}.`);
 
+// The alt text is read back in full, because it is what other blind people will hear for this picture.
+function imageLine(image: DraftImage): string {
+  return image.alt.trim() ? `With the image description: ${asSentence(image.alt)}` : 'The image has no description yet. You can tell me what it should say.';
+}
+
 export function readBackOf(draft: Draft, now = new Date()): string {
   const { question } = VERBS[draft.kind];
   const body =
@@ -142,7 +151,8 @@ export function readBackOf(draft: Draft, now = new Date()): string {
   const target = draft.target;
   switch (draft.kind) {
     case 'post':
-      return `Posting to your followers: ${body} ${question}`;
+      if (draft.image && !draft.text) return `Posting a photo with no text to your followers. ${imageLine(draft.image)} ${question}`;
+      return draft.image ? `Posting to your followers: ${body} ${imageLine(draft.image)} ${question}` : `Posting to your followers: ${body} ${question}`;
     case 'reply':
       return `Replying to ${postName(target)}: ${body} ${question}`;
     case 'repost':
@@ -180,10 +190,24 @@ export class Publisher {
     return this.pending !== null || this.sending !== null;
   }
 
-  draftText(kind: 'post' | 'reply', text: string, target: Post | null, turn: number): DraftOutcome {
+  draftText(kind: 'post' | 'reply', text: string, target: Post | null, turn: number, image: DraftImage | null = null): DraftOutcome {
     const clean = text.trim();
-    if (!clean) return { ok: false, reason: 'empty' };
-    return this.check({ id: this.deps.newId(), kind, text: clean, parts: [clean], split: false, target, readBackTurn: null }, turn);
+    if (!clean && !image) return { ok: false, reason: 'empty' };
+    return this.check({ id: this.deps.newId(), kind, text: clean, parts: [clean], split: false, target, image, readBackTurn: null }, turn);
+  }
+
+  // Changes the attached image's description: the whole of it (find null), or one phrase in it.
+  editImageDescription(find: string | null, replace: string, turn: number): DraftOutcome {
+    const draft = this.draft;
+    if (!draft?.image) return { ok: false, reason: 'noDraft' };
+    const alt = draft.image.alt;
+    let next = replace.trim();
+    if (find !== null) {
+      const at = alt.toLowerCase().indexOf(find.trim().toLowerCase());
+      if (!find.trim() || at < 0) return { ok: false, reason: 'notFound' };
+      next = `${alt.slice(0, at)}${replace.trim()}${alt.slice(at + find.trim().length)}`.replace(/\s+/g, ' ').trim();
+    }
+    return this.check({ ...draft, id: this.deps.newId(), image: { ...draft.image, alt: next }, readBackTurn: null }, turn);
   }
 
   draftAction(kind: 'repost' | 'delete', target: Post, turn: number): DraftOutcome {
@@ -196,7 +220,7 @@ export class Publisher {
     const at = draft.text.toLowerCase().indexOf(find.trim().toLowerCase());
     if (!find.trim() || at < 0) return { ok: false, reason: 'notFound' };
     const text = `${draft.text.slice(0, at)}${replace.trim()}${draft.text.slice(at + find.trim().length)}`.replace(/\s+/g, ' ').trim();
-    if (!text) return { ok: false, reason: 'empty' };
+    if (!text && !draft.image) return { ok: false, reason: 'empty' };
     return this.check({ ...draft, id: this.deps.newId(), text, parts: draft.split ? splitIntoParts(text) : [text], readBackTurn: null }, turn);
   }
 

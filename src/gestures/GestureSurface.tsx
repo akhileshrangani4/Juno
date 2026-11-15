@@ -1,9 +1,11 @@
 import { createContext, use, useMemo, useRef, type ReactNode } from 'react';
 import { View, type ViewProps } from 'react-native';
-import { GestureDetector, useCompetingGestures, usePanGesture, useTapGesture, type PanGesture } from 'react-native-gesture-handler';
+import { GestureDetector, useCompetingGestures, useLongPressGesture, usePanGesture, useTapGesture, type PanGesture } from 'react-native-gesture-handler';
 
 import type { CircleDirection, Point } from './circle';
 import { classifyStroke } from './stroke';
+
+export const HOLD_MS = 600;
 
 type Props = ViewProps & {
   tapsEnabled: boolean;
@@ -11,6 +13,7 @@ type Props = ViewProps & {
   onTapBottom(): void;
   onCircle(direction: CircleDirection): void;
   onUnrecognizedStroke?: (points: Point[]) => void;
+  onHold?: () => void;
   children: ReactNode;
 };
 
@@ -22,7 +25,7 @@ export function useStrokeGesture(): StrokeGesture | null {
   return use(StrokeGestureContext);
 }
 
-export function GestureSurface({ tapsEnabled, onTapTop, onTapBottom, onCircle, onUnrecognizedStroke, children, ...viewProps }: Props) {
+export function GestureSurface({ tapsEnabled, onTapTop, onTapBottom, onCircle, onUnrecognizedStroke, onHold, children, ...viewProps }: Props) {
   const stroke = useRef<Point[]>([]);
   const scrolled = useRef(false);
   const height = useRef(0);
@@ -45,6 +48,15 @@ export function GestureSurface({ tapsEnabled, onTapTop, onTapBottom, onCircle, o
       if (outcome === 'unrecognized') onUnrecognizedStroke?.(stroke.current);
       else if (outcome !== 'scroll') onCircle(outcome);
     },
+  });
+
+  const hold = useLongPressGesture({
+    runOnJS: true,
+    disableReanimated: true,
+    enabled: !!onHold,
+    minDuration: HOLD_MS,
+    maxDistance: 12,
+    onActivate: () => onHold?.(),
   });
 
   const tap = useTapGesture({
@@ -70,7 +82,7 @@ export function GestureSurface({ tapsEnabled, onTapTop, onTapBottom, onCircle, o
   );
 
   return (
-    <GestureDetector gesture={useCompetingGestures(pan, tap)}>
+    <GestureDetector gesture={useCompetingGestures(pan, hold, tap)}>
       <View
         {...viewProps}
         collapsable={false}

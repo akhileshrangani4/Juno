@@ -161,6 +161,17 @@ describe('OAuth scopes', () => {
     expect(oauthScopes('https://other-deployment-1.convex.site').at(-1)).toBe(`rpc:${MEMORY_METHOD}?aud=did:web:other-deployment-1.convex.site%23juno_memory`);
   });
 
+  it('grant a photo post from the camera: the upload with its alt text, then the post that embeds it', async () => {
+    const { provider, requests } = await signedIn();
+    requests.length = 0;
+    globalThis.fetch = jest.fn(async () => ({ arrayBuffer: async () => new ArrayBuffer(4) })) as unknown as typeof fetch;
+    const image = await provider.uploadImage({ uri: 'file:///upload.jpg', mimeType: 'image/jpeg' }, 'A red mug on a desk.');
+    await provider.createPost({ text: '', images: [image] });
+    expect(requests.map(scopeFor)).toEqual(['blob:image/jpeg', 'repo:app.bsky.feed.post?action=create']);
+    expect(requests.map(scopeFor).filter((scope) => !granted(scope))).toEqual([]);
+    expect(requests[1].body.record.embed.images[0].alt).toBe('A red mug on a desk.');
+  });
+
   it('ask for nothing beyond those calls and the post thread read that comments will use', () => {
     expect(OAUTH_SCOPES).toEqual([
       'atproto',

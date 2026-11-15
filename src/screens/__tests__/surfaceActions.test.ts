@@ -13,8 +13,8 @@ describe('surfaceActions', () => {
   });
 
   it('lists the scroll actions and the agent actions', () => {
-    expect(labels('scroll', 'ios')).toEqual(['Next post', 'Previous post', 'Read this post again', 'Wake the agent']);
-    expect(labels('agent', 'ios')).toEqual(['Back to scrolling', 'Hear the instructions', 'Account settings']);
+    expect(labels('scroll', 'ios')).toEqual(['Next post', 'Previous post', 'Read this post again', 'Wake the agent', 'Open the camera']);
+    expect(labels('agent', 'ios')).toEqual(['Back to scrolling', 'Hear the instructions', 'Account settings', 'Open the camera']);
   });
 
   it('adds the standard adjustable actions on Android only', () => {

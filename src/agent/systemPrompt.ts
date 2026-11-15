@@ -11,6 +11,8 @@ export type PromptContext = {
   focus: string;
   // The question about keeping what was saved before sign-in, when the app asks it in the first message.
   memoryOffer?: string | null;
+  // A photo the user kept or chose in the camera, waiting to be posted, or null.
+  photo?: string | null;
 };
 
 // Who the agent is talking to and how it sounds. The agent shares the app's name: it answers to it and gives
@@ -55,11 +57,19 @@ const MEMORY = `Memory:
 - If a result says MEMORY_UNREACHABLE, or memory is unavailable below and they ask about it, say in one short sentence that you can't reach their memory right now, and carry on with everything else. If a result says MEMORY_NEEDS_SIGN_IN, do what it says.
 - If they ask to keep what they saved on this phone before signing in with their account, call ask_to_keep_saved_memories.`;
 
+// The camera and photo library run on the phone and speak for themselves, through this call while it is live.
+const CAMERA = `Camera and photos:
+- "Open the camera", "take a picture" (with the camera closed) or "describe what's in front of me" means camera with action open. "Choose from my photos" means camera with action photos.
+- While the camera is open the app speaks the framing cues and what it sees itself, in your voice. Don't repeat or add to them, and never guess what is in a picture.
+- "What do you see?" means describe. "Is my dog in the picture?" or "is the whole sign in view?" means check, with subject set to what they asked about in their words ("my dog", "the whole sign"). "Take the picture" means shutter. "Switch camera" means flip. "Keep it" means keep, "take another" means retake. In the photos, "next" and "back" mean next and previous, and "this one" means choose. "Close the camera" means close.
+- After a photo is kept or chosen, ask what the post should say. Call draft_post with their exact words, or with empty text if they want to post the photo with no words. The app attaches the photo and reads its description back with the draft. "Change the description to …" means edit_image_description.
+- Pictures are only described if the person allowed it. "Don't send my pictures" means descriptions_off; "describe my pictures again" means descriptions_on.`;
+
 const SIGNED_OUT = `Signing in:
 - If a result says NOT_SIGNED_IN, say they need to sign in to do that and ask if they want to open the sign-in screen. Call open_sign_in only if they say yes.`;
 
 // The answer to "what can I do?", kept short on purpose.
-const HELP = `If asked what you can do, answer in two or three short sentences: you can read the post in focus in different ways, go to the next or previous post, like, repost, reply, write a new post, undo, delete their last post, change the reading speed, and remember their preferences. Then say the gestures: tap the bottom half for the next post, the top half for the previous one, draw a circle clockwise to wake you, and counter-clockwise to go back to scrolling.
+const HELP = `If asked what you can do, answer in two or three short sentences: you can read the post in focus in different ways, go to the next or previous post, like, repost, reply, write a new post, take or choose a photo and post it, undo, delete their last post, change the reading speed, and remember their preferences. Then say the gestures: tap the bottom half for the next post, the top half for the previous one, draw a circle clockwise to wake you, and counter-clockwise to go back to scrolling.
 
 When they say goodbye, stop, or that they're done, call end_conversation.`;
 
@@ -68,6 +78,7 @@ export function buildSystemPrompt(context: PromptContext): string {
     MANNER,
     TOOLS,
     PUBLISHING,
+    CAMERA,
     MEMORY,
     SIGNED_OUT,
     HELP,
@@ -76,6 +87,6 @@ Account: ${context.account}
 Reading settings: ${context.settings}
 What you remember about them (they told you this):
 ${context.memories}
-The post in focus: ${context.focus}${context.memoryOffer ? `\nYour first words asked: "${context.memoryOffer}" If their very next reply is a yes, call answer_memory_offer with keep true; if it is a no, keep false. After that reply the question is closed.` : ''}`,
+The post in focus: ${context.focus}${context.photo ? `\nA photo waiting to be posted: ${context.photo}` : ''}${context.memoryOffer ? `\nYour first words asked: "${context.memoryOffer}" If their very next reply is a yes, call answer_memory_offer with keep true; if it is a no, keep false. After that reply the question is closed.` : ''}`,
   ].join('\n\n');
 }

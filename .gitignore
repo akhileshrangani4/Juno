@@ -46,4 +46,5 @@ example
 # voice agent eval output
 agent-eval-transcript.md
 bluesky-eval.md
+look-eval.md
 .eval/
