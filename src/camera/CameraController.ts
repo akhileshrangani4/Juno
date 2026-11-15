@@ -56,6 +56,10 @@ export type CameraState = {
   // The last description, photo caption or library line.
   detail: string;
   descriptionsOn: boolean;
+  // The library photo on screen, while the phase is library.
+  libraryPhotoId: string | null;
+  // Whether the voice agent is in a call, read again at every change.
+  inCall: boolean;
 };
 
 export const messages = {
@@ -95,7 +99,7 @@ const devLog = process.env.EXPO_PUBLIC_DEV_FRAME_SOURCE === '1';
 type Question = { subject: string; until: number; lastSaid: string | null };
 
 export class CameraController {
-  private state: CameraState = { phase: 'starting', facing: 'back', cue: '', detail: '', descriptionsOn: false };
+  private state: CameraState = { phase: 'starting', facing: 'back', cue: '', detail: '', descriptionsOn: false, libraryPhotoId: null, inCall: false };
   private readonly listeners = new Set<(state: CameraState) => void>();
   private frames: FrameSource | null = null;
   private guidance: GuidanceState = initialGuidance();
@@ -153,10 +157,6 @@ export class CameraController {
     this.deps.voice.stop();
     this.stop();
     this.deps.onClose();
-  }
-
-  currentLibraryPhoto() {
-    return this.state.phase === 'library' ? this.deps.library.current() : null;
   }
 
   // The camera view reported it can't run (no camera on this phone, or access was turned off meanwhile).
@@ -419,12 +419,12 @@ export class CameraController {
     if (library.current() !== photo || this.state.phase !== 'library') return;
     if (cached || !this.state.descriptionsOn) {
       const line = cached ? `${when}. ${upperFirst(cached.description)}` : `${when}.`;
-      this.set({ detail: line, cue: `Photo ${position + 1} of ${library.count}` });
+      this.set({ detail: line, cue: `Photo ${position + 1} of ${library.count}`, libraryPhotoId: photo.id });
       void library.describeCurrent();
       if (devLog) this.deps.log('library photo', { position: position + 1, line, cached: !!cached });
       return this.say(line, 'status');
     }
-    this.set({ detail: `${when}.`, cue: `Photo ${position + 1} of ${library.count}` });
+    this.set({ detail: `${when}.`, cue: `Photo ${position + 1} of ${library.count}`, libraryPhotoId: photo.id });
     this.say(`${when}.`, 'status');
     const started = this.deps.now();
     const described = await library.describeCurrent();
@@ -541,7 +541,8 @@ export class CameraController {
   }
 
   private set(patch: Partial<CameraState>): void {
-    this.state = { ...this.state, ...patch };
+    const next = { ...this.state, ...patch, inCall: this.deps.voice.inCall() };
+    this.state = next.phase === 'library' ? next : { ...next, libraryPhotoId: null };
     this.listeners.forEach((listener) => listener(this.state));
   }
 }

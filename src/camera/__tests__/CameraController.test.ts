@@ -301,6 +301,17 @@ describe('the photo library', () => {
     expect(env.controller.snapshot.phase).toBe('library');
   });
 
+  it('names the photo on screen in its state, so the screen shows the photo being read', async () => {
+    const env = setup();
+    await settle(env, env.controller.start({ library: true }));
+    expect(env.controller.snapshot.libraryPhotoId).toBe('a');
+    env.controller.tapBottom();
+    await settle(env, Promise.resolve());
+    expect(env.controller.snapshot.libraryPhotoId).toBe('b');
+    env.controller.close();
+    expect(env.controller.snapshot.libraryPhotoId).toBeNull();
+  });
+
   it('starts a description that comes back in lower case with a capital, after the date', async () => {
     const env = setup();
     env.look.describe.mockImplementation(async () => ({ description: 'a broad waterfall in a misty gorge.', altText: '', visibleText: [], latencyMs: 900, costUsd: 0.0002 }));

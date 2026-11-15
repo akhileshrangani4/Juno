@@ -133,14 +133,12 @@ export function CameraScreen({ start }: { start: 'camera' | 'library' }) {
   const camera = useRef<CameraViewHandle>(null);
   const devFrame = useDevFrames(controller, state.phase);
   const useDev = devFramesEnabled();
-  const inCall = cameraHost()?.agentLive() ?? false;
-  const libraryId = state.phase === 'library' ? (controller.currentLibraryPhoto()?.id ?? null) : null;
+  const { inCall, libraryPhotoId: libraryId } = state;
   const [preview, setPreview] = useState<{ id: string; uri: string } | null>(null);
 
   useEffect(() => {
     if (!libraryId) return;
     let current = true;
-    logLine(`[camera] library preview wanted ${libraryId}`);
     void mediaLibrary
       .file(libraryId)
       .catch((error: unknown) => {
