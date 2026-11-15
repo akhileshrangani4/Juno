@@ -1,8 +1,9 @@
-import { createContext, use, useRef, type ReactNode } from 'react';
+import { createContext, use, useMemo, useRef, type ReactNode } from 'react';
 import { View, type ViewProps } from 'react-native';
 import { GestureDetector, useCompetingGestures, usePanGesture, useTapGesture, type PanGesture } from 'react-native-gesture-handler';
 
-import { recognizeCircle, type CircleDirection, type Point } from './circle';
+import type { CircleDirection, Point } from './circle';
+import { classifyStroke } from './stroke';
 
 type Props = ViewProps & {
   tapsEnabled: boolean;
@@ -13,14 +14,17 @@ type Props = ViewProps & {
   children: ReactNode;
 };
 
-const StrokeGestureContext = createContext<PanGesture | null>(null);
+type StrokeGesture = { gesture: PanGesture; onScroll(): void };
 
-export function useStrokeGesture(): PanGesture | undefined {
-  return use(StrokeGestureContext) ?? undefined;
+const StrokeGestureContext = createContext<StrokeGesture | null>(null);
+
+export function useStrokeGesture(): StrokeGesture | null {
+  return use(StrokeGestureContext);
 }
 
 export function GestureSurface({ tapsEnabled, onTapTop, onTapBottom, onCircle, onUnrecognizedStroke, children, ...viewProps }: Props) {
   const stroke = useRef<Point[]>([]);
+  const scrolled = useRef(false);
   const height = useRef(0);
 
   const pan = usePanGesture({
@@ -30,15 +34,16 @@ export function GestureSurface({ tapsEnabled, onTapTop, onTapBottom, onCircle, o
     maxPointers: 1,
     onBegin: (event) => {
       stroke.current = [{ x: event.x, y: event.y }];
+      scrolled.current = false;
     },
     onUpdate: (event) => {
       stroke.current.push({ x: event.x, y: event.y });
     },
     onDeactivate: (event) => {
       if (event.canceled) return;
-      const direction = recognizeCircle(stroke.current);
-      if (direction) onCircle(direction);
-      else onUnrecognizedStroke?.(stroke.current);
+      const outcome = classifyStroke(stroke.current, scrolled.current);
+      if (outcome === 'unrecognized') onUnrecognizedStroke?.(stroke.current);
+      else if (outcome !== 'scroll') onCircle(outcome);
     },
   });
 
@@ -54,6 +59,16 @@ export function GestureSurface({ tapsEnabled, onTapTop, onTapBottom, onCircle, o
     },
   });
 
+  const strokeGesture = useMemo(
+    () => ({
+      gesture: pan,
+      onScroll: () => {
+        scrolled.current = true;
+      },
+    }),
+    [pan],
+  );
+
   return (
     <GestureDetector gesture={useCompetingGestures(pan, tap)}>
       <View
@@ -62,7 +77,7 @@ export function GestureSurface({ tapsEnabled, onTapTop, onTapBottom, onCircle, o
         onLayout={(event) => {
           height.current = event.nativeEvent.layout.height;
         }}>
-        <StrokeGestureContext value={pan}>{children}</StrokeGestureContext>
+        <StrokeGestureContext value={strokeGesture}>{children}</StrokeGestureContext>
       </View>
     </GestureDetector>
   );

@@ -35,7 +35,16 @@ export function PostCard({ post, position }: { post: Post; position: string }) {
       <Text style={styles.meta} numberOfLines={1} maxFontSizeMultiplier={type.maxScale}>
         @{post.author.handle} · {formatAge(post.createdAt, new Date())}
       </Text>
-      <ScrollView key={post.uri} simultaneousWith={stroke} style={styles.scroll} contentContainerStyle={styles.scrollContent} indicatorStyle="white" persistentScrollbar>
+      <ScrollView
+        key={post.uri}
+        simultaneousWith={stroke?.gesture}
+        onScroll={stroke?.onScroll}
+        scrollEventThrottle={16}
+        bounces={false}
+        style={styles.scroll}
+        contentContainerStyle={styles.scrollContent}
+        indicatorStyle="white"
+        persistentScrollbar>
         {post.text ? (
           <Text style={styles.body} maxFontSizeMultiplier={type.maxScale}>
             {post.text}

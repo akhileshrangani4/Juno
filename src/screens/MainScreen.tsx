@@ -16,6 +16,7 @@ import { colors, type } from '@/theme';
 
 import { PostCard } from './PostCard';
 import { surfaceActions, type Mode, type SurfaceActionName } from './surfaceActions';
+import { playUnrecognizedCue } from './unrecognizedCue';
 
 const STROKE_CUE_INTERVAL_MS = 2500;
 
@@ -36,7 +37,7 @@ export function MainScreen() {
 
   useEffect(() => () => clearTimeout(strokeCueTimer.current), []);
 
-  const status = post ? null : state.error ? messages.feedError : state.exhausted ? messages.empty : messages.loadingFirst;
+  const status = post ? null : state.error ? messages.feedError : state.exhausted ? (state.stalled ? messages.unavailable : messages.empty) : messages.loadingFirst;
 
   useEffect(() => {
     mountedFeeds += 1;
@@ -48,15 +49,19 @@ export function MainScreen() {
 
   useEffect(() => {
     let cancelled = false;
+    const show = (text: string) => {
+      if (!cancelled) setNarration(text);
+    };
     const say = (text: string) => {
       if (cancelled) return;
-      setNarration(text);
+      show(text);
       narrator.speak(`${prefix.current} ${text}`.trim());
       prefix.current = '';
     };
     if (mode === 'agent') say(messages.agentAwake);
     else if (!post) say(status ?? '');
     else if (post.media.some((media) => (media.kind === 'images' && media.images.some((image) => !image.alt)) || (media.kind === 'video' && !media.alt))) {
+      show(buildPostNarration(post, new Date()));
       fetchCachedDescription(post.uri).then((description) => say(buildPostNarration(post, new Date(), description)));
     } else say(buildPostNarration(post, new Date()));
     return () => {
@@ -69,7 +74,7 @@ export function MainScreen() {
     const outcome = go(direction);
     if (outcome === 'moved') return haptic(direction);
     haptic('edge');
-    if (!state.error) narrator.speak(outcome === 'atStart' ? messages.atStart : outcome === 'atEnd' ? messages.atEnd : messages.loading);
+    if (!state.error) narrator.speak(outcome === 'atStart' ? messages.atStart : outcome === 'atEnd' ? messages.atEnd : outcome === 'unavailable' ? messages.noMore : messages.loading);
   };
 
   const switchMode = (next: Mode) => {
@@ -86,13 +91,16 @@ export function MainScreen() {
   const onTapTop = () => (mode === 'scroll' ? step('previous') : narrator.speak(messages.gestures));
   const onTapBottom = () => (mode === 'scroll' ? step('next') : router.push('/sign-in'));
   const onCircle = (direction: CircleDirection) => switchMode(direction === 'clockwise' ? 'agent' : 'scroll');
-  const onUnrecognizedStroke = () => {
-    haptic('unrecognized');
-    setStrokeCue(true);
-    clearTimeout(strokeCueTimer.current);
-    strokeCueTimer.current = setTimeout(() => setStrokeCue(false), STROKE_CUE_INTERVAL_MS);
-    if (allowStrokeCue()) narrator.speak(messages.unrecognized);
-  };
+  const onUnrecognizedStroke = () =>
+    playUnrecognizedCue({
+      narrator,
+      allowSpeech: allowStrokeCue,
+      showHint: () => {
+        setStrokeCue(true);
+        clearTimeout(strokeCueTimer.current);
+        strokeCueTimer.current = setTimeout(() => setStrokeCue(false), STROKE_CUE_INTERVAL_MS);
+      },
+    });
 
   const onAccessibilityAction = ({ nativeEvent }: AccessibilityActionEvent) => {
     switch (nativeEvent.actionName as SurfaceActionName) {

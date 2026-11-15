@@ -23,9 +23,9 @@ export default function SignIn() {
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    if (!screenReader && !account) narrator.speak(SPOKEN_INTRO);
+    if (!account) narrator.speak(screenReader ? `Sign in to ${provider.name}.` : SPOKEN_INTRO);
     return () => narrator.stop();
-  }, [narrator, screenReader, account]);
+  }, [narrator, screenReader, account, provider]);
 
   const fail = (message: string) => {
     haptic('edge');

@@ -23,7 +23,7 @@ Users can turn direct touch off per app in the VoiceOver rotor. For them, and as
 | Double tap (`onAccessibilityTap`) | Next post | Account settings |
 | Actions rotor (swipe up or down to pick, double tap to run) | Next post, Previous post, Read this post again, Wake the agent | Back to scrolling, Hear the instructions, Account settings |
 | Two-finger double tap (magic tap) | Wake the agent | Back to scrolling |
-| Two-finger scrub (escape) | - | Back to scrolling |
+| Two-finger scrub (escape) | Warning buzz and "You are already scrolling." | Back to scrolling |
 
 The rotor lists only these human-labeled actions (`surfaceActions` in `src/screens/surfaceActions.ts`, unit tested). On iOS the element is not `adjustable`, so a swipe up or down moves through the rotor's actions, not through posts.
 
@@ -46,17 +46,22 @@ Known gap: screen reader announcements cannot be stopped mid-sentence by the app
 | Next post | light tap | the post |
 | Previous post | rigid tap | the post |
 | First post, end of feed, still loading | warning buzz | says which |
+| Ten pages in a row hidden by the content filter | warning buzz | "No more posts could be shown right now." (not "end of the feed") |
 | Agent wakes | three rising taps | "Agent is awake..." |
 | Agent sleeps | heavy then soft tap | "Agent is asleep. Back to scrolling." then the post |
 | Circle in the mode you are already in | warning buzz | says so |
-| A stroke that is neither a tap nor a circle | two quick ticks | "Gesture not recognized.", at most once every 2.5 seconds |
-| Waiting at startup | none | "Loading" after 0.7 seconds; the screen is a labeled progress element |
+| A stroke that is neither a tap nor a circle | two quick ticks | "Gesture not recognized.", at most once every 2.5 seconds, and never while a post or message is being read (the ticks and the on-screen hint still come at once) |
+| A drag that scrolled a long post | none | none |
+| Waiting at startup | none | "Loading" once, after 0.7 seconds; the screen is a labeled progress element |
+| Signed in, but Bluesky is slow to answer | none | "Still connecting to Bluesky" after 4 seconds; the feed opens when it answers, or the sign-in screen if the saved session is no longer valid |
 
 ## Circle recognition
 
 `src/gestures/circle.ts` is pure math with unit tests. A stroke is resampled to evenly spaced points, then the signed angle swept around the stroke's centroid is added up. A stroke counts as a circle when it sweeps at least 300 degrees, at least 85 percent of the turning is in one direction, and it is at least 60 points across. That accepts unclosed, overshot, squashed, shaky and drifting circles, and rejects lines, zigzags, U shapes and figure eights. Screen coordinates have y pointing down, so a positive sweep is clockwise.
 
 A pan gesture collects the stroke and a tap gesture handles the halves; they race, so a finger that moves more than 12 points is a stroke and never a tap.
+
+A long post scrolls inside the card at the same time as the pan collects the stroke, so a circle drawn over it is still recognized. When a stroke is not a circle, `classifyStroke` (`src/gestures/stroke.ts`, unit tested) decides whether it was a scroll: the card reported a scroll during the stroke and the stroke stayed within 30 degrees of vertical. A scroll gets no cue. A horizontal or diagonal stroke over the same post still gets "Gesture not recognized", even if it nudged the scroll. The card does not bounce at its ends, so a vertical drag on a post that fits, or one already at its end, scrolls nothing and still gets the cue.
 
 ## Onboarding
 
@@ -71,7 +76,7 @@ Black background, white 30 point bold text, a thick yellow border around the foc
 1. VoiceOver on: do taps on each half and both circles work without double tapping? (Direct touch.)
 2. VoiceOver on: does the app's announcement cut off VoiceOver's reading of the hint, or the other way round?
 3. VoiceOver direct touch disabled in the rotor: double tap, the Actions rotor (do the names read naturally?), Read this post again, magic tap, scrub.
-4. A circle drawn over a long post that scrolls: does the post scroll a little and the circle still switch modes?
+4. A circle drawn over a long post that scrolls: does the post scroll a little and the circle still switch modes? Does a plain vertical scroll stay silent and leave the narration playing?
 5. Later, when Android is in scope: TalkBack swipe up and down, double tap, actions menu, two-finger circle.
 6. Haptic patterns: are the six patterns distinguishable?
 7. Speech with the ringer switch on silent (iOS silences expo-speech in silent mode unless an audio session is configured; that belongs with the Vapi audio work).

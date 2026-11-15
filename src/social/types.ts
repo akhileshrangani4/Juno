@@ -36,6 +36,7 @@ export type NewPost = { text: string; images?: UploadedImage[] };
 export interface SocialProvider {
   readonly id: string;
   readonly name: string;
+  hasStoredSession(): Promise<boolean>;
   restoreSession(): Promise<SocialAccount | null>;
   signIn(identifier: string, password: string): Promise<SocialAccount>;
   signOut(): Promise<void>;

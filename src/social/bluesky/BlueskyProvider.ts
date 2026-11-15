@@ -9,7 +9,7 @@ import { isHiddenByModeration } from './moderation';
 const SESSION_KEY = 'bluesky.session';
 const DEFAULT_SERVICE = 'https://bsky.social';
 const PUBLIC_APPVIEW = 'https://public.api.bsky.app';
-const MAX_FILTERED_PAGES = 3;
+const MAX_FILTERED_PAGES = 10;
 const DEFAULT_DEMO_FEED = 'at://did:plc:z72i7hdynmk6r22z27h6tvur/app.bsky.feed.generator/whats-hot';
 
 type Options = { store: KeyValueStore; service?: string; demoFeed?: string };
@@ -32,6 +32,10 @@ export class BlueskyProvider implements SocialProvider {
         void (session ? store.set(SESSION_KEY, JSON.stringify(session)) : store.remove(SESSION_KEY));
       },
     });
+  }
+
+  async hasStoredSession(): Promise<boolean> {
+    return (await this.store.get(SESSION_KEY)) !== null;
   }
 
   async restoreSession(): Promise<SocialAccount | null> {

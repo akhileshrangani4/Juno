@@ -81,7 +81,9 @@ describe('BlueskyProvider', () => {
   it('restores a stored session and survives a missing or expired one', async () => {
     const { provider, store } = setup();
     expect(await provider.restoreSession()).toBeNull();
+    expect(await provider.hasStoredSession()).toBe(false);
     await store.set('bluesky.session', JSON.stringify({ did: 'did:plc:me', handle: 'me.bsky.social', accessJwt: 'a', refreshJwt: 'r', active: true }));
+    expect(await provider.hasStoredSession()).toBe(true);
     expect(await provider.restoreSession()).toEqual({ id: 'did:plc:me', handle: 'me.bsky.social' });
     const expired = setup();
     await expired.store.set('bluesky.session', JSON.stringify({ did: 'd', handle: 'h', accessJwt: 'a', refreshJwt: 'expired', active: true }));
@@ -122,7 +124,6 @@ describe('BlueskyProvider', () => {
   });
 });
 
-
 describe('BlueskyProvider content filter', () => {
   const labeled = (n: number, val: string) => {
     const item = feedItem(n);
@@ -149,5 +150,18 @@ describe('BlueskyProvider content filter', () => {
       .mockResolvedValueOnce({ data: { feed: [feedItem(2)], cursor: 'c2' } });
     expect(await provider.getTimeline()).toMatchObject({ posts: [{ uri: 'at://post/2' }], cursor: 'c2' });
     expect(publicAgent.app.bsky.feed.getFeed).toHaveBeenLastCalledWith(expect.objectContaining({ cursor: 'c1' }));
+  });
+
+  it('keeps reading past fully filtered pages, up to ten, before giving up without ending the feed', async () => {
+    const { provider, publicAgent } = setup();
+    const filtered = (n: number) => ({ data: { feed: [labeled(n, 'porn')], cursor: `c${n}` } });
+    for (let n = 1; n <= 9; n += 1) publicAgent.app.bsky.feed.getFeed.mockResolvedValueOnce(filtered(n));
+    publicAgent.app.bsky.feed.getFeed.mockResolvedValueOnce({ data: { feed: [feedItem(10)], cursor: 'c10' } });
+    expect(await provider.getTimeline()).toMatchObject({ posts: [{ uri: 'at://post/10' }], cursor: 'c10' });
+
+    publicAgent.app.bsky.feed.getFeed.mockClear();
+    for (let n = 11; n <= 30; n += 1) publicAgent.app.bsky.feed.getFeed.mockResolvedValueOnce(filtered(n));
+    expect(await provider.getTimeline({ cursor: 'c10' })).toEqual({ posts: [], cursor: 'c20' });
+    expect(publicAgent.app.bsky.feed.getFeed).toHaveBeenCalledTimes(10);
   });
 });

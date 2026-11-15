@@ -8,9 +8,9 @@ export class ScreenReaderNarrator implements Narrator {
 
   constructor() {
     AccessibilityInfo.addEventListener('announcementFinished', ({ announcement, success }) => {
-      if (!success || announcement !== this.current) return;
+      if (announcement !== this.current) return;
       this.current = null;
-      this.listeners.forEach((listener) => listener());
+      if (success) this.listeners.forEach((listener) => listener());
     });
   }
 
@@ -21,6 +21,10 @@ export class ScreenReaderNarrator implements Narrator {
 
   stop(): void {
     this.current = null;
+  }
+
+  speaking(): boolean {
+    return this.current !== null;
   }
 
   onDone(listener: () => void): () => void {

@@ -95,5 +95,7 @@ export const messages = {
   atEnd: 'You have reached the end of the feed.',
   loading: 'Loading more posts.',
   empty: 'There are no posts to read right now.',
+  unavailable: 'No posts could be shown right now.',
+  noMore: 'No more posts could be shown right now.',
   feedError: 'Could not load posts. Tap the bottom half of the screen to try again.',
 };

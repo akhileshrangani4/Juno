@@ -6,23 +6,19 @@ import { colors, type } from '@/theme';
 
 const ANNOUNCE_AFTER_MS = 700;
 
+const announced = new Set<string>();
+
 export function LoadingScreen({ label = 'Loading' }: { label?: string }) {
   useEffect(() => {
-    let spoke = false;
+    if (announced.has(label)) return;
     const timer = setTimeout(() => {
+      announced.add(label);
       AccessibilityInfo.isScreenReaderEnabled().then(
-        (screenReader) => {
-          if (screenReader) return AccessibilityInfo.announceForAccessibility(label);
-          spoke = true;
-          Speech.speak(label);
-        },
+        (screenReader) => (screenReader ? AccessibilityInfo.announceForAccessibility(label) : Speech.speak(label)),
         () => undefined,
       );
     }, ANNOUNCE_AFTER_MS);
-    return () => {
-      clearTimeout(timer);
-      if (spoke) void Speech.stop();
-    };
+    return () => clearTimeout(timer);
   }, [label]);
 
   return (
