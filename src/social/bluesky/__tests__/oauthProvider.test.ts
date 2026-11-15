@@ -61,14 +61,16 @@ function setup(store = trackingStore()) {
     identityResolver: { resolve: jest.fn(async () => ({ did: DID, handle: 'maya.bsky.social' })) },
   };
   const openAuthSession = jest.fn(async () => ({ type: 'success', url: `${REDIRECT}?code=c&state=s&iss=https%3A%2F%2Fbsky.social` }));
+  const factoryStores: KeyValueStore[] = [];
   const provider = new BlueskyProvider({
     store,
     oauth: (options) => {
-      onSessionDeleted = options.onSessionDeleted;
+      factoryStores.push(options.store);
+      if (options.store === store) onSessionDeleted = options.onSessionDeleted;
       return { client: client as unknown as BlueskyOAuth['client'], redirectUri: REDIRECT, openAuthSession };
     },
   });
-  return { provider, store, client, openAuthSession, session, requests, deleteSession: (sub: string) => onSessionDeleted(sub) };
+  return { provider, store, client, openAuthSession, session, requests, factoryStores, deleteSession: (sub: string) => onSessionDeleted(sub) };
 }
 
 describe('BlueskyProvider with OAuth', () => {
@@ -211,14 +213,39 @@ describe('BlueskyProvider with OAuth', () => {
     expect(expired).not.toHaveBeenCalled();
   });
 
-  it('signs out by revoking the session and removing every stored token and key, even offline', async () => {
-    const { provider, store, client } = setup();
+  it('signs out by removing every stored token and key first, then revoking in the background', async () => {
+    const { provider, store, client, factoryStores } = setup();
     await provider.signIn('maya.bsky.social');
-    await store.set('bluesky.oauth.session', '{"sub":"did","dpopJwk":{},"tokenSet":{}}');
+    const saved = '{"sub":"did","dpopJwk":{},"tokenSet":{}}';
+    await store.set('bluesky.oauth.session', saved);
     client.revoke.mockRejectedValueOnce(new NetworkError('down'));
     await provider.signOut();
-    expect(client.revoke).toHaveBeenCalledWith(DID);
     expect(store.keys()).toEqual([]);
+    await provider.revoking;
+    expect(client.revoke).toHaveBeenCalledWith(DID);
+    expect(await factoryStores.at(-1)!.get('bluesky.oauth.session')).toBe(saved);
     expect(await provider.restoreSession()).toEqual({ status: 'none' });
+  });
+
+  it('signs out at once when the network never answers, and gives up on the revoke after five seconds', async () => {
+    jest.useFakeTimers();
+    try {
+      const { provider, store, client } = setup();
+      await provider.signIn('maya.bsky.social');
+      await store.set('bluesky.oauth.session', '{"sub":"did","dpopJwk":{},"tokenSet":{}}');
+      client.revoke.mockImplementationOnce(() => new Promise(() => undefined));
+      await provider.signOut();
+      expect(store.keys()).toEqual([]);
+      let settled = false;
+      void provider.revoking.then(() => (settled = true));
+      await jest.advanceTimersByTimeAsync(4900);
+      expect(client.revoke).toHaveBeenCalledWith(DID);
+      expect(settled).toBe(false);
+      await jest.advanceTimersByTimeAsync(200);
+      expect(settled).toBe(true);
+      expect(await provider.signIn('maya.bsky.social')).toMatchObject({ status: 'success' });
+    } finally {
+      jest.useRealTimers();
+    }
   });
 });

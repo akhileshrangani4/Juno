@@ -21,6 +21,7 @@ export default function SignInScreen() {
   const [handle, setHandle] = useState(expiredAccount?.handle ?? '');
   const [notice, setNotice] = useState(expiredAccount ? authMessages.expired : '');
   const [createStatus, setCreateStatus] = useState({ message: authMessages.createAccount, error: false, busy: false });
+  const [signingOut, setSigningOut] = useState(false);
 
   const finish = useCallback(
     async (_account: SocialAccount, message: string) => {
@@ -111,17 +112,20 @@ export default function SignInScreen() {
         <Heading>Sign out?</Heading>
         <Status message={message} statusRef={statusRef} />
         <AuthButton
-          label="Sign out"
+          label={signingOut ? 'Signing out' : 'Sign out'}
           hint="Removes your Bluesky sign-in and its keys from this device."
           onPress={async () => {
+            setSigningOut(true);
             await signOut();
+            setSigningOut(false);
             haptic('next');
             setNotice(authMessages.signedOut);
             setMode('choices');
           }}
+          busy={signingOut}
           primary
         />
-        <AuthButton label="Cancel" hint="Keeps you signed in." onPress={() => setMode('account')} />
+        <AuthButton label="Cancel" hint="Keeps you signed in." onPress={() => setMode('account')} busy={signingOut} />
       </AuthScreen>
     );
   }

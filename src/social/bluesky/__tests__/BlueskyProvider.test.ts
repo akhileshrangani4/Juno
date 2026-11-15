@@ -135,6 +135,31 @@ describe('BlueskyProvider', () => {
     expect(await store.get('bluesky.session')).toBeNull();
   });
 
+  it('signs out at once on a dead network, and a late logout never removes the next sign in', async () => {
+    const { provider, store, agent } = setup();
+    await signInWithKey(provider, 'me.bsky.social');
+    let finishLogout = () => undefined as void;
+    agent.logout.mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve) => {
+          finishLogout = () => {
+            agent.options.persistSession('expired', undefined);
+            resolve();
+          };
+        }),
+    );
+    await provider.signOut();
+    expect(await store.get('bluesky.session')).toBeNull();
+    expect(await provider.restoreSession()).toEqual({ status: 'none' });
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(agent.logout).toHaveBeenCalledTimes(1);
+    await signInWithKey(provider, 'me.bsky.social');
+    finishLogout();
+    await provider.revoking;
+    expect(await store.get('bluesky.session')).not.toBeNull();
+    expect((await provider.restoreSession()).status).toBe('restored');
+  });
+
   it('posts with uploaded images and their alt text', async () => {
     const { provider, agent } = setup();
     globalThis.fetch = jest.fn(async () => ({ arrayBuffer: async () => new ArrayBuffer(4) })) as any;

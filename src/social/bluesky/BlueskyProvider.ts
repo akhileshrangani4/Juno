@@ -16,6 +16,7 @@ const DEFAULT_SERVICE = 'https://bsky.social';
 const PUBLIC_APPVIEW = 'https://public.api.bsky.app';
 const DEFAULT_OAUTH_ORIGIN = 'https://dependable-goshawk-583.convex.site';
 const MAX_FILTERED_PAGES = 10;
+const REVOKE_TIMEOUT_MS = 5000;
 const DEFAULT_DEMO_FEED = 'at://did:plc:z72i7hdynmk6r22z27h6tvur/app.bsky.feed.generator/whats-hot';
 
 type Options = { store: KeyValueStore; service?: string; demoFeed?: string; oauthOrigin?: string; oauth?: BlueskyOAuthFactory };
@@ -38,7 +39,7 @@ export class BlueskyProvider implements SocialProvider {
   private readonly store: KeyValueStore;
   private readonly service: string;
   private readonly demoFeed: string;
-  private readonly atpAgent: AtpAgent;
+  private atpAgent: AtpAgent;
   private readonly publicAgent = new AtpAgent({ service: PUBLIC_APPVIEW });
   private readonly createOAuth: BlueskyOAuthFactory;
   private readonly expiryListeners = new Set<(account: SocialAccount) => void>();
@@ -47,19 +48,14 @@ export class BlueskyProvider implements SocialProvider {
   private expired = false;
   private authorizing = false;
   private lastPersistEvent: string | null = null;
+  revoking: Promise<void> = Promise.resolve();
 
   constructor({ store, service, demoFeed, oauthOrigin, oauth }: Options) {
     this.store = store;
     this.service = service || DEFAULT_SERVICE;
     this.demoFeed = demoFeed || DEFAULT_DEMO_FEED;
     this.createOAuth = oauth ?? createBlueskyOAuth(oauthOrigin || DEFAULT_OAUTH_ORIGIN);
-    this.atpAgent = new AtpAgent({
-      service: this.service,
-      persistSession: (event, session) => {
-        this.lastPersistEvent = event;
-        void (session ? store.set(SESSION_KEY, JSON.stringify(session)) : store.remove(SESSION_KEY));
-      },
-    });
+    this.atpAgent = this.createAtpAgent();
   }
 
   async hasStoredSession(): Promise<boolean> {
@@ -122,16 +118,14 @@ export class BlueskyProvider implements SocialProvider {
 
   async signOut(): Promise<void> {
     const signed = this.signed;
+    const atpAgent = this.atpAgent;
+    const oauthSession = await this.store.get(OAUTH_SESSION_KEY);
     this.signed = null;
     this.expired = false;
-    try {
-      if (signed?.kind === 'atp') await signed.agent.logout();
-      if (signed?.kind === 'oauth') await this.oauth().client.revoke(signed.account.id);
-    } catch {
-      // The server may be unreachable; the device copies are removed below either way.
-    } finally {
-      await Promise.all([SESSION_KEY, OAUTH_ACCOUNT_KEY, OAUTH_SESSION_KEY].map((key) => this.store.remove(key)));
-    }
+    this.atpAgent = this.createAtpAgent();
+    this.oauthClient = null;
+    await Promise.all([SESSION_KEY, OAUTH_ACCOUNT_KEY, OAUTH_SESSION_KEY].map((key) => this.store.remove(key)));
+    this.revoking = this.revokeInBackground(signed?.kind === 'oauth' && oauthSession ? { sub: signed.account.id, oauthSession } : null, atpAgent);
   }
 
   onSessionExpired(listener: (account: SocialAccount) => void): () => void {
@@ -220,6 +214,35 @@ export class BlueskyProvider implements SocialProvider {
   private agent(): Agent {
     if (this.expired) throw new SessionExpiredError('The Bluesky session has ended');
     return this.signed?.agent ?? this.atpAgent;
+  }
+
+  private createAtpAgent(): AtpAgent {
+    const agent: AtpAgent = new AtpAgent({
+      service: this.service,
+      persistSession: (event, session) => {
+        if (agent !== this.atpAgent) return;
+        this.lastPersistEvent = event;
+        void (session ? this.store.set(SESSION_KEY, JSON.stringify(session)) : this.store.remove(SESSION_KEY));
+      },
+    });
+    return agent;
+  }
+
+  private async revokeInBackground(oauth: { sub: string; oauthSession: string } | null, atpAgent: AtpAgent): Promise<void> {
+    const revoke = async () => {
+      if (atpAgent.session) await atpAgent.logout();
+      if (!oauth) return;
+      const values = new Map([[OAUTH_SESSION_KEY, oauth.oauthSession]]);
+      const detached: KeyValueStore = {
+        get: async (key) => values.get(key) ?? null,
+        set: async (key, value) => void values.set(key, value),
+        remove: async (key) => void values.delete(key),
+      };
+      await this.createOAuth({ store: detached, onSessionDeleted: () => undefined }).client.revoke(oauth.sub);
+    };
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    await Promise.race([revoke().catch(() => undefined), new Promise<void>((resolve) => (timer = setTimeout(resolve, REVOKE_TIMEOUT_MS)))]);
+    clearTimeout(timer);
   }
 
   private oauth(): BlueskyOAuth {

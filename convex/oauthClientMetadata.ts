@@ -6,10 +6,16 @@ const BLUESKY_APPVIEW = 'did:web:api.bsky.app%23bsky_appview';
 export const OAUTH_SCOPES = [
   'atproto',
   'repo:app.bsky.feed.post?action=create',
+  'repo:app.bsky.feed.post?action=delete',
   'repo:app.bsky.feed.like?action=create',
+  'repo:app.bsky.feed.like?action=delete',
   'repo:app.bsky.feed.repost?action=create',
+  'repo:app.bsky.feed.repost?action=delete',
   'blob:image/*',
   `rpc:app.bsky.feed.getTimeline?aud=${BLUESKY_APPVIEW}`,
+  `rpc:app.bsky.feed.getAuthorFeed?aud=${BLUESKY_APPVIEW}`,
+  `rpc:app.bsky.feed.getPosts?aud=${BLUESKY_APPVIEW}`,
+  `rpc:app.bsky.feed.getPostThread?aud=${BLUESKY_APPVIEW}`,
   `rpc:app.bsky.actor.getProfile?aud=${BLUESKY_APPVIEW}`,
 ];
 
