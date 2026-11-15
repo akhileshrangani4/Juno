@@ -1,6 +1,7 @@
 import { router, useFocusEffect } from 'expo-router';
 import { useCallback, useRef, useState } from 'react';
 
+import { APP_NAME } from '@/appName';
 import { authMessages } from '@/auth/messages';
 import { haptic } from '@/feedback/haptics';
 import { useNarrator } from '@/narration/useNarrator';
@@ -143,11 +144,11 @@ export default function SignInScreen() {
 
   return (
     <AuthScreen>
-      <Heading>Welcome to Juno</Heading>
+      <Heading>{`Welcome to ${APP_NAME}`}</Heading>
       <Status message={message} statusRef={statusRef} />
       <AuthButton
         label="Sign in"
-        hint="Sign in with your Bluesky handle. You enter your password on Bluesky's own page, never in Juno."
+        hint={`Sign in with your Bluesky handle. You enter your password on Bluesky's own page, never in ${APP_NAME}.`}
         onPress={() => setMode('handle')}
         primary
       />

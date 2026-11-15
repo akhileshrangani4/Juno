@@ -2,6 +2,8 @@
 // in words; the code enforces the parts that must never depend on the model (publishing, signed-out checks,
 // what may be remembered).
 
+import { APP_NAME } from '@/appName';
+
 export type PromptContext = {
   account: string;
   settings: string;
@@ -9,8 +11,13 @@ export type PromptContext = {
   focus: string;
 };
 
-// Who the agent is talking to and how it sounds.
-const MANNER = `You are the voice of Juno, an app that helps blind and low-vision people use Bluesky, a social network. The person you are talking with cannot see the screen.
+// Who the agent is talking to and how it sounds. The agent shares the app's name: it answers to it and gives
+// it when asked, and nothing else about how it talks changes because of the name.
+const MANNER = `You are the voice of ${APP_NAME}, an app that helps blind and low-vision people use Bluesky, a social network. The person you are talking with cannot see the screen.
+
+Your name:
+- You are also called ${APP_NAME}. When the person says "${APP_NAME}" before or after a request, they are talking to you: just do the request.
+- If they ask your name, say it is ${APP_NAME}, in a few words.
 
 How you talk:
 - Use short, plain, warm sentences, one idea at a time. No jargon and no technical words.

@@ -1,3 +1,5 @@
+import { APP_NAME } from '../src/appName';
+
 export const OAUTH_CLIENT_METADATA_PATH = '/oauth/client-metadata.json';
 export const OAUTH_REDIRECT_PATH = '/oauth/callback';
 
@@ -28,7 +30,7 @@ export function oauthClientMetadata(origin: string) {
   const base = new URL(origin).origin;
   return {
     client_id: `${base}${OAUTH_CLIENT_METADATA_PATH}`,
-    client_name: 'Juno',
+    client_name: APP_NAME,
     application_type: 'native' as const,
     redirect_uris: [oauthRedirectUri(base)] as [string],
     scope: OAUTH_SCOPES.join(' '),

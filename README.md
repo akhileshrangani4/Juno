@@ -1,6 +1,6 @@
-# consumerhack
+# Juno
 
-A social media app for blind and low-vision people. It reads each post aloud, one at a time. Tap the bottom half of the screen for the next post and the top half for the previous one. Draw a clockwise circle to wake the voice agent and a counter-clockwise circle to go back to scrolling.
+Juno is a social media app for blind and low-vision people, built on Bluesky. It reads each post aloud, one at a time. Tap the bottom half of the screen for the next post and the top half for the previous one. Draw a clockwise circle to wake the voice agent and a counter-clockwise circle to go back to scrolling.
 
 ## Run it
 

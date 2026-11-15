@@ -1,6 +1,6 @@
 # Post narration and descriptions
 
-When a post takes focus the app speaks a script built on the device from the post itself, with picture, video and hashtag descriptions from a vision model folded in when they are available. The model never supplies the post's words.
+When a post takes focus Juno speaks a script built on the device from the post itself, with picture, video and hashtag descriptions from a vision model folded in when they are available. The model never supplies the post's words.
 
 ## The rule: the author's words come only from the post
 

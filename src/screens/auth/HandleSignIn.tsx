@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 
 import { useScreenReader } from '@/accessibility/useScreenReader';
+import { APP_NAME } from '@/appName';
 import { spellHandle } from '@/auth/handle';
 import { nextSignIn, startSignIn, type SignInEvent, type SignInFlow } from '@/auth/signInFlow';
 import { haptic } from '@/feedback/haptics';
@@ -102,7 +103,7 @@ export function HandleSignIn({
         <>
           <AuthButton
             label={flow.step === 'checking' ? 'Checking' : flow.step === 'opening' ? 'Opening Bluesky' : 'Continue'}
-            hint={`Opens Bluesky's sign-in page for ${spellHandle(flow.handle)}. You enter your password there, not in Juno.`}
+            hint={`Opens Bluesky's sign-in page for ${spellHandle(flow.handle)}. You enter your password there, not in ${APP_NAME}.`}
             onPress={() => dispatch({ type: 'confirm' })}
             busy={flow.step !== 'confirm'}
             primary

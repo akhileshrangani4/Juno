@@ -1,10 +1,12 @@
+import { APP_NAME } from '@/appName';
+
 // Everything the app itself says around a call, in one place.
 export const agentMessages = {
   connecting: 'Waking the agent.',
   micExplain:
     'To talk with the agent, the app needs your microphone. It listens only while the agent is awake. Your iPhone will now ask for permission. Choose Allow.',
   micDenied:
-    "The agent can't hear you because the microphone is turned off for this app. To turn it on, open the Settings app, scroll to Juno, open it, and turn on Microphone. Back to scrolling.",
+    `The agent can't hear you because the microphone is turned off for this app. To turn it on, open the Settings app, scroll to ${APP_NAME}, open it, and turn on Microphone. Back to scrolling.`,
   couldNotConnect: "I couldn't connect. Check your internet and try again.",
   notConfigured: "The voice agent isn't set up in this version of the app. Back to scrolling.",
   asleep: 'Agent is asleep. Back to scrolling.',
