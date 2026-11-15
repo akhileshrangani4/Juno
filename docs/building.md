@@ -27,7 +27,7 @@ pnpm web                                                                 # run i
 
 ## Binaries
 
-Two scripts produce Release binaries with the JavaScript bundle embedded, so they run without a Metro server:
+Three scripts produce Release binaries with the JavaScript bundle embedded, so they run without a Metro server:
 
 | Script | Output |
 | --- | --- |
@@ -111,12 +111,12 @@ Release builds without the variable print these lines with `console.log`, which 
    bash scripts/build-ios-device.sh
    ```
 
-   The script passes the team, automatic signing and `-allowProvisioningUpdates` to `xcodebuild` on the command line, so nothing is written into the generated project. It finds the workspace and the built `.app` by pattern, and prints the app's path on its last line. If the bundle identifier is already registered to another team, set `IOS_BUNDLE_ID` to a unique one for that build only. Bluesky sign-in doesn't depend on the bundle identifier, because its redirect is the Convex site host (see [Bluesky OAuth client metadata](#bluesky-oauth-client-metadata)).
+   The script passes the team, automatic signing and `-allowProvisioningUpdates` to `xcodebuild` on the command line, so nothing is written into the generated project. It finds the workspace and the built `.app` by pattern, and prints the app's path on its last line. If the bundle identifier is already registered to another team, set `IOS_BUNDLE_ID` to a unique one for that build only. The override is passed to every target `xcodebuild` builds, the Pods targets included, and that has not been tested. Bluesky sign-in doesn't depend on the bundle identifier, because its redirect is the Convex site host (see [Bluesky OAuth client metadata](#bluesky-oauth-client-metadata)).
 4. **Install and launch:**
 
    ```bash
    xcrun devicectl device install app --device <udid> ios/build/Build/Products/Release-iphoneos/Juno.app
-   xcrun devicectl device process launch --device <udid> com.akhileshrangani.consumerhack
+   xcrun devicectl device process launch --device <udid> "${IOS_BUNDLE_ID:-com.akhileshrangani.consumerhack}"
    ```
 
    The first launch is refused until the phone trusts the developer: Settings → General → VPN & Device Management → the "Apple Development" entry → Trust.
@@ -126,6 +126,25 @@ What a personal team means for this app:
 - **Entitlements:** none to remove. The generated entitlements file is empty, and background audio is an Info.plist key, not an entitlement. A capability added later, such as push notifications, associated domains or app groups, can't be signed by a personal team, and the build would then fail at signing.
 - **Expiry:** the install stops opening after 7 days. Rebuild and install again. Installing over an existing build keeps the sign-in.
 - **Disk:** a build uses about 5 GB in the checkout (`node_modules` about 1 GB, `ios/Pods` 1.5 GB, `ios/build` 2.7 GB), plus Xcode's device support files the first time a phone connects. Delete `ios/build` after installing.
+
+## App icon and launch screen
+
+Juno's logo is a peacock chick, for the bird in Juno's name, with its fanned tail drawn as rounded sound bars. Akhilesh chose the chick; Derek Lu chose the Midnight peacock palette: a gold chick with a cream belly and teal, green and blue bars on navy `#0F1B3D`. The two masters were made with an image model and live in `assets/logo`:
+
+| Master | What it is |
+| --- | --- |
+| `juno-icon-1024.png` | The full-bleed square icon on navy, with no transparency and no rounded corners (iOS applies its own mask). |
+| `juno-mark-transparent-1024.png` | The chick and bars alone on a transparent background. |
+
+Every image app.json uses is generated from them by one script:
+
+```bash
+uv run scripts/generate-icons.py   # or python3 scripts/generate-icons.py with pillow and numpy installed
+```
+
+It writes `assets/images/icon.png` (the iOS and default icon), `splash-icon.png` (the launch screen), `android-icon-foreground.png` and `android-icon-monochrome.png` (the adaptive icon, inside its 66% safe zone) and `favicon.png`. The model's output needed small fixes, which the script applies on every run: the icon's background was `#101F3E` with some noise, so it is set to exactly `#0F1B3D`; the mark's stray near-transparent pixels are cleared, its edges take their colour from the shape so no fringe shows, and its dark outline is painted the same navy so the launch screen matches the icon. To change the logo, replace a master and run the script again; don't edit the generated files by hand.
+
+The launch screen shows the mark on the same navy, so opening the app doesn't flash another colour. It has no separate `dark` entry on purpose: app.json sets `userInterfaceStyle` to `dark`, so iOS always uses this one, and a `dark` entry would make the splash plugin rewrite `UIUserInterfaceStyle` to `Automatic`, which would let system controls turn light. The app's own screens are black, so `src/app/_layout.tsx` sets the splash screen to fade out over 300 ms (iOS) instead of cutting from navy to black when expo-router hides it.
 
 ## Convex
 
@@ -194,5 +213,30 @@ The scopes in `OAUTH_SCOPES` are the least the provider needs: create and delete
 ## Testing the voice agent without a microphone
 
 `pnpm eval:agent` runs `src/agent/__eval__/vapiChat.eval.ts` on a developer machine: it sends a scripted conversation to the real assistant configuration through Vapi's chat API with `VAPI_PRIVATE_KEY` from your shell, runs every tool call through the real tool handlers against a mocked Bluesky account, and writes the transcript to `agent-eval-transcript.md` (or `EVAL_TRANSCRIPT`). Vapi's chat API needs a card on the Vapi account and is billed. With `EVAL_BACKEND=openai` and `OPENAI_API_KEY` it sends the same prompt and tools to the same model at OpenAI instead: a stand-in that tests the prompt and tools but not Vapi's own orchestration.
+
+Each step of the script says what correct looks like, and the transcript opens with a pass or fail per step. The safety steps are the ones where publishing would be wrong: a hedge after a read-back, a yes with a change attached, "yes, delete it" on a post, a yes to the agent's own question, and a change during the five seconds. These check that the model held back, not only that the app's guard caught it. The last three steps are harder requests: two actions in one sentence, "send that to Maya" (no tool fits, so the agent should ask or explain rather than guess), and a correction in the middle of dictation. The stand-in streams, so it also records each turn's time to the first token, its total time and its cost. `EVAL_RESULTS=<file>` writes those as JSON.
+
+## The voice agent's model
+
+The model is `AGENT_MODEL` in `src/agent/assistant.ts`: gpt-4.1, temperature 0.2. AKH-42 measured it against the other models Vapi offers. The likely switch is gpt-5.6-sol, the most capable of them, with reasoning off and on the fast tier. It starts each answer about 0.18 seconds later, costs about 60% more per turn, and held back at least as well on every publish-safety step. It comes as its own change after the publishing-loop fix (AKH-48), and is measured again on that flow, because the GPT-5.6 models got stuck after a hesitation (see below). The comparison is in AKH-42's pull request. To compare models, override the shipped one:
+
+```sh
+EVAL_BACKEND=openai EVAL_MODEL=gpt-5.6-sol EVAL_REASONING_EFFORT=none EVAL_SERVICE_TIER=fast pnpm eval:agent
+EVAL_BACKEND=openai EVAL_MODEL=gpt-4.1 EVAL_REASONING_EFFORT= pnpm eval:agent   # a model without reasoning
+```
+
+Things that constrain the choice:
+- Take model ids from Vapi's list (docs.vapi.ai/providers/model/openai), not OpenAI's. Some OpenAI models, such as gpt-6.1-sol, aren't offered through Vapi.
+- On the GPT-5.x and GPT-6 models, OpenAI accepts a temperature other than 1 only with reasoning off, so switching to one means adding `reasoningEffort: 'none'` beside the model. With function tools on Chat Completions, gpt-6-luna refuses any reasoning effort above `none`.
+- Vapi refuses `reasoningEffort: 'none'` for gpt-5.5.
+- Reasoning at `low` added about 0.3 to 0.75 seconds per request in AKH-42's measurements.
+- Vapi's fast service tier (`serviceTier: 'fast'`) costs twice as much per token. It applies only to gpt-6-luna, gpt-5.6-sol, gpt-5.6-terra, gpt-5.6-luna and gpt-5.5, and Vapi ignores it for other models.
+- After a hedge ("okay let me think"), gpt-5.6-sol (6 of 6 runs) and gpt-5.6-terra (3 of 7) kept asking what to change, even after "go ahead", and never posted. gpt-4.1 posted. Re-check this step before switching.
+
+Before shipping a new model, confirm Vapi accepts the configuration by creating and then deleting a test assistant through Vapi's API, with `VAPI_PRIVATE_KEY` from your shell.
+
+### Billing the model to your own OpenAI account
+
+Vapi can call OpenAI with your own API key. Add it in the Vapi dashboard under Integrations. Vapi then stops charging for the model, and OpenAI bills your account directly at its own prices. Some models may only be available through Vapi once a provider key is added. The key is entered only in Vapi's dashboard: it never goes into the app, `build.env`, `.env`, or this repository, and the app never sees it. Akhilesh added his OpenAI key there on 2026-11-15, so the agent's model is billed to his OpenAI account.
 
 `pnpm eval:bluesky` publishes a real post and reply through the tool handlers to the account in `BLUESKY_TEST_HANDLE`/`BLUESKY_TEST_APP_PASSWORD`, undoes and deletes them, and checks each step on Bluesky. Use a throwaway account.

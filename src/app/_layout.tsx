@@ -1,4 +1,5 @@
 import { Stack } from 'expo-router';
+import * as SplashScreen from 'expo-splash-screen';
 import { StatusBar } from 'expo-status-bar';
 import { StyleSheet } from 'react-native';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
@@ -8,6 +9,8 @@ import { ScreenReaderProvider } from '@/accessibility/useScreenReader';
 import { BackendProvider } from '@/backend/convex';
 import { SessionProvider } from '@/session/SessionContext';
 import { colors } from '@/theme';
+
+SplashScreen.setOptions({ fade: true, duration: 300 });
 
 export default function RootLayout() {
   return (
