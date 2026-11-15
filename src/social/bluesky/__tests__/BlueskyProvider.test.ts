@@ -39,8 +39,20 @@ jest.mock('@atproto/api', () => ({
     });
     getTimeline = jest.fn(async () => ({ data: { feed: [feedItem(1), { post: {} }, feedItem(2)], cursor: 'next' } }));
     post = jest.fn(async () => ({ uri: 'at://new', cid: 'new-cid' }));
-    like = jest.fn(async () => ({}));
-    repost = jest.fn(async () => ({}));
+    like = jest.fn(async () => ({ uri: 'at://me/like/1', cid: 'like-cid' }));
+    repost = jest.fn(async () => ({ uri: 'at://me/repost/1', cid: 'repost-cid' }));
+    deleteLike = jest.fn(async () => undefined);
+    deleteRepost = jest.fn(async () => undefined);
+    deletePost = jest.fn(async () => undefined);
+    getPosts = jest.fn(async () => ({ data: { posts: [{ viewer: { like: 'at://me/like/old', repost: undefined } }] } }));
+    getAuthorFeed = jest.fn(async () => ({
+      data: {
+        feed: [
+          { ...feedItem(5), reason: { $type: 'app.bsky.feed.defs#reasonRepost', by: { did: 'did:plc:me', handle: 'me' } } },
+          { post: { ...feedItem(6).post, author: { did: 'did:plc:me', handle: 'me.bsky.social' } } },
+        ],
+      },
+    }));
     uploadBlob = jest.fn(async () => ({ data: { blob: { ref: 'blob' } } }));
     app = { bsky: { feed: { getFeed: jest.fn(async () => ({ data: { feed: [feedItem(9)] } })) } } };
     options: any;
@@ -121,6 +133,32 @@ describe('BlueskyProvider', () => {
     await provider.repost(parent);
     expect(agent.like).toHaveBeenCalledWith(parent.uri, parent.cid);
     expect(agent.repost).toHaveBeenCalledWith(parent.uri, parent.cid);
+  });
+
+  it('returns like and repost records and removes them, looking them up when not given', async () => {
+    const { provider, agent } = setup();
+    const post = { uri: 'at://post/1', cid: 'cid-1' };
+    const like = await provider.like(post);
+    expect(like).toEqual({ uri: 'at://me/like/1' });
+    expect(await provider.unlike(post, like)).toBe(true);
+    expect(agent.deleteLike).toHaveBeenLastCalledWith('at://me/like/1');
+    expect(await provider.unlike(post)).toBe(true);
+    expect(agent.getPosts).toHaveBeenCalledWith({ uris: ['at://post/1'] });
+    expect(agent.deleteLike).toHaveBeenLastCalledWith('at://me/like/old');
+    expect(await provider.unrepost(post)).toBe(false);
+    expect(await provider.unrepost(post, await provider.repost(post))).toBe(true);
+    expect(agent.deleteRepost).toHaveBeenCalledWith('at://me/repost/1');
+  });
+
+  it("deletes a post and finds the signed-in user's latest own post, skipping reposts", async () => {
+    const { provider, agent } = setup();
+    expect(await provider.getMyLatestPost()).toBeNull();
+    await provider.signIn('me.bsky.social', 'pw');
+    const latest = await provider.getMyLatestPost();
+    expect(agent.getAuthorFeed).toHaveBeenCalledWith({ actor: 'did:plc:me', limit: 10, filter: 'posts_with_replies' });
+    expect(latest?.uri).toBe('at://post/6');
+    await provider.deletePost({ uri: 'at://post/6', cid: 'cid-6' });
+    expect(agent.deletePost).toHaveBeenCalledWith('at://post/6');
   });
 });
 

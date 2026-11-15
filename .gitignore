@@ -32,6 +32,7 @@ yarn-error.*
 
 # local env files
 .env*.local
+build.env
 
 # typescript
 *.tsbuildinfo
@@ -41,3 +42,8 @@ example
 # generated native folders
 /ios
 /android
+
+# voice agent eval output
+agent-eval-transcript.md
+bluesky-eval.md
+.eval/

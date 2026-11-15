@@ -47,8 +47,11 @@ Known gap: screen reader announcements cannot be stopped mid-sentence by the app
 | Previous post | rigid tap | the post |
 | First post, end of feed, still loading | warning buzz | says which |
 | Ten pages in a row hidden by the content filter | warning buzz | "No more posts could be shown right now." (not "end of the feed") |
-| Agent wakes | three rising taps | "Agent is awake..." |
-| Agent sleeps | heavy then soft tap | "Agent is asleep. Back to scrolling." then the post |
+| Agent connecting | one soft tap | "Waking the agent." (narration stops at once) |
+| Agent listening | three rising taps | the agent says "I'm listening." |
+| Agent sleeps (counter-clockwise circle, "goodbye", 30 s of silence, 10 minute limit) | heavy then soft tap | says why, e.g. "Agent is asleep. Back to scrolling.", then the post in focus |
+| Agent cannot connect, microphone off, or agent not set up | error buzz | "I couldn't connect. Check your internet and try again." or how to turn the microphone on |
+| Microphone, first time | - | explained by voice before iOS asks |
 | Circle in the mode you are already in | warning buzz | says so |
 | A stroke that is neither a tap nor a circle | two quick ticks | "Gesture not recognized.", at most once every 2.5 seconds, and never while a post or message is being read (the ticks and the on-screen hint still come at once) |
 | A drag that scrolled a long post | none | none |

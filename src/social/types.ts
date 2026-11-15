@@ -33,6 +33,10 @@ export type UploadedImage = { alt: string; handle: unknown };
 
 export type NewPost = { text: string; images?: UploadedImage[] };
 
+export type ReplyParent = Pick<Post, 'uri' | 'cid' | 'replyRoot'>;
+
+export type RecordRef = { uri: string };
+
 export interface SocialProvider {
   readonly id: string;
   readonly name: string;
@@ -42,8 +46,12 @@ export interface SocialProvider {
   signOut(): Promise<void>;
   getTimeline(options?: { cursor?: string; limit?: number }): Promise<TimelinePage>;
   createPost(post: NewPost): Promise<PostRef>;
-  repost(post: PostRef): Promise<void>;
-  like(post: PostRef): Promise<void>;
-  reply(parent: Post, post: NewPost): Promise<PostRef>;
+  repost(post: PostRef): Promise<RecordRef>;
+  like(post: PostRef): Promise<RecordRef>;
+  reply(parent: ReplyParent, post: NewPost): Promise<PostRef>;
   uploadImage(image: { uri: string; mimeType: string }, alt: string): Promise<UploadedImage>;
+  unlike(post: PostRef, like?: RecordRef): Promise<boolean>;
+  unrepost(post: PostRef, repost?: RecordRef): Promise<boolean>;
+  deletePost(post: PostRef): Promise<void>;
+  getMyLatestPost(): Promise<Post | null>;
 }

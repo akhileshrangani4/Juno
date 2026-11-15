@@ -15,4 +15,16 @@ export default defineSchema({
     model: v.optional(v.string()),
     createdAt: v.number(),
   }).index('by_post_uri', ['postUri']),
+
+  memoryOwners: defineTable({
+    userKey: v.string(),
+    secretHash: v.string(),
+    createdAt: v.number(),
+  }).index('by_user_key', ['userKey']),
+
+  memoryRateLimits: defineTable({
+    key: v.string(),
+    windowStart: v.number(),
+    count: v.number(),
+  }).index('by_key', ['key']),
 });
