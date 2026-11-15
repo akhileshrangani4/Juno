@@ -68,7 +68,60 @@ A long post scrolls inside the card at the same time as the pan collects the str
 
 ## Onboarding
 
-The intro screen is one button. Its label is the welcome line and its hint is the gesture instructions, so VoiceOver reads them on focus. The visible text says "Double tap to continue" when a screen reader is on and "Tap anywhere to continue" when it is off. Without a screen reader the app also speaks the instructions on first launch. The sign-in screen has a header, two labeled text fields with hints, a live error region, and two labeled buttons. Without a screen reader the app also speaks a description of the sign-in screen. Typing a handle and app password without sight needs VoiceOver or TalkBack for the keyboard; "Continue without signing in" opens a public demo feed.
+The intro screen is one button. Its label is the welcome line and its hint is the gesture instructions, so VoiceOver reads them on focus. The visible text says "Double tap to continue" when a screen reader is on and "Tap anywhere to continue" when it is off. Without a screen reader the app also speaks the instructions on first launch.
+
+## Sign in and sign up
+
+Juno never shows, asks for, or accepts an account password on its own screens. Signing in takes only a handle; the password goes on Bluesky's own page, opened in the iOS system authentication sheet (ASWebAuthenticationSession through expo-web-browser), never in an embedded web view. That sheet is Safari, so VoiceOver, saved passwords, passkeys and Face ID work there as they do in Safari. The sheet shares Safari's cookies, so "Remember this account on this device" on Bluesky's page carries over.
+
+### How each screen speaks
+
+Every screen has one status line at the top that says what is happening. With VoiceOver on, focus moves to that line whenever it changes, so VoiceOver reads it once and the user can swipe back to it. With VoiceOver off, the app speaks it. The two-finger scrub (escape) goes back one step.
+
+| Screen | What it says on arrival | Controls, in order |
+| --- | --- | --- |
+| First screen | "Welcome to Juno. You can sign in with your Bluesky handle, create a new Bluesky account, or listen to a public feed without signing in." If the session ended, it first says "Your Bluesky sign-in has ended. Sign in again to pick up where you left off." | Sign in, Create an account, Listen without signing in |
+| Sign in | "Type or dictate your Bluesky handle, then double tap Continue." | Bluesky handle field, Continue, Use an app password instead, Back |
+| Read-back | "maya dot bsky dot social. Double tap Continue if that's right." A bare name is offered with bsky.social: "Did you mean maya dot bsky dot social?" | Continue, Change handle, Use an app password instead, Back |
+| Opening | "Bluesky's sign-in page will open. First, iPhone asks whether this app may use a website, usually bsky.social, to sign in. Choose Continue. Then enter your password on Bluesky's page. You'll come back here when you're done." The sheet opens when that finishes (at most 8 seconds). The middle sentence warns about the system alert ("… Wants to Use bsky.social to Sign In", with Cancel and Continue) that iOS shows before every sign-in sheet; choosing Cancel there ends the attempt and Juno says so. It is left out on platforms without that alert. | |
+| Outcome | Success: "Signed in as Maya." Cancel: "Sign in was cancelled. Double tap Continue to try again, or choose Use an app password instead." Failure: a plain reason (no connection, or Bluesky couldn't finish). A handle that doesn't resolve: "I couldn't find maya dot bsky dot social on Bluesky. Check the spelling and try again.", with the entry kept. | |
+| App password | Explains what an app password is and where to make one. Refuses anything that is not in the app-password format, so a main password typed by mistake is never sent. | Handle, App password, Sign in, Back |
+| Account (from the agent screen) | "Signed in as Maya." | Back to the feed, Sign out |
+| Sign out? | "Sign out of Bluesky on this device? You'll need to sign in again to read your timeline." | Sign out, Cancel |
+| Can't reach Bluesky (at launch) | "Bluesky couldn't be reached, so your timeline can't load yet. You're still signed in. Check your connection, then choose Retry, or listen to a public feed without signing in." Retry says "Trying Bluesky again." | Retry, Listen without signing in |
+
+The handle field accepts typing and keyboard dictation. Entries are trimmed, lower-cased, a leading @ is dropped, a spoken "dot" between words becomes a period, dictated "Maya. Bsky. Social." becomes maya.bsky.social, and a name with no domain becomes name.bsky.social. Read-back spells dots as "dot" and hyphens as "dash". The wording is unit tested (`src/auth`).
+
+If the session can no longer be refreshed (the user revoked it, or it expired after Bluesky's session lifetime), the feed stays where it was and the first screen opens on top of it, says the sign-in has ended, and keeps the handle for the next sign in. Signing in again as the same account returns to the same post. A refresh that fails only because the network is down signs nobody out.
+
+At launch with a stored session, restoring has three outcomes, for both OAuth and app-password sessions (`RestoreResult` in `src/social/types.ts`):
+
+- **Restored:** the feed opens.
+- **Invalid:** Bluesky refused the token or the refresh. The stored session is removed, and the first screen says the sign-in has ended, with the handle kept.
+- **Unreachable:** a network error or timeout. The stored session is left untouched, and the "Can't reach Bluesky" screen above appears. Listen without signing in plays the public feed for this launch only, so the next launch tries the timeline again.
+
+The loading screen changes to "Still connecting to Bluesky" after 4 seconds. Waiting is capped at 20 seconds, after which the "Can't reach Bluesky" screen appears and is announced. Unit tests cover all three outcomes for both session kinds (`src/social/bluesky/__tests__`), and the cap and the screens (`src/session/__tests__/slowRestore.test.tsx`).
+
+Sign out is reachable from the agent screen's Account settings and asks for confirmation. Confirming deletes the tokens, the DPoP key and the stored account from the keychain first, then says "Signed out". It doesn't wait for the network: Bluesky is asked to revoke the session afterwards, in the background, from an in-memory copy, and that attempt is abandoned after 5 seconds. A revoke that fails or never answers isn't reported, because the device no longer holds anything that can use the session. The button reads "Signing out" and is marked busy for the moment the keychain takes. The voice agent can call `useSession().signOut()` after its own spoken confirmation.
+
+### Bluesky's sign-up, checked with a screen reader's view of the page (2026-11-15)
+
+Create an account runs Bluesky's own sign-up inside the same system sheet, after the same warning about the iOS alert: bsky.social's authorization server advertises the OAuth `prompt=create` value, so Juno starts the OAuth flow with it and the user comes back signed in. The page was checked in a browser through its accessibility tree, without submitting the form.
+
+- **Step 1, Choose a username.** The field is labeled "Type your username". The rules ("Use 3–18 letters, numbers or hyphens") and the full handle preview are plain text after the field. An invalid name produces "The username is invalid" in an ARIA `alert`, which screen readers announce.
+- **Step 2, Your account.** "Email" and "Password" are labeled fields, with a "Make visible" button and a labeled password strength meter. There is no birthday field in this flow.
+- **Step 3, Verify you are human.** An hCaptcha checkbox labeled "'I am human', Select in order to trigger the challenge, or to bypass it if you have an accessibility cookie". Selecting it opened a visual puzzle ("Click the TWO matching shapes"). The puzzle image's label tells screen reader users to use the accessibility options, but the options menu offered only "Accessibility: Retrieve Cookie". There was no text challenge and no audio challenge.
+- **Smaller problems.** "Sign up" is not a heading, the step progress bar has no label, and the language picker's accessible name is a random string ("vHJQ4A").
+
+**Can a blind user finish it alone? Not reliably.** The visual puzzle has no non-visual alternative on this page. hCaptcha's accessibility cookie requires a separate sign-up with hCaptcha, and it is a cross-site cookie that Safari blocks by default. Blind users on AppleVis (November 2026) report that the cookie does not work for Bluesky and that hCaptcha support told them Bluesky has not enabled it. The same users report that sign-up in the official Bluesky iPhone app passed the human check with no puzzle, likely through iOS's automatic verification. Whether that also happens in Juno's system sheet is unverified until it is tried on a physical iPhone.
+
+The app says this before the sheet opens ("That check may be a picture puzzle with no audio option, so you may need a sighted helper for that one step"). The assisted path:
+
+1. Try Create an account in Juno. If the human check passes without a puzzle, the user finishes alone.
+2. Otherwise create the account in the official Bluesky app, or have a sighted helper complete only the human check once, on any device.
+3. Then sign in to Juno with just the handle. Signing in never shows the puzzle.
+
+The sign-in page itself reads well: "Username or Email" is prefilled from the handle Juno sends, "Password" is labeled and focused, and Sign in and Cancel are labeled buttons.
 
 ## Narration settings
 
@@ -90,3 +143,6 @@ Black background, white 30 point bold text, a thick yellow border around the foc
 8. Earcons: are the four sounds quiet, short, and easy to tell apart, and does speech start right after them without a noticeable gap?
 9. Speech rate with VoiceOver off: do "Speak faster" and "Speak slower" change speed audibly, and is the top step close to three times normal?
 10. Does a description that arrives late get appended after the post without cutting it off?
+11. Sign in: does focus land on the status line after each step, and does "Bluesky's sign-in page will open" finish before the sheet appears? Does the system's "Juno wants to use bsky.social to sign in" alert read correctly?
+12. Inside the sheet: does VoiceOver read Bluesky's page, do saved passwords, passkeys and Face ID fill it, and does the sheet return to Juno announcing the result?
+13. Create an account: does the human check show a puzzle on a real iPhone, or does iOS's automatic verification pass it?

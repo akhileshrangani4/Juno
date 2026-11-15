@@ -39,7 +39,18 @@ export type Post = PostRef & {
 
 export type TimelinePage = { posts: Post[]; cursor: string | null };
 
-export type SocialAccount = { id: string; handle: string };
+export type SocialAccount = { id: string; handle: string; displayName?: string | null };
+
+export type SignInResult =
+  | { status: 'success'; account: SocialAccount }
+  | { status: 'cancelled' }
+  | { status: 'failed'; reason: 'network' | 'server' };
+
+export type RestoreResult =
+  | { status: 'restored'; account: SocialAccount }
+  | { status: 'none' }
+  | { status: 'invalid'; account: SocialAccount | null }
+  | { status: 'unreachable' };
 
 export type UploadedImage = { alt: string; handle: unknown };
 
@@ -53,9 +64,13 @@ export interface SocialProvider {
   readonly id: string;
   readonly name: string;
   hasStoredSession(): Promise<boolean>;
-  restoreSession(): Promise<SocialAccount | null>;
-  signIn(identifier: string, password: string): Promise<SocialAccount>;
+  restoreSession(): Promise<RestoreResult>;
+  findAccount(handle: string): Promise<boolean>;
+  signIn(handle: string): Promise<SignInResult>;
+  createAccount(): Promise<SignInResult>;
+  signInWithAppPassword(identifier: string, appPassword: string): Promise<SocialAccount>;
   signOut(): Promise<void>;
+  onSessionExpired(listener: (account: SocialAccount) => void): () => void;
   getTimeline(options?: { cursor?: string; limit?: number }): Promise<TimelinePage>;
   createPost(post: NewPost): Promise<PostRef>;
   repost(post: PostRef): Promise<RecordRef>;

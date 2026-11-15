@@ -94,6 +94,24 @@ The memory actions are rate limited per device (30 calls per 10 minutes), per ca
 
 Several branches deploy to this one deployment, and a deploy from one branch replaces the functions of another. Deploy right before you verify, and after a merge deploy from main.
 
+### Bluesky OAuth client metadata
+
+Bluesky sign-in needs Juno's OAuth client metadata at a public https URL, and that URL is the client id. A Convex HTTP action serves it (`convex/oauth.ts`, route in `convex/http.ts`, document built by `convex/oauthClientMetadata.ts`, which the app imports too, so the two can't drift):
+
+```
+https://dependable-goshawk-583.convex.site/oauth/client-metadata.json
+```
+
+The native redirect URI is the reverse of that host, `site.convex.dependable-goshawk-583:/oauth/callback`, as the AT Protocol requires. The iOS system sign-in sheet catches it, so it needs no entry in app.json. Every deploy of `convex/` must include these files, or Bluesky refuses every sign-in with `invalid_client_metadata`. Check after deploying:
+
+```bash
+curl -sD - https://dependable-goshawk-583.convex.site/oauth/client-metadata.json
+```
+
+The response must be 200 with `content-type: application/json`, and its `client_id` must equal the URL. To point a build at another deployment, set `EXPO_PUBLIC_BLUESKY_OAUTH_ORIGIN` to its `.convex.site` origin at build time.
+
+The scopes in `OAUTH_SCOPES` are the least the provider needs: create and delete on posts, likes and reposts, `image/*` blobs, and signed-in reads of the timeline, an author feed, posts, a post thread and a profile, all addressed to the Bluesky AppView. Bluesky's server refuses any call under an OAuth session that no granted scope covers. `src/social/bluesky/__tests__/oauthScopes.test.ts` runs every `SocialProvider` method under an OAuth session and fails when one of them makes a call without a granted scope. Its table is typed by the interface, so a new method doesn't compile until it's added there. Changing the scopes changes the metadata, so deploy Convex after such a change and check the URL again. Users who signed in earlier keep their old grant until they sign in again.
+
 ## Testing the voice agent without a microphone
 
 `pnpm eval:agent` runs `src/agent/__eval__/vapiChat.eval.ts` on a developer machine: it sends a scripted conversation to the real assistant configuration through Vapi's chat API with `VAPI_PRIVATE_KEY` from your shell, runs every tool call through the real tool handlers against a mocked Bluesky account, and writes the transcript to `agent-eval-transcript.md` (or `EVAL_TRANSCRIPT`). Vapi's chat API needs a card on the Vapi account and is billed. With `EVAL_BACKEND=openai` and `OPENAI_API_KEY` it sends the same prompt and tools to the same model at OpenAI instead: a stand-in that tests the prompt and tools but not Vapi's own orchestration.

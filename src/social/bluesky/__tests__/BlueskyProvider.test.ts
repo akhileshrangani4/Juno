@@ -2,6 +2,9 @@ import { createMemoryStore } from '@/storage/keyValueStore';
 
 import { BlueskyProvider } from '../BlueskyProvider';
 
+const FAKE_APP_KEY = 'fake-app-key';
+const signInWithKey = (provider: BlueskyProvider, identifier: string) => provider.signInWithAppPassword.call(provider, identifier, FAKE_APP_KEY);
+
 const feedItem = (n: number) => ({
   post: {
     uri: `at://post/${n}`,
@@ -26,12 +29,22 @@ jest.mock('@atproto/api', () => ({
   },
   AtpAgent: class {
     session: any = undefined;
+    get did() {
+      return this.session?.did;
+    }
     login = jest.fn(async ({ identifier }: { identifier: string }) => {
       this.session = { did: 'did:plc:me', handle: identifier, accessJwt: 'a', refreshJwt: 'r', active: true };
       this.options.persistSession?.('create', this.session);
     });
     resumeSession = jest.fn(async (session: any) => {
-      if (session.refreshJwt === 'expired') throw new Error('expired');
+      if (session.refreshJwt === 'expired') {
+        this.options.persistSession?.('expired', undefined);
+        throw new Error('ExpiredToken');
+      }
+      if (session.refreshJwt === 'offline') {
+        this.options.persistSession?.('network-error', session);
+        throw new TypeError('Network request failed');
+      }
       this.session = session;
     });
     logout = jest.fn(async () => {
@@ -82,7 +95,7 @@ describe('BlueskyProvider', () => {
 
   it('signs in, stores the session and reads the home timeline with the cursor', async () => {
     const { provider, store, agent } = setup();
-    expect(await provider.signIn(' @me.bsky.social ', 'app-password')).toEqual({ id: 'did:plc:me', handle: 'me.bsky.social' });
+    expect(await signInWithKey(provider, ' @me.bsky.social ')).toEqual({ id: 'did:plc:me', handle: 'me.bsky.social' });
     expect(JSON.parse((await store.get('bluesky.session'))!)).toMatchObject({ did: 'did:plc:me', refreshJwt: 'r' });
     const page = await provider.getTimeline({ cursor: 'abc' });
     expect(agent.getTimeline).toHaveBeenCalledWith({ cursor: 'abc', limit: 30 });
@@ -90,23 +103,61 @@ describe('BlueskyProvider', () => {
     expect(page.cursor).toBe('next');
   });
 
-  it('restores a stored session and survives a missing or expired one', async () => {
+  it('restores a stored session, and reports a missing one', async () => {
     const { provider, store } = setup();
-    expect(await provider.restoreSession()).toBeNull();
+    expect(await provider.restoreSession()).toEqual({ status: 'none' });
     expect(await provider.hasStoredSession()).toBe(false);
     await store.set('bluesky.session', JSON.stringify({ did: 'did:plc:me', handle: 'me.bsky.social', accessJwt: 'a', refreshJwt: 'r', active: true }));
     expect(await provider.hasStoredSession()).toBe(true);
-    expect(await provider.restoreSession()).toEqual({ id: 'did:plc:me', handle: 'me.bsky.social' });
-    const expired = setup();
-    await expired.store.set('bluesky.session', JSON.stringify({ did: 'd', handle: 'h', accessJwt: 'a', refreshJwt: 'expired', active: true }));
-    expect(await expired.provider.restoreSession()).toBeNull();
+    expect(await provider.restoreSession()).toEqual({ status: 'restored', account: { id: 'did:plc:me', handle: 'me.bsky.social' } });
+  });
+
+  it('reports a session the server refused as invalid and forgets it', async () => {
+    const { provider, store } = setup();
+    await store.set('bluesky.session', JSON.stringify({ did: 'did:plc:me', handle: 'me.bsky.social', accessJwt: 'a', refreshJwt: 'expired', active: true }));
+    expect(await provider.restoreSession()).toEqual({ status: 'invalid', account: { id: 'did:plc:me', handle: 'me.bsky.social' } });
+    expect(await store.get('bluesky.session')).toBeNull();
+  });
+
+  it('reports an unreachable server without touching the stored session', async () => {
+    const { provider, store } = setup();
+    const saved = JSON.stringify({ did: 'did:plc:me', handle: 'me.bsky.social', accessJwt: 'a', refreshJwt: 'offline', active: true });
+    await store.set('bluesky.session', saved);
+    expect(await provider.restoreSession()).toEqual({ status: 'unreachable' });
+    expect(await store.get('bluesky.session')).toBe(saved);
+    expect(await provider.hasStoredSession()).toBe(true);
   });
 
   it('clears the stored session on sign out', async () => {
     const { provider, store } = setup();
-    await provider.signIn('me.bsky.social', 'pw');
+    await signInWithKey(provider, 'me.bsky.social');
     await provider.signOut();
     expect(await store.get('bluesky.session')).toBeNull();
+  });
+
+  it('signs out at once on a dead network, and a late logout never removes the next sign in', async () => {
+    const { provider, store, agent } = setup();
+    await signInWithKey(provider, 'me.bsky.social');
+    let finishLogout = () => undefined as void;
+    agent.logout.mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve) => {
+          finishLogout = () => {
+            agent.options.persistSession('expired', undefined);
+            resolve();
+          };
+        }),
+    );
+    await provider.signOut();
+    expect(await store.get('bluesky.session')).toBeNull();
+    expect(await provider.restoreSession()).toEqual({ status: 'none' });
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(agent.logout).toHaveBeenCalledTimes(1);
+    await signInWithKey(provider, 'me.bsky.social');
+    finishLogout();
+    await provider.revoking;
+    expect(await store.get('bluesky.session')).not.toBeNull();
+    expect((await provider.restoreSession()).status).toBe('restored');
   });
 
   it('posts with uploaded images and their alt text', async () => {
@@ -153,7 +204,7 @@ describe('BlueskyProvider', () => {
   it("deletes a post and finds the signed-in user's latest own post, skipping reposts", async () => {
     const { provider, agent } = setup();
     expect(await provider.getMyLatestPost()).toBeNull();
-    await provider.signIn('me.bsky.social', 'pw');
+    await signInWithKey(provider, 'me.bsky.social');
     const latest = await provider.getMyLatestPost();
     expect(agent.getAuthorFeed).toHaveBeenCalledWith({ actor: 'did:plc:me', limit: 10, filter: 'posts_with_replies' });
     expect(latest?.uri).toBe('at://post/6');
@@ -176,7 +227,7 @@ describe('BlueskyProvider content filter', () => {
 
   it('skips adult posts in the signed-in timeline too', async () => {
     const { provider, agent } = setup();
-    await provider.signIn('me.bsky.social', 'pw');
+    await signInWithKey(provider, 'me.bsky.social');
     agent.getTimeline.mockResolvedValueOnce({ data: { feed: [labeled(1, 'nudity'), feedItem(2), labeled(3, 'graphic-media')], cursor: 'c' } });
     expect((await provider.getTimeline()).posts.map((post) => post.uri)).toEqual(['at://post/2']);
   });
