@@ -88,6 +88,7 @@ export function useVoiceAgent({
         return { outcome, post: outcome === 'moved' ? (state.posts[index] ?? null) : null };
       },
       description: (target, detail) => descriptionCache.request(target, detail),
+      cachedDescription: (target, detail) => descriptionCache.peek(target, detail),
       settings: narrationSettings,
       memory,
       conversation,

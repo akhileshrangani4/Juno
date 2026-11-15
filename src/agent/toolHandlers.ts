@@ -1,5 +1,5 @@
 import type { MoveOutcome } from '@/feed/feedState';
-import { authorName, messages, type DescriptionParts, type DetailLevel } from '@/narration/buildNarration';
+import { authorName, lateDescription, messages, type DescriptionParts, type DetailLevel } from '@/narration/buildNarration';
 import type { Post, PostRef, RecordRef, ReplyParent, SocialAccount, SocialProvider } from '@/social/types';
 
 import { agentMessages } from './agentMessages';
@@ -34,6 +34,8 @@ export type AgentDeps = {
   focused(): Post | null;
   move(direction: 'next' | 'previous'): { outcome: MoveOutcome; post: Post | null };
   description(post: Post, detail: DetailLevel): Promise<DescriptionParts | null>;
+  // A description already on the phone, without waiting.
+  cachedDescription(post: Post, detail: DetailLevel): DescriptionParts | null;
   settings: SettingsStore;
   memory: MemoryClient | null;
   conversation: Conversation;
@@ -49,6 +51,14 @@ type UndoEntry = { label: string; undo(): Promise<string> };
 
 // What the app does with a user utterance heard while a confirmed send is counting down or in flight.
 export type Heard = { kind: 'undone' | 'held'; speak: string; message: string };
+
+// The model hears nothing while a tool runs, so no tool call waits on the network longer than this. A slower
+// one answers "still working", and its result reaches the model when it lands.
+export const TOOL_CEILING_MS = 3000;
+// An explicit "describe the picture" waits this long for a description it doesn't have yet.
+export const PICTURE_WAIT_MS = 2500;
+// Tools that neither wait on the network nor touch the undo history, so they still run while a slow call finishes.
+const FREE_WHILE_SLOW = new Set<string>(['read_post', 'go_to_post', 'change_narration', 'gesture_help', 'open_sign_in', 'end_conversation']);
 
 const UNDO_WORDS = /\b(undo|stop|cancel|wait|don'?t|no)\b/i;
 
@@ -116,6 +126,35 @@ function refusal(outcome: Extract<ConfirmOutcome, { ok: false }>, utterance: str
 export function createToolHandlers(deps: AgentDeps) {
   const history: UndoEntry[] = [];
   let lastUndoneAt = -Infinity;
+  let slow: string | null = null;
+
+  const within = <T,>(promise: Promise<T>, ms: number) =>
+    new Promise<{ done: true; value: T } | { done: false }>((resolve) => {
+      const cancel = deps.schedule(() => resolve({ done: false }), ms);
+      void promise.then((value) => {
+        cancel();
+        resolve({ done: true, value });
+      });
+    });
+
+  const request = (post: Post, detail: DetailLevel) => deps.description(post, detail).catch(() => null);
+
+  // A description that lands after the reading: the app says it in the agent's voice if the same post is still in
+  // focus, and otherwise it is only cached for the next reading. A promised one that doesn't come is admitted.
+  const whenDescribed = (post: Post, pending: Promise<DescriptionParts | null>, promised = false) =>
+    void pending.then((parts) => {
+      if (deps.focused()?.uri !== post.uri) return;
+      const late = parts && lateDescription(post, parts);
+      if (late) return deps.notify(`DESCRIBED: The app just told the user more about the picture in the post in focus. Don't repeat it.`, late);
+      if (promised) deps.notify("DESCRIPTION_UNAVAILABLE: The fuller picture description didn't come. Tell the user in a few words there's nothing more to add.");
+    });
+
+  // What a reading includes now: a description already on the phone, or none while one is fetched in the background.
+  const partsNow = (post: Post, detail: DetailLevel) => {
+    const cached = deps.cachedDescription(post, detail);
+    if (!cached) whenDescribed(post, request(post, detail));
+    return cached;
+  };
 
   // An undo said while this send was in flight: the app removes what went out and says which happened.
   const undoneWhileSending = (speak: string) => {
@@ -249,8 +288,23 @@ export function createToolHandlers(deps: AgentDeps) {
       case 'read_post': {
         if (!focus) return { respond: true, result: NO_FOCUS };
         const mode = (['full', 'brief', 'exact', 'hashtags', 'picture'] as const).includes(args.mode as ReadMode) ? (args.mode as ReadMode) : 'full';
-        const speak = narratePost(focus, mode, deps.settings.get(), { now: deps.now(), parts: usesDescriptions(mode) ? await deps.description(focus, detailFor(mode, deps.settings.get())) : null });
-        return { speak, respond: false, result: "READ_ALOUD: The app read the post aloud. Don't repeat or reword it." };
+        const settings = deps.settings.get();
+        const detail = detailFor(mode, settings);
+        const read = (parts: DescriptionParts | null) => narratePost(focus, mode, settings, { now: deps.now(), parts });
+        const done = { respond: false, result: "READ_ALOUD: The app read the post aloud. Don't repeat or reword it." };
+        if (!usesDescriptions(mode)) return { ...done, speak: read(null) };
+        if (mode !== 'picture') return { ...done, speak: read(partsNow(focus, detail)) };
+        const cached = deps.cachedDescription(focus, detail);
+        if (cached) return { ...done, speak: read(cached) };
+        const pending = request(focus, detail);
+        const waited = await within(pending, PICTURE_WAIT_MS);
+        if (waited.done) return { ...done, speak: read(waited.value) };
+        whenDescribed(focus, pending, true);
+        return {
+          speak: `${read(null)} ${agentMessages.descriptionOnItsWay}`,
+          respond: false,
+          result: "READ_ALOUD: The app read what it has and said a fuller description is on its way. The app says it when it arrives. Don't repeat or reword it.",
+        };
       }
       case 'go_to_post': {
         const direction = args.direction === 'previous' ? 'previous' : 'next';
@@ -259,8 +313,9 @@ export function createToolHandlers(deps: AgentDeps) {
           const speak = outcome === 'atStart' ? messages.atStart : outcome === 'atEnd' ? messages.atEnd : messages.loading;
           return { speak, respond: false, result: `NOT_MOVED (${outcome}): The app told the user. Focus did not change.` };
         }
+        const settings = deps.settings.get();
         return {
-          speak: narrateForFeed(post, deps.settings.get(), usesDescriptions(deps.settings.get().mode) ? await deps.description(post, detailFor(deps.settings.get().mode, deps.settings.get())) : null, deps.now()),
+          speak: narrateForFeed(post, settings, usesDescriptions(settings.mode) ? partsNow(post, detailFor(settings.mode, settings)) : null, deps.now()),
           respond: false,
           result: `MOVED: The app read the new post aloud. Don't repeat it. The post in focus is now: ${describeFocus(post, null, deps.now())}`,
         };
@@ -336,8 +391,14 @@ export function createToolHandlers(deps: AgentDeps) {
         if (typeof args.skipHashtags === 'boolean') patch.skipHashtags = args.skipHashtags;
         if (args.pictureDetail === 'short' || args.pictureDetail === 'long') patch.pictureDetail = args.pictureDetail;
         const next = await deps.settings.update(patch);
-        const limit = patch.rate !== undefined && next.rate !== patch.rate ? ` The speed is limited to ${MIN_RATE} to ${MAX_RATE} times normal.` : '';
-        return { respond: true, result: `SETTINGS_CHANGED: Now ${settingsSummary(next)}.${limit} Confirm in a few words.` };
+        const asked = patch.rate;
+        const speedNote =
+          asked === undefined || next.rate === asked
+            ? ''
+            : asked < MIN_RATE || asked > MAX_RATE
+              ? ` The speed is limited to ${MIN_RATE} to ${MAX_RATE} times normal.`
+              : ` Speeds go in steps of ${RATE_STEP}, so ${asked} was set to ${next.rate}, the nearest step. Tell the user the speed you set.`;
+        return { respond: true, result: `SETTINGS_CHANGED: Now ${settingsSummary(next)}.${speedNote} Confirm in a few words.` };
       }
       case 'gesture_help':
         return { speak: messages.gestures, respond: false, result: "GESTURES_READ: The app read the gestures aloud. Don't repeat them." };
@@ -387,14 +448,23 @@ export function createToolHandlers(deps: AgentDeps) {
   return {
     publisher,
     async run(name: string, args: Record<string, unknown>): Promise<ToolOutcome> {
-      try {
-        return await run(name, args);
-      } catch (error) {
-        return {
+      if (slow && !FREE_WHILE_SLOW.has(name)) {
+        return { respond: true, result: `BUSY: The app is still finishing ${slow}. Tell the user it's still working and to ask again in a moment.` };
+      }
+      const work = run(name, args).catch(
+        (error: unknown): ToolOutcome => ({
           respond: true,
           result: `FAILED: ${error instanceof Error ? error.message : 'Something went wrong'}. Nothing changed. Tell the user it didn't work and they can try again.`,
-        };
-      }
+        }),
+      );
+      const outcome = await within(work, TOOL_CEILING_MS);
+      if (outcome.done) return outcome.value;
+      slow = name;
+      void work.then((late) => {
+        slow = null;
+        deps.notify(`Result of ${name}: ${late.result}`, late.speak);
+      });
+      return { respond: true, result: `STILL_WORKING: ${name} is taking longer than usual. Tell the user in a few words that it's still working. The app will tell you the result.` };
     },
     // Every final user transcript, already added to the conversation, while something confirmed is counting down
     // or being sent. Undo stops or removes it; anything that isn't a plain yes for this draft holds it as a draft.

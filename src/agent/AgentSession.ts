@@ -211,7 +211,9 @@ export class AgentSession {
     const name = call.function?.name ?? call.name ?? '';
     const args = parseArguments(call.function?.arguments ?? call.arguments);
     this.deps.log('tool', { name });
+    const started = Date.now();
     const outcome = await this.deps.handlers.run(name, args);
+    this.deps.log('tool done', { name, ms: Date.now() - started });
     if (outcome.refused) this.deps.log('publish refused', { reason: outcome.refused });
     if (outcome.after === 'countdown') this.deps.log('publish confirmed');
     if (this.finished) return;

@@ -102,6 +102,7 @@ export function setup(options: { signedIn?: boolean; focus?: Post | null; memory
       return { outcome: 'moved', post: nextPost };
     },
     description: async () => null,
+    cachedDescription: () => null,
     settings,
     memory: options.memory === undefined ? makeMemory() : options.memory,
     conversation,

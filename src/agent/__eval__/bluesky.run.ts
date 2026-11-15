@@ -35,6 +35,7 @@ async function main() {
     focused: () => focus,
     move: () => ({ outcome: 'atEnd', post: null }),
     description: async () => null,
+    cachedDescription: () => null,
     settings: settingsStore(new PreferencesStore(createMemoryStore())),
     memory: null,
     conversation,
