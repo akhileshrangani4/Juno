@@ -41,6 +41,7 @@ async function main() {
     settings: settingsStore(new PreferencesStore(createMemoryStore())),
     memory: null,
     conversation,
+    listening: { get: () => 'handsFree', choose: () => false },
     notify: (text) => notices.push(text),
     schedule: (run, ms) => {
       const timer = setTimeout(run, ms);

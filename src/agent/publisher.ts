@@ -245,7 +245,9 @@ export function droppedOf(draft: Draft): string {
 
 export class Publisher {
   private draft: Draft | null = null;
-  private pending: { draft: Draft; cancel: (() => void) | null } | null = null;
+  // A confirmed send waiting out its five seconds. The clock runs once startCountdown is called, and stands still
+  // while paused (a finger held on the screen in push to talk), keeping the time it had left.
+  private pending: { draft: Draft; cancel: (() => void) | null; started: boolean; paused: boolean; remaining: number; resumedAt: number } | null = null;
   private sending: { draft: Draft; undoRequested: boolean } | null = null;
   private closed = false;
 
@@ -378,13 +380,49 @@ export class Publisher {
 
   private accept(draft: Draft): ConfirmOutcome {
     this.draft = null;
-    this.pending = { draft, cancel: null };
+    this.pending = { draft, cancel: null, started: false, paused: false, remaining: UNDO_WINDOW_MS, resumedAt: 0 };
     return { ok: true, draft, announcement: announcementOf(draft) };
   }
 
   startCountdown(): void {
     const pending = this.pending;
-    if (!pending || pending.cancel || this.closed) return;
+    if (!pending || pending.started || this.closed) return;
+    pending.started = true;
+    if (!pending.paused) this.runCountdown();
+  }
+
+  // Stops the clock on a confirmed send that hasn't gone out. False when there is none to pause.
+  pauseCountdown(): boolean {
+    const pending = this.pending;
+    if (!pending || pending.paused) return false;
+    pending.paused = true;
+    if (pending.cancel) {
+      pending.cancel();
+      pending.cancel = null;
+      pending.remaining = Math.max(0, pending.remaining - (this.clock() - pending.resumedAt));
+    }
+    return true;
+  }
+
+  resumeCountdown(): void {
+    const pending = this.pending;
+    if (!pending?.paused || this.closed) return;
+    pending.paused = false;
+    if (pending.started) this.runCountdown();
+  }
+
+  get countdownPaused(): boolean {
+    return this.pending?.paused === true;
+  }
+
+  private clock(): number {
+    return (this.deps.now?.() ?? new Date()).getTime();
+  }
+
+  private runCountdown(): void {
+    const pending = this.pending;
+    if (!pending) return;
+    pending.resumedAt = this.clock();
     pending.cancel = this.deps.schedule(() => {
       if (this.pending !== pending) return;
       this.pending = null;
@@ -395,7 +433,7 @@ export class Publisher {
         .finally(() => {
           if (this.sending === sending) this.sending = null;
         });
-    }, UNDO_WINDOW_MS);
+    }, pending.remaining);
   }
 
   // Undo always targets what the user just confirmed, whether it is counting down or already being sent.

@@ -4,6 +4,7 @@ import { makePost } from '@/testing/fixtures';
 
 import { ConversationLog } from '@/agent/AgentSession';
 import type { Memory, MemoryClient } from '@/agent/memoryClient';
+import { ListeningModeStore } from '@/agent/listeningMode';
 import type { MemoryOffer } from '@/agent/memoryOffer';
 import { settingsStore } from '@/agent/settings';
 import { PreferencesStore } from '@/narration/preferences';
@@ -103,6 +104,7 @@ export function setup(
   const conversation = new ConversationLog();
   const notify = jest.fn();
   const settings = settingsStore(new PreferencesStore(createMemoryStore()));
+  const listening = new ListeningModeStore(createMemoryStore());
   let focus: Post | null = options.focus === undefined ? maya : options.focus;
   let ids = 0;
   const deps: AgentDeps = {
@@ -122,6 +124,7 @@ export function setup(
     memory: options.memory === undefined ? makeMemory() : options.memory,
     memoryOffer: options.memoryOffer ?? null,
     conversation,
+    listening,
     notify,
     schedule: scheduler.schedule,
     newId: () => `d${++ids}`,
@@ -139,5 +142,5 @@ export function setup(
   const setFocus = (post: Post | null) => {
     focus = post;
   };
-  return { provider, scheduler, conversation, notify, settings, handlers, say, deps, focus: () => focus, setFocus };
+  return { provider, scheduler, conversation, notify, settings, listening, handlers, say, deps, focus: () => focus, setFocus };
 }

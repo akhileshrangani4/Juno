@@ -99,6 +99,12 @@ const definitions: { name: string; description: string; parameters: Schema; answ
       },
     },
   },
+  {
+    name: 'set_listening_mode',
+    description:
+      'Change how the agent listens, when the user asks: "use push to talk" (they hold the screen while they talk) or "go hands-free" (always listening). The app explains the mode itself.',
+    parameters: { type: 'object', properties: { mode: { type: 'string', enum: ['push_to_talk', 'hands_free'] } }, required: ['mode'] },
+  },
   { name: 'gesture_help', description: 'Repeat how the gestures work. The app speaks it itself.', parameters: none },
   {
     name: 'remember',
@@ -140,6 +146,7 @@ export type ToolName =
   | 'publish_draft'
   | 'undo'
   | 'change_narration'
+  | 'set_listening_mode'
   | 'gesture_help'
   | 'remember'
   | 'recall_memories'

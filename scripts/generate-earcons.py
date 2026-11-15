@@ -6,6 +6,7 @@ Each sound is under 300 ms and differs from the others by pitch and pattern:
   video   two rising notes
   repost  two identical low blips
   reply   one falling glide
+  talk-start / talk-end  push to talk: a low sweep up as the microphone opens, down as it closes
 Run: python3 scripts/generate-earcons.py
 """
 import math
@@ -50,3 +51,17 @@ write("image", tone(1568, 1568, 160, 4.0))
 write("video", tone(784, 784, 90, 2.0) + silence(20) + tone(1175, 1175, 110, 3.0))
 write("repost", tone(523, 523, 70, 1.5) + silence(45) + tone(523, 523, 70, 1.5))
 write("reply", tone(1046, 698, 220, 2.5))
+
+
+def write_talk(name, samples):
+    with wave.open(str(OUT / f"talk-{name}.wav"), "wb") as file:
+        file.setnchannels(1)
+        file.setsampwidth(2)
+        file.setframerate(RATE)
+        file.writeframes(b"".join(struct.pack("<h", int(PEAK * s * 32767)) for s in samples))
+    print(f"talk-{name}: {len(samples) * 1000 // RATE} ms")
+
+
+# Push to talk (src/agent/talkTones.ts): a low rising sweep as the microphone opens, the same falling as it closes.
+write_talk("start", tone(440, 660, 140, 1.0))
+write_talk("end", tone(660, 440, 140, 1.0))

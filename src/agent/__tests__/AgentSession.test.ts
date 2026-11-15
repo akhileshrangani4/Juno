@@ -19,6 +19,8 @@ function fakeCall(connect: 'ok' | 'fail' | 'hang' = 'ok') {
     stop: jest.fn(),
     say: jest.fn(),
     addMessage: jest.fn(),
+    setMuted: jest.fn(),
+    muteAssistant: jest.fn(),
   } satisfies VoiceCall;
   return { call, emit: (message: VapiMessage) => listener!.onMessage(message), drop: () => listener!.onEnd() };
 }
@@ -40,6 +42,11 @@ function setup(options: { connect?: 'ok' | 'fail' | 'hang'; microphone?: 'grante
     connecting: () => cues.push('connecting'),
     listening: () => cues.push('listening'),
     exit: (reason, message) => exits.push({ reason, message }),
+    listeningMode: tools.listening,
+    cue: (cue) => {
+      cues.push(cue);
+      return 150;
+    },
     schedule: tools.scheduler.schedule,
     now: tools.scheduler.now,
     log: (event, detail) => logs.push(detail ? `${event} ${JSON.stringify(detail)}` : event),

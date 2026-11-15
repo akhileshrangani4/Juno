@@ -17,4 +17,9 @@ export interface VoiceCall {
   say(text: string, interrupt?: boolean): void;
   // Adds a system message to the conversation; triggerResponse asks the model to answer it.
   addMessage(content: string, triggerResponse: boolean): void;
+  // Mutes or unmutes the phone's microphone in the call. Muted, nothing the user says reaches Vapi. Push to talk
+  // works this way, on the phone, so no audio leaves it while no finger is down.
+  setMuted(muted: boolean): void;
+  // Silences or restores the agent's voice at once, for a press while it is speaking.
+  muteAssistant(muted: boolean): void;
 }

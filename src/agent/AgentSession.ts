@@ -3,7 +3,8 @@ import type { Post } from '@/social/types';
 import { agentMessages } from './agentMessages';
 import { AgentVoice, type Attribution } from './agentVoice';
 import { describeFocus } from './postContext';
-import type { Conversation, ToolHandlers, ToolOutcome } from './toolHandlers';
+import type { ListeningMode } from './listeningMode';
+import type { Conversation, Heard, ToolHandlers, ToolOutcome } from './toolHandlers';
 import type { VapiMessage, VoiceCall } from './voiceCall';
 
 export type EndReason = 'user' | 'agent' | 'silence' | 'maxDuration' | 'dropped' | 'failed' | 'micDenied' | 'notConfigured' | 'signIn';
@@ -12,6 +13,16 @@ export type AgentStatus = 'starting' | 'connecting' | 'listening' | 'ended';
 
 export const CONNECT_TIMEOUT_MS = 20_000;
 export const COUNTDOWN_FALLBACK_MS = 6_000;
+
+// The app, not Vapi, decides when a quiet call goes to sleep, since in push to talk Vapi hears silence whenever no
+// finger is down. Quiet is counted from the last thing anyone said, or the last release, and stands still while
+// anyone speaks or a finger is held. Push to talk waits longer: the user has to find the screen and hold it first.
+export const QUIET_LIMIT_MS: Record<ListeningMode, number> = { handsFree: 30_000, pushToTalk: 60_000 };
+// After a release in which the user was heard speaking while a send was paused, how long the app waits for their
+// words before treating them as unclear, which holds the send.
+export const WORDS_AFTER_RELEASE_MS = 3000;
+// A press silences the agent's voice; it comes back when that speech has stopped, or after this long at most.
+export const VOICE_BACK_AFTER_MS = 15_000;
 
 
 export type SessionDeps = {
@@ -28,6 +39,10 @@ export type SessionDeps = {
   schedule(run: () => void, ms: number): () => void;
   now(): number;
   log(event: string, detail?: Record<string, unknown>): void;
+  // The listening mode the user chose (listeningMode.ts).
+  listeningMode: { get(): ListeningMode; subscribe(listener: (mode: ListeningMode) => void): () => void };
+  // Push to talk's haptic and tone; returns how long the tone plays, so the microphone opens after it.
+  cue(cue: 'talkStart' | 'talkEnd'): number;
 };
 
 export class ConversationLog implements Conversation {
@@ -86,6 +101,16 @@ export class AgentSession {
   private abandonConnect: (() => void) | null = null;
   private queue: Promise<void> = Promise.resolve();
   private readonly voice: AgentVoice;
+  private mode: ListeningMode = 'handsFree';
+  private offMode: (() => void) | null = null;
+  private holding = false;
+  private spokeWhileHolding = false;
+  private openMicrophone: (() => void) | null = null;
+  private waitForWords: (() => void) | null = null;
+  private assistantSpeaking = false;
+  private userSpeaking = false;
+  private voiceSilenced: (() => void) | null = null;
+  private quiet: (() => void) | null = null;
 
   constructor(private readonly deps: SessionDeps) {
     this.voice = new AgentVoice(deps.now);
@@ -129,9 +154,49 @@ export class AgentSession {
     this.abandonConnect = null;
     if (this.finished) return;
     this.live = true;
-    deps.log('connected');
+    this.mode = deps.listeningMode.get();
+    this.muteForMode();
+    this.offMode = deps.listeningMode.subscribe((mode) => this.modeChanged(mode));
+    deps.log('connected', { mode: this.mode });
     deps.status('listening');
     deps.listening();
+    this.restartQuiet();
+  }
+
+  // A finger came down and stayed (the talk hold). A press silences the agent at once in either mode. In push to
+  // talk it also pauses a send that is counting down, and the microphone opens once the rising tone has played, so
+  // the tone is never heard as the user's speech.
+  holdStart(): void {
+    if (!this.live || this.holding) return;
+    if (this.assistantSpeaking) this.silenceVoice();
+    if (this.mode !== 'pushToTalk') return;
+    this.holding = true;
+    this.spokeWhileHolding = false;
+    this.stopQuiet();
+    this.cancelWaitForWords();
+    if (this.deps.handlers.publisher.pauseCountdown()) this.deps.log('countdown paused');
+    this.openMicrophone = this.deps.schedule(() => {
+      this.openMicrophone = null;
+      this.deps.call?.setMuted(false);
+      this.deps.log('talk hold: microphone open');
+    }, this.deps.cue('talkStart'));
+  }
+
+  // The finger lifted, or the system took the touch (cancelled). The microphone closes before the falling tone. A
+  // paused send resumes, unless the user spoke while holding: then the app waits for their words, which may be undo.
+  holdEnd(cancelled = false): void {
+    if (!this.holding) return;
+    this.holding = false;
+    this.openMicrophone?.();
+    this.openMicrophone = null;
+    this.deps.call?.setMuted(true);
+    this.deps.log('talk hold: microphone closed', cancelled ? { cancelled } : undefined);
+    this.deps.cue('talkEnd');
+    if (this.voiceSilenced && !this.assistantSpeaking) this.restoreVoice();
+    this.restartQuiet();
+    if (!this.deps.handlers.publisher.countdownPaused) return;
+    if (!this.spokeWhileHolding) return this.resumeCountdown();
+    this.waitForWords = this.deps.schedule(() => this.wordsNeverCame(), WORDS_AFTER_RELEASE_MS);
   }
 
   stop(reason: EndReason = 'user'): void {
@@ -187,6 +252,8 @@ export class AgentSession {
         this.heardSpeech(this.voice.sourceReported(message.source, message.turn));
         return;
       case 'speech-update':
+        if (message.role === 'user') return this.userSpeech(message.status === 'started');
+        if (message.role === 'assistant') this.assistantSpeech(message.status === 'started');
         if (message.role === 'assistant' && message.status === 'started') this.heardSpeech(this.voice.speechStarted(message.turn));
         if (message.role !== 'assistant' || !this.countdownArmed) return;
         if (message.status === 'started') this.announcementStarted = true;
@@ -204,6 +271,8 @@ export class AgentSession {
   private onUserSaid(transcript: string) {
     this.heardSpeech(this.voice.settle());
     this.deps.conversation.add(transcript);
+    if (this.holding) this.spokeWhileHolding = true;
+    this.restartQuiet();
     const confirmed = this.deps.handlers.confirmFromWords(transcript);
     if (confirmed) {
       if (confirmed.refused) this.deps.log('publish refused', { reason: confirmed.refused, by: 'words' });
@@ -211,12 +280,90 @@ export class AgentSession {
       return this.deliver('publish_draft', confirmed);
     }
     const heard = this.deps.handlers.heard(transcript);
-    if (!heard) return;
+    if (heard) return this.answerDuringCountdown(heard);
+    if (!this.holding) this.resumeCountdown();
+  }
+
+  private answerDuringCountdown(heard: Heard) {
+    this.cancelWaitForWords();
     this.countdownArmed?.();
     this.countdownArmed = null;
     this.deps.log(heard.kind === 'held' ? 'held from transcript' : 'undone from transcript');
     this.speak(heard.speak, heard.readBack, true);
     this.deps.call?.addMessage(heard.message, false);
+  }
+
+  // The user was heard speaking during a hold that paused the send, and no words came: not a yes, so it is held.
+  private wordsNeverCame() {
+    this.waitForWords = null;
+    const held = this.deps.handlers.heardUnclear();
+    if (held) this.answerDuringCountdown(held);
+    else this.resumeCountdown();
+  }
+
+  private resumeCountdown() {
+    this.cancelWaitForWords();
+    if (!this.deps.handlers.publisher.countdownPaused) return;
+    this.deps.handlers.publisher.resumeCountdown();
+    this.deps.log('countdown resumed');
+  }
+
+  private cancelWaitForWords() {
+    this.waitForWords?.();
+    this.waitForWords = null;
+  }
+
+  private modeChanged(mode: ListeningMode) {
+    if (mode === this.mode) return;
+    if (this.holding) this.holdEnd();
+    this.mode = mode;
+    this.deps.log('listening mode', { mode });
+    this.muteForMode();
+    this.restartQuiet();
+  }
+
+  private muteForMode() {
+    this.deps.call?.setMuted(this.mode === 'pushToTalk');
+  }
+
+  // Vapi's own barge-in needs the user's voice; a press stops the agent before they have said anything.
+  private silenceVoice() {
+    if (this.voiceSilenced) return;
+    this.deps.call?.muteAssistant(true);
+    this.voiceSilenced = this.deps.schedule(() => this.restoreVoice(), VOICE_BACK_AFTER_MS);
+    this.deps.log('agent interrupted');
+  }
+
+  private restoreVoice() {
+    if (!this.voiceSilenced) return;
+    this.voiceSilenced();
+    this.voiceSilenced = null;
+    this.deps.call?.muteAssistant(false);
+  }
+
+  private userSpeech(started: boolean) {
+    this.userSpeaking = started;
+    if (!started) return this.restartQuiet();
+    if (this.holding) this.spokeWhileHolding = true;
+    this.stopQuiet();
+  }
+
+  private assistantSpeech(started: boolean) {
+    this.assistantSpeaking = started;
+    if (started) return this.stopQuiet();
+    if (this.voiceSilenced && !this.holding) this.restoreVoice();
+    this.restartQuiet();
+  }
+
+  private restartQuiet() {
+    this.stopQuiet();
+    if (!this.live || this.holding || this.userSpeaking || this.assistantSpeaking) return;
+    this.quiet = this.deps.schedule(() => this.stop('silence'), QUIET_LIMIT_MS[this.mode]);
+  }
+
+  private stopQuiet() {
+    this.quiet?.();
+    this.quiet = null;
   }
 
   private onAssistantSaid(transcript: string) {
@@ -240,8 +387,10 @@ export class AgentSession {
   // Everything the app says in the agent's voice goes through here, so its transcript is known to be the app's. A
   // tool's outcome interrupts: Vapi drops anything the model is saying or about to say, and says this now.
   private speak(text: string, readBack?: string, interrupt = false) {
-    this.voice.appSays(text, readBack, interrupt);
-    this.deps.call?.say(text, interrupt);
+    const silenced = this.voiceSilenced !== null;
+    if (silenced) this.restoreVoice();
+    this.voice.appSays(text, readBack, interrupt || silenced);
+    this.deps.call?.say(text, interrupt || silenced);
   }
 
   private async runTool(call: ToolCall) {
@@ -286,11 +435,17 @@ export class AgentSession {
     this.abandonConnect = null;
     this.countdownArmed?.();
     this.countdownArmed = null;
+    this.stopQuiet();
+    this.openMicrophone?.();
+    this.cancelWaitForWords();
+    this.voiceSilenced?.();
+    this.offMode?.();
     // Every countdown, timer and confirmation ends here: nothing is published once the user can't hear it or undo it.
     const { cancelled, dropped } = this.deps.handlers.close();
     this.deps.log('exit', { reason, cancelledPending: !!cancelled, droppedDraft: !!dropped });
     this.deps.status('ended');
-    this.deps.exit(reason, `${cancelled ? agentMessages.notSent : dropped ? agentMessages.draftNotSent : ''}${EXIT_MESSAGES[reason]}`);
+    const message = reason === 'silence' && this.mode === 'pushToTalk' ? agentMessages.silencePushToTalk : EXIT_MESSAGES[reason];
+    this.deps.exit(reason, `${cancelled ? agentMessages.notSent : dropped ? agentMessages.draftNotSent : ''}${message}`);
   }
 }
 

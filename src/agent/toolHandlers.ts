@@ -7,6 +7,7 @@ import type { Post, PostRef, RecordRef, ReplyParent, SocialAccount, SocialProvid
 
 import { agentMessages } from './agentMessages';
 import { memoryRejection, MemorySignInNeededError, MemoryUnavailableError, type MemoryClient } from './memoryClient';
+import type { ListeningMode } from './listeningMode';
 import type { MemoryOffer } from './memoryOffer';
 import { detailFor, narrateForFeed, narratePost, usesDescriptions, usesTranslation, type ReadMode } from './narrationAdapter';
 import { describeFocus } from './postContext';
@@ -54,6 +55,8 @@ export type AgentDeps = {
   // Open when the agent's first words asked to keep what was saved before sign-in (memoryOffer.ts).
   memoryOffer?: MemoryOffer | null;
   conversation: Conversation;
+  // The listening mode in force, and the user's choice of one (listeningMode.ts).
+  listening: { get(): ListeningMode; choose(mode: ListeningMode): boolean };
   // Tells the model something happened outside a tool call, e.g. a post finished sending. With speak, the app
   // says those words itself and the model is told not to answer.
   notify(text: string, speak?: string): void;
@@ -75,7 +78,7 @@ export const PICTURE_WAIT_MS = 2500;
 // How long a tool called right after a read-back waits for the user's words when it arrives before their transcript.
 export const TRANSCRIPT_WAIT_MS = 1500;
 // Tools that neither wait on the network nor touch the undo history, so they still run while a slow call finishes.
-const FREE_WHILE_SLOW = new Set<string>(['read_post', 'go_to_post', 'change_narration', 'gesture_help', 'open_sign_in', 'end_conversation']);
+const FREE_WHILE_SLOW = new Set<string>(['read_post', 'go_to_post', 'change_narration', 'gesture_help', 'set_listening_mode', 'open_sign_in', 'end_conversation']);
 
 const UNDO_WORDS = /\b(undo|stop|cancel|wait|don'?t|no)\b/i;
 
@@ -314,8 +317,9 @@ export function createToolHandlers(deps: AgentDeps) {
 
   const publisher = new Publisher({ send, schedule: deps.schedule, newId: deps.newId, now: deps.now });
 
+  // In push to talk the user is heard only while holding the screen, so the countdown says so.
   const confirmed = (announcement: string): ToolOutcome => ({
-    speak: announcement,
+    speak: deps.listening.get() === 'pushToTalk' ? announcement.replace('Say undo', 'Hold the screen and say undo') : announcement,
     respond: false,
     after: 'countdown',
     result: "WAITING: The app told the user it sends in five seconds. Nothing has gone out yet. Say nothing. If they say undo or stop, call undo. The app will tell you when it is sent; until then, never say it was sent.",
@@ -525,6 +529,15 @@ export function createToolHandlers(deps: AgentDeps) {
               : ` Speeds go in steps of ${RATE_STEP}, so ${asked} was set to ${next.rate}, the nearest step. Tell the user the speed you set.`;
         return { respond: true, result: `SETTINGS_CHANGED: Now ${settingsSummary(next)}.${speedNote} Confirm in a few words.` };
       }
+      case 'set_listening_mode': {
+        const mode: ListeningMode = args.mode === 'push_to_talk' ? 'pushToTalk' : 'handsFree';
+        deps.listening.choose(mode);
+        return {
+          speak: mode === 'pushToTalk' ? agentMessages.pushToTalkOn : agentMessages.handsFreeOn,
+          respond: false,
+          result: `LISTENING_MODE_SET (${mode === 'pushToTalk' ? 'push_to_talk' : 'hands_free'}): The app told the user how it works now. Say nothing.`,
+        };
+      }
       case 'gesture_help':
         return { speak: messages.gestures, respond: false, result: "GESTURES_READ: The app read the gestures aloud. Don't repeat them." };
       case 'remember': {
@@ -650,6 +663,18 @@ export function createToolHandlers(deps: AgentDeps) {
         speak: `${agentMessages.held} ${held.readBack}`,
         readBack: held.draft.id,
         message: `HELD draftId="${held.draft.id}": The user said "${utterance}" during the five seconds, so nothing was sent and the app read the draft aloud again. If they asked for a change, make it with edit_draft, which reads the new draft back. Otherwise say nothing, and if their next reply is a yes, call publish_draft with this draftId.`,
+      };
+    },
+    // The user was heard speaking while holding the screen during the five seconds, and no words came through: the
+    // send is held as for anything that isn't a yes, and the draft read back.
+    heardUnclear(): Heard | null {
+      const held = publisher.hold(deps.conversation.turn());
+      if (!held) return null;
+      return {
+        kind: 'held',
+        speak: `${agentMessages.held} ${held.readBack}`,
+        readBack: held.draft.id,
+        message: `HELD draftId="${held.draft.id}": The user said something during the five seconds that didn't come through, so nothing was sent and the app read the draft aloud again. Say nothing; if their next reply is a yes, call publish_draft with this draftId.`,
       };
     },
     // Every final user transcript, already added to the conversation. When it confirms the current draft (a yes right

@@ -8,5 +8,7 @@ export function createVoiceCall(_publicKey: string): VoiceCall {
     stop: () => undefined,
     say: () => undefined,
     addMessage: () => undefined,
+    setMuted: () => undefined,
+    muteAssistant: () => undefined,
   };
 }

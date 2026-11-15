@@ -1,7 +1,7 @@
 import * as Haptics from 'expo-haptics';
 import { Platform } from 'react-native';
 
-export type HapticEvent = 'next' | 'previous' | 'edge' | 'unrecognized' | 'agentConnecting' | 'agentAwake' | 'agentAsleep' | 'agentFailed';
+export type HapticEvent = 'next' | 'previous' | 'edge' | 'unrecognized' | 'agentConnecting' | 'agentAwake' | 'agentAsleep' | 'agentFailed' | 'talkStart' | 'talkEnd';
 
 const pause = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -15,6 +15,8 @@ const patterns: Record<HapticEvent, () => Promise<void>> = {
     await Haptics.selectionAsync();
   },
   agentConnecting: () => Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Soft),
+  talkStart: () => Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy),
+  talkEnd: () => Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light),
   agentFailed: () => Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error),
   agentAwake: async () => {
     await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);

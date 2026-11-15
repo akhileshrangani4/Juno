@@ -12,6 +12,7 @@ import { AgentSession, ConversationLog, type AgentStatus, type EndReason } from 
 import { agentMessages } from './agentMessages';
 import { buildAssistant } from './assistant';
 import { convexMemoryAudience, createConvexMemory } from './convexMemory';
+import { ListeningModeStore } from './listeningMode';
 import { createMemoryAccess } from './memoryAccess';
 import { MemorySignInNeededError } from './memoryClient';
 import { createMemoryOffer } from './memoryOffer';
@@ -20,9 +21,12 @@ import { detailFor } from './narrationAdapter';
 import { narrationSettings } from './narrationSettings';
 import { describeAccount, describeFocus, describeMemories, describeSettings } from './postContext';
 import { createToolHandlers } from './toolHandlers';
+import { playTalkTone } from './talkTones';
 import { createVoiceCall } from './vapiCall';
 
 const MEMORY_TIMEOUT_MS = 2500;
+
+const listeningModes = new ListeningModeStore(secureStore);
 
 // Release builds only print errors to the device log, so test builds (the ones with the dev deep link) log
 // the call lifecycle as errors to make it visible in the phone's logs. No transcript text is ever logged.
@@ -64,7 +68,7 @@ export function useVoiceAgent({
   feed: Feed;
   narrator: Narrator;
   onExit(reason: EndReason, message: string): void;
-}): { status: AgentStatus | null; say(text: string): boolean } {
+}): { status: AgentStatus | null; say(text: string): boolean; talkHold: { start(): void; end(cancelled: boolean): void } } {
   const { provider, account } = useSession();
   const [status, setStatus] = useState<AgentStatus | null>(null);
   const latest = useRef({ post, feed, narrator, onExit, account });
@@ -105,6 +109,7 @@ export function useVoiceAgent({
       memory,
       memoryOffer,
       conversation,
+      listening: listeningModes,
       notify: (text, speak) => session.current?.notify(text, speak),
       schedule,
       newId: () => Math.random().toString(36).slice(2, 8),
@@ -144,13 +149,18 @@ export function useVoiceAgent({
         haptic(reason === 'failed' || reason === 'micDenied' || reason === 'notConfigured' ? 'agentFailed' : 'agentAsleep');
         latest.current.onExit(reason, message);
       },
+      listeningMode: listeningModes,
+      cue: (cue) => {
+        haptic(cue);
+        return playTalkTone(cue === 'talkStart' ? 'start' : 'end');
+      },
       schedule,
       now: Date.now,
       log: (event, detail) => logLine(`[agent] ${event}${detail ? ` ${JSON.stringify(detail)}` : ''}`),
     });
     session.current = current;
     current.focusChanged(latest.current.post);
-    void current.start();
+    void listeningModes.loaded.then(() => current.start());
     return () => {
       current.stop('user');
       session.current = null;
@@ -161,5 +171,9 @@ export function useVoiceAgent({
     session.current?.focusChanged(post);
   }, [post]);
 
-  return { status: active ? status : null, say: (text) => session.current?.say(text) ?? false };
+  return {
+    status: active ? status : null,
+    say: (text) => session.current?.say(text) ?? false,
+    talkHold: { start: () => session.current?.holdStart(), end: (cancelled) => session.current?.holdEnd(cancelled) },
+  };
 }
