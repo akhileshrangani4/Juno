@@ -165,4 +165,28 @@ The scopes in `OAUTH_SCOPES` are the least the provider needs: create and delete
 
 `pnpm eval:agent` runs `src/agent/__eval__/vapiChat.eval.ts` on a developer machine: it sends a scripted conversation to the real assistant configuration through Vapi's chat API with `VAPI_PRIVATE_KEY` from your shell, runs every tool call through the real tool handlers against a mocked Bluesky account, and writes the transcript to `agent-eval-transcript.md` (or `EVAL_TRANSCRIPT`). Vapi's chat API needs a card on the Vapi account and is billed. With `EVAL_BACKEND=openai` and `OPENAI_API_KEY` it sends the same prompt and tools to the same model at OpenAI instead: a stand-in that tests the prompt and tools but not Vapi's own orchestration.
 
+Each step of the script says what correct looks like, and the transcript opens with a pass or fail per step. The safety steps are the ones where publishing would be wrong: a hedge after a read-back, a yes with a change attached, "yes, delete it" on a post, a yes to the agent's own question, and a change during the five seconds. These check that the model held back, not only that the app's guard caught it. The last three steps are harder requests: two actions in one sentence, "send that to Maya" (no tool fits, so the agent should ask or explain rather than guess), and a correction in the middle of dictation. The stand-in streams, so it also records each turn's time to the first token, its total time and its cost. `EVAL_RESULTS=<file>` writes those as JSON.
+
+## The voice agent's model
+
+The model is `AGENT_MODEL` in `src/agent/assistant.ts` (gpt-4.1, temperature 0.2). In AKH-42 the eval ran several times on each of the newer models Vapi offers. None did measurably better on this agent's job, and each was at least 0.17 seconds slower to its first token, so gpt-4.1 stayed. The comparison is in that pull request. To compare models, override the shipped one:
+
+```sh
+EVAL_BACKEND=openai EVAL_MODEL=gpt-5.6-sol EVAL_REASONING_EFFORT=none EVAL_SERVICE_TIER=fast pnpm eval:agent
+EVAL_BACKEND=openai EVAL_MODEL=gpt-4.1 EVAL_REASONING_EFFORT= pnpm eval:agent   # a model without reasoning
+```
+
+Things that constrain the choice:
+- Take model ids from Vapi's list (docs.vapi.ai/providers/model/openai), not OpenAI's. Some OpenAI models, such as gpt-6.1-sol, aren't offered through Vapi.
+- On the GPT-5.x and GPT-6 models, OpenAI accepts a temperature other than 1 only with reasoning off, so switching to one means adding `reasoningEffort: 'none'` beside the model. With function tools on Chat Completions, gpt-6-luna refuses any reasoning effort above `none`.
+- Vapi refuses `reasoningEffort: 'none'` for gpt-5.5.
+- Reasoning at `low` added about 0.3 to 0.75 seconds per request in AKH-42's measurements.
+- Vapi's fast service tier (`serviceTier: 'fast'`) costs twice as much per token on the models that support it.
+
+Before shipping a new model, confirm Vapi accepts the configuration by creating and then deleting a test assistant through Vapi's API, with `VAPI_PRIVATE_KEY` from your shell.
+
+### Billing the model to your own OpenAI account
+
+Vapi can call OpenAI with your own API key. Add it in the Vapi dashboard under Integrations. Vapi then stops charging for the model, and OpenAI bills your account directly at its own prices. Some models may only be available through Vapi once a provider key is added. The key is entered only in Vapi's dashboard: it never goes into the app, `build.env`, `.env`, or this repository, and the app never sees it. Akhilesh added his OpenAI key there on 2026-11-15, so the agent's model is billed to his OpenAI account.
+
 `pnpm eval:bluesky` publishes a real post and reply through the tool handlers to the account in `BLUESKY_TEST_HANDLE`/`BLUESKY_TEST_APP_PASSWORD`, undoes and deletes them, and checks each step on Bluesky. Use a throwaway account.

@@ -11,6 +11,11 @@ export const SILENCE_TIMEOUT_SECONDS = 30;
 export const MAX_DURATION_SECONDS = 600;
 export const FIRST_MESSAGE = "I'm listening.";
 
+// The model behind the voice agent, kept after measuring tool use, publish safety and time to first word against
+// the newer models Vapi offers (docs/building.md, "The voice agent's model"). A GPT-5.x or GPT-6 model also needs
+// reasoningEffort: 'none' here, or OpenAI refuses the temperature and the first word comes later.
+export const AGENT_MODEL = 'gpt-4.1';
+
 // assistant.speechStarted names who is speaking each turn (the app's say() or the model); see agentVoice.ts.
 export const clientMessages = ['tool-calls', 'transcript', 'status-update', 'speech-update', 'assistant.speechStarted'] as const;
 
@@ -21,7 +26,7 @@ export function buildAssistant(context: PromptContext) {
     firstMessageMode: 'assistant-speaks-first' as const,
     model: {
       provider: 'openai' as const,
-      model: 'gpt-4.1',
+      model: AGENT_MODEL,
       temperature: 0.2,
       messages: [{ role: 'system' as const, content: buildSystemPrompt(context) }],
       tools: vapiTools,
