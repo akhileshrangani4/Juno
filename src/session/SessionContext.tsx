@@ -26,7 +26,12 @@ export function SessionProvider({ children, provider: injected }: { children: Re
   const [state, setState] = useState({ ready: false, onboarded: false, guest: false, account: null as SocialAccount | null });
 
   useEffect(() => {
-    Promise.all([provider.restoreSession().catch(() => null), secureStore.get(ONBOARDED_KEY), secureStore.get(GUEST_KEY)]).then(
+    const read = (key: string) =>
+      secureStore.get(key).catch((error: unknown) => {
+        console.warn(`Could not read ${key} from secure storage`, error);
+        return null;
+      });
+    Promise.all([provider.restoreSession().catch(() => null), read(ONBOARDED_KEY), read(GUEST_KEY)]).then(
       ([account, onboarded, guest]) => {
         if (account) recordUser(provider.id, account);
         setState({ ready: true, onboarded: onboarded === '1', guest: guest === '1', account });
