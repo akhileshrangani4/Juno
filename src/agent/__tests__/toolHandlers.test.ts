@@ -2,7 +2,7 @@ import { messages, type DescriptionParts, type DetailLevel } from '@/narration/b
 import type { Post } from '@/social/types';
 import { makeMemory, makeProvider, maya, nextPost, setup } from '@/testing/agent';
 import { ActionHistory } from '@/actions/history';
-import { forgetLikes, likeUriOf, recordLike, toggleLike } from '@/feed/likes';
+import { forgetLikes, LIKE_TIMEOUT_MS, likeUriOf, recordLike, toggleLike } from '@/feed/likes';
 import { makePost } from '@/testing/fixtures';
 
 import { agentMessages } from '../agentMessages';
@@ -236,38 +236,67 @@ describe('agent tools', () => {
       return ctx;
     }
 
-    it('reverses the like once it lands, never the reply sent before it', async () => {
+    function told(history: ActionHistory) {
+      const heard: string[] = [];
+      history.onTell((text) => heard.push(text));
+      return heard;
+    }
+
+    it('promises to remove the like, removes it once it lands, and never touches the reply sent before it', async () => {
       const history = new ActionHistory();
+      const heard = told(history);
       const { handlers, provider } = await sentReply(history);
       recordLike(maya.uri, null);
       const like = pendingCall<{ uri: string }>();
       provider.like.mockImplementationOnce(() => like.promise);
       const liking = toggleLike(provider, maya, history);
-      const undoing = handlers.run('undo', {});
-      await flush();
+      expect((await handlers.run('undo', {})).result).toBe(
+        "UNDO_PENDING: Bluesky hasn't answered the like on Maya's post yet. The app removes the like as soon as Bluesky answers. Confirm in a few words.",
+      );
       expect(provider.unlike).not.toHaveBeenCalled();
       like.resolve({ uri: 'at://me/like/slow' });
-      expect((await undoing).result).toBe("UNDONE: Removed your like on Maya's post. Confirm in a few words.");
       expect(await liking).toEqual({ outcome: 'undone' });
+      await flush();
       expect(provider.unlike).toHaveBeenCalledWith(maya, { uri: 'at://me/like/slow' });
       expect(provider.deletePost).not.toHaveBeenCalled();
       expect(likeUriOf(maya)).toBeNull();
+      expect(heard).toEqual([]);
     });
 
-    it('says there was nothing to undo when the like fails after the undo, and leaves the reply for the next undo', async () => {
+    it('says nothing more when the like fails after the undo, and leaves the reply for the next undo', async () => {
       const history = new ActionHistory();
+      const heard = told(history);
       const { handlers, provider } = await sentReply(history);
       recordLike(maya.uri, null);
       const like = pendingCall<{ uri: string }>();
       provider.like.mockImplementationOnce(() => like.promise);
       const liking = toggleLike(provider, maya, history);
-      const undoing = handlers.run('undo', {});
+      expect((await handlers.run('undo', {})).result).toMatch(/^UNDO_PENDING/);
       like.reject(new Error('server error'));
-      expect((await undoing).result).toBe("NOTHING_TO_UNDO: The like on Maya's post didn't go through, so there was nothing to undo. Tell the user. Confirm in a few words.");
       expect(await liking).toEqual({ outcome: 'undone' });
+      await flush();
       expect(provider.unlike).not.toHaveBeenCalled();
       expect(provider.deletePost).not.toHaveBeenCalled();
+      expect(heard).toEqual([]);
       expect(history.size).toBe(1);
+    });
+
+    it('says the removal failed, naming the post, and keeps the like undoable, when removing it after it lands fails', async () => {
+      const history = new ActionHistory();
+      const heard = told(history);
+      const { handlers, provider } = setup({ history });
+      recordLike(maya.uri, null);
+      const like = pendingCall<{ uri: string }>();
+      provider.like.mockImplementationOnce(() => like.promise);
+      provider.unlike.mockRejectedValueOnce(new Error('server error'));
+      const liking = toggleLike(provider, maya, history);
+      await handlers.run('undo', {});
+      like.resolve({ uri: 'at://me/like/slow' });
+      await liking;
+      await flush();
+      expect(heard).toEqual(["Couldn't remove your like on Maya's post. Nothing changed."]);
+      expect(likeUriOf(maya)).toBe('at://me/like/slow');
+      expect((await handlers.run('undo', {})).result).toBe("UNDONE: Removed your like on Maya's post. Confirm in a few words.");
     });
 
     it('takes back the entry of a like that fails with no undo, so the next undo reaches the reply', async () => {
@@ -279,17 +308,20 @@ describe('agent tools', () => {
       expect(history.size).toBe(1);
     });
 
-    it('likes again once a pending unlike lands, when undo was said while it was sent', async () => {
+    it('puts the like back once a pending unlike lands, when undo was said while it was sent', async () => {
       const history = new ActionHistory();
       const { handlers, provider } = setup({ history });
       recordLike(maya.uri, 'at://me/like/old');
       const unlike = pendingCall<boolean>();
       provider.unlike.mockImplementationOnce(() => unlike.promise);
       const unliking = toggleLike(provider, maya, history);
-      const undoing = handlers.run('undo', {});
+      expect((await handlers.run('undo', {})).result).toBe(
+        "UNDO_PENDING: Bluesky hasn't answered yet about removing the like on Maya's post. The app puts the like back as soon as Bluesky answers. Confirm in a few words.",
+      );
       unlike.resolve(true);
-      expect((await undoing).result).toBe("UNDONE: Liked Maya's post again. Confirm in a few words.");
       expect(await unliking).toEqual({ outcome: 'undone' });
+      await flush();
+      expect(provider.like).toHaveBeenCalledWith(maya);
       expect(likeUriOf(maya)).toBe('at://me/like/1');
       recordLike(maya.uri, null);
     });
@@ -308,6 +340,123 @@ describe('agent tools', () => {
       expect(provider.like).toHaveBeenCalledTimes(1);
       expect(history.size).toBe(1);
       recordLike(maya.uri, null);
+    });
+  });
+
+  describe('a like Bluesky is slow to answer', () => {
+    beforeEach(() => jest.useFakeTimers({ doNotFake: ['setImmediate'] }));
+    afterEach(() => jest.useRealTimers());
+
+    function stalledLike(provider: ReturnType<typeof makeProvider>) {
+      let resolve!: (record: { uri: string }) => void;
+      let reject!: (error: Error) => void;
+      provider.like.mockImplementationOnce(
+        () =>
+          new Promise((done, fail) => {
+            resolve = done;
+            reject = fail;
+          }),
+      );
+      return { resolve: (record: { uri: string }) => resolve(record), reject: (error: Error) => reject(error) };
+    }
+
+    it('is reported as not confirmed, keeps its entry and guard, and is undone normally once it lands late', async () => {
+      const history = new ActionHistory();
+      const { handlers, provider } = setup({ history });
+      recordLike(maya.uri, null);
+      const like = stalledLike(provider);
+      const liking = toggleLike(provider, maya, history);
+      jest.advanceTimersByTime(LIKE_TIMEOUT_MS);
+      expect(await liking).toEqual({ outcome: 'unconfirmed', wasLiked: false });
+      expect(history.size).toBe(1);
+      expect(await toggleLike(provider, maya, history)).toEqual({ outcome: 'busy' });
+      expect((await handlers.run('like_post', {})).result).toMatch(/^BUSY/);
+      expect(provider.like).toHaveBeenCalledTimes(1);
+      like.resolve({ uri: 'at://me/like/late' });
+      await flush();
+      expect(likeUriOf(maya)).toBe('at://me/like/late');
+      expect((await handlers.run('undo', {})).result).toBe("UNDONE: Removed your like on Maya's post. Confirm in a few words.");
+      expect(provider.deletePost).not.toHaveBeenCalled();
+    });
+
+    it('never lets an undo after the timeout reach the reply sent before it, whether the like lands or fails', async () => {
+      for (const lands of [true, false]) {
+        const history = new ActionHistory();
+        const { handlers, provider, say, scheduler } = setup({ history });
+        say("reply, that's beautiful, where was this?");
+        const draft = await handlers.run('draft_reply', { text: "That's beautiful, where was this?" });
+        say('Yes.');
+        await handlers.run('publish_draft', { draftId: draftIdOf(draft.result) });
+        handlers.publisher.startCountdown();
+        await scheduler.advance(UNDO_WINDOW_MS);
+        await flush();
+        recordLike(maya.uri, null);
+        const like = stalledLike(provider);
+        const liking = toggleLike(provider, maya, history);
+        jest.advanceTimersByTime(LIKE_TIMEOUT_MS);
+        expect(await liking).toEqual({ outcome: 'unconfirmed', wasLiked: false });
+        expect((await handlers.run('undo', {})).result).toMatch(/^UNDO_PENDING/);
+        if (lands) like.resolve({ uri: 'at://me/like/late' });
+        else like.reject(new Error('server error'));
+        await flush();
+        expect(provider.unlike).toHaveBeenCalledTimes(lands ? 1 : 0);
+        expect(provider.deletePost).not.toHaveBeenCalled();
+        expect(likeUriOf(maya)).toBeNull();
+        expect(history.size).toBe(1);
+      }
+    });
+
+    it('is reported by "like this" as not confirmed, never as nothing changed', async () => {
+      const { handlers, provider, scheduler, notify } = setup();
+      const like = stalledLike(provider);
+      const liking = handlers.run('like_post', {});
+      await scheduler.advance(TOOL_CEILING_MS);
+      expect((await liking).result).toMatch(/^STILL_WORKING/);
+      jest.advanceTimersByTime(LIKE_TIMEOUT_MS);
+      await flush();
+      expect(notify).toHaveBeenCalledWith(
+        "Result of like_post: UNCONFIRMED: Bluesky hasn't answered, so the like on Maya's post isn't confirmed yet. The app keeps waiting: if it lands it counts, and undo still reverses it. Tell the user in a few words.",
+        undefined,
+      );
+      like.resolve({ uri: 'at://me/like/late' });
+    });
+  });
+
+  describe('undo goes by recency across drafts and likes', () => {
+    async function draftThenRead(ctx: ReturnType<typeof setup>) {
+      ctx.say("reply, that's beautiful, where was this?");
+      await ctx.handlers.run('draft_reply', { text: "That's beautiful, where was this?" });
+      expect(ctx.handlers.publisher.currentDraft).not.toBeNull();
+    }
+
+    it('undoes a like made after a draft was read back, and keeps the draft', async () => {
+      const ctx = setup();
+      recordLike(maya.uri, null);
+      await draftThenRead(ctx);
+      expect(await toggleLike(ctx.provider, maya, ctx.history)).toEqual({ outcome: 'liked' });
+      expect((await ctx.handlers.run('undo', {})).result).toBe("UNDONE: Removed your like on Maya's post. Confirm in a few words.");
+      expect(ctx.handlers.publisher.currentDraft).not.toBeNull();
+    });
+
+    it('discards a draft made after a like, and keeps the like', async () => {
+      const ctx = setup();
+      recordLike(maya.uri, null);
+      await toggleLike(ctx.provider, maya, ctx.history);
+      await draftThenRead(ctx);
+      expect((await ctx.handlers.run('undo', {})).result).toMatch(/^DISCARDED/);
+      expect(ctx.handlers.publisher.currentDraft).toBeNull();
+      expect(ctx.provider.unlike).not.toHaveBeenCalled();
+      expect(likeUriOf(maya)).toBe('at://me/like/1');
+    });
+
+    it('undoes the like and then the draft when undo is said twice', async () => {
+      const ctx = setup();
+      recordLike(maya.uri, null);
+      await draftThenRead(ctx);
+      await toggleLike(ctx.provider, maya, ctx.history);
+      expect((await ctx.handlers.run('undo', {})).result).toMatch(/^UNDONE: Removed your like/);
+      expect((await ctx.handlers.run('undo', {})).result).toMatch(/^DISCARDED/);
+      expect(ctx.handlers.publisher.currentDraft).toBeNull();
     });
   });
 

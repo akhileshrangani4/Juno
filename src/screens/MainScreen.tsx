@@ -17,7 +17,7 @@ import type { CircleDirection } from '@/gestures/circle';
 import { createRateLimiter } from '@/gestures/rateLimit';
 import type { SwipeDirection } from '@/gestures/swipe';
 import { authorName, messages } from '@/narration/buildNarration';
-import { commentMessages, commentsEntry, likeFailure, replyPosition } from '@/narration/comments';
+import { commentMessages, commentsEntry, likeFailure, likeUnconfirmed, replyPosition } from '@/narration/comments';
 import { earcons, useNarrationPreferences, usePostNarrator } from '@/narration/postNarration';
 import { applyNarrationAction, isNarrationAction, narrationActions, replyScripts } from '@/narration/requests';
 import { useNarrator } from '@/narration/useNarrator';
@@ -210,6 +210,19 @@ export function MainScreen() {
   // nothing is being said. A failure is always said in full, naming the post: after what is being said, or before the
   // next post if the user moves on. While the agent is awake nothing is spoken on the device: a failure goes through
   // the agent's voice, and one that comes while the call is connecting waits for it.
+  // A like that failed or isn't confirmed, or an undo that failed once Bluesky answered: its own haptic, then said in
+  // full on the device, through the agent's voice, or held while the call connects.
+  const reportProblem = (message: string) => {
+    haptic('likeFailed');
+    if (modeNow.current === 'scroll') return postNarrator.notice(message);
+    if (!agent.say(message)) heldForAgent.current.push(message);
+  };
+  const report = useRef(reportProblem);
+  useEffect(() => {
+    report.current = reportProblem;
+  });
+  useEffect(() => actionHistory.onTell((text) => report.current(text)), []);
+
   const like = async () => {
     if (!target) {
       haptic('edge');
@@ -224,13 +237,8 @@ export function MainScreen() {
     haptic(liking ? 'like' : 'unlike');
     earcons.play(liking ? 'like' : 'unlike');
     const result = await toggleLike(provider, target, actionHistory);
-    if (result.outcome === 'failed') {
-      haptic('likeFailed');
-      const message = likeFailure(whose(target), result.wasLiked, result.reason);
-      if (modeNow.current === 'scroll') return postNarrator.notice(message);
-      if (!agent.say(message)) heldForAgent.current.push(message);
-      return;
-    }
+    if (result.outcome === 'failed') return reportProblem(likeFailure(whose(target), result.wasLiked, result.reason));
+    if (result.outcome === 'unconfirmed') return reportProblem(likeUnconfirmed(whose(target), result.wasLiked));
     if (result.outcome !== 'liked' && result.outcome !== 'unliked') return;
     if (modeNow.current === 'agent' || focusedUri.current !== target.uri || postNarrator.speaking()) return;
     narrator.speak(result.outcome === 'liked' ? commentMessages.liked : commentMessages.unliked);

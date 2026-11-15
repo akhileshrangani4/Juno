@@ -1,8 +1,8 @@
 import type { MoveOutcome } from '@/feed/feedState';
 import type { ActionHistory, UndoEntry } from '@/actions/history';
-import { likePost, unlikePost } from '@/feed/likes';
+import { likePost, unlikePost, whose } from '@/feed/likes';
 import { authorName, lateDescription, messages, type DescriptionParts, type DetailLevel } from '@/narration/buildNarration';
-import { commentMessages, commentsEntry } from '@/narration/comments';
+import { commentMessages, commentsEntry, likeUnconfirmed } from '@/narration/comments';
 import type { Post, PostRef, RecordRef, ReplyParent, SocialAccount, SocialProvider } from '@/social/types';
 
 import { agentMessages } from './agentMessages';
@@ -84,6 +84,8 @@ const ACKNOWLEDGEMENT = /^\W*(?:(?:thanks|thank you|okay|ok|great)\W*)+$/i;
 const NOT_SENT: UndoEntry = { label: 'failed', undo: async () => "NOTHING_TO_UNDO: The last post didn't go out, so there is nothing to undo. Tell the user." };
 
 const LIKE_BUSY = "BUSY: A like or unlike of this post is still being sent. Nothing changed. Tell the user in a few words and that they can try again in a moment.";
+const unconfirmed = (post: Post, wasLiked: boolean) =>
+  `UNCONFIRMED: ${likeUnconfirmed(whose(post), wasLiked)} The app keeps waiting: if it lands it counts, and undo still reverses it. Tell the user in a few words.`;
 const LIKE_UNDONE = 'UNDONE_WHILE_SENDING: The user said undo while this was being sent, and the undo tells them what happened. Say nothing.';
 const ALREADY_REMOVED: UndoEntry = { label: 'removed', undo: async () => 'NOTHING_TO_UNDO: The last action was already stopped or removed. Tell the user.' };
 
@@ -298,7 +300,26 @@ export function createToolHandlers(deps: AgentDeps) {
 
   const publisher = new Publisher({ send, schedule: deps.schedule, newId: deps.newId, now: deps.now });
 
+  // The draft, from its read-back to its send, is one action on the history, moved to the top each time the user works
+  // on it, so undo reaches it in order with likes and everything else: the most recent action is the one undone.
+  const undoDraft = (): ToolOutcome => {
+    const undone = publisher.undo();
+    if (undone?.state === 'stopped') {
+      history.push(ALREADY_REMOVED);
+      return { speak: agentMessages.undone, respond: false, result: 'UNDONE_BEFORE_SENDING: Nothing was sent. The app told the user.' };
+    }
+    if (undone?.state === 'sending') return { speak: agentMessages.undoWhileSending, respond: false, result: UNDO_WHILE_SENDING };
+    publisher.discard();
+    return { respond: true, result: 'DISCARDED: The draft was thrown away; nothing was published. Confirm briefly.' };
+  };
+  const draftEntry: UndoEntry = {
+    label: 'draft',
+    live: () => publisher.currentDraft !== null || publisher.busy,
+    undo: async () => undoDraft().result,
+  };
+
   function draftResult(outcome: DraftOutcome): ToolOutcome {
+    if (publisher.currentDraft) history.touch(draftEntry);
     if (outcome.ok) {
       return {
         speak: outcome.readBack,
@@ -381,6 +402,8 @@ export function createToolHandlers(deps: AgentDeps) {
             return { respond: true, result: LIKE_BUSY };
           case 'undone':
             return { respond: false, result: LIKE_UNDONE };
+          case 'unconfirmed':
+            return { respond: true, result: unconfirmed(focus, false) };
         }
       }
       case 'unlike_post': {
@@ -394,6 +417,8 @@ export function createToolHandlers(deps: AgentDeps) {
             return { respond: true, result: LIKE_BUSY };
           case 'undone':
             return { respond: false, result: LIKE_UNDONE };
+          case 'unconfirmed':
+            return { respond: true, result: unconfirmed(focus, true) };
         }
       }
       case 'draft_post':
@@ -426,6 +451,7 @@ export function createToolHandlers(deps: AgentDeps) {
           return { speak: outcome.readBack, respond: false, result: refusal(outcome, utterance), refused: outcome.reason };
         }
         if (!outcome.ok) return { respond: true, result: refusal(outcome, utterance), refused: outcome.reason };
+        history.touch(draftEntry);
         return {
           speak: outcome.announcement,
           respond: false,
@@ -435,15 +461,9 @@ export function createToolHandlers(deps: AgentDeps) {
       }
       case 'undo': {
         if (deps.now().getTime() - lastUndoneAt < 10_000) return { respond: false, result: 'ALREADY_UNDONE: The app already handled that undo and tells the user what happened. Say nothing.' };
-        const undone = publisher.undo();
-        if (undone?.state === 'stopped') {
-          history.push(ALREADY_REMOVED);
-          return { speak: agentMessages.undone, respond: false, result: 'UNDONE_BEFORE_SENDING: Nothing was sent. The app told the user.' };
-        }
-        if (undone?.state === 'sending') return { speak: agentMessages.undoWhileSending, respond: false, result: UNDO_WHILE_SENDING };
-        if (publisher.discard()) return { respond: true, result: 'DISCARDED: The draft was thrown away; nothing was published. Confirm briefly.' };
         const entry = history.pop();
         if (!entry) return { respond: true, result: 'NOTHING_TO_UNDO: There is nothing to undo. Tell the user.' };
+        if (entry === draftEntry) return undoDraft();
         return { respond: true, result: `${await entry.undo()} Confirm in a few words.` };
       }
       case 'change_narration': {

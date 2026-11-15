@@ -93,7 +93,7 @@ describe('toggleLike', () => {
 describe('a like that gets no answer', () => {
   afterEach(() => jest.useRealTimers());
 
-  it('is given up on after the timeout, takes its history entry back, and updates the like state if the answer comes later', async () => {
+  it('is reported as unconfirmed after the timeout but keeps its history entry and guard until Bluesky answers', async () => {
     jest.useFakeTimers();
     let answer!: (record: { uri: string }) => void;
     const provider = fakeProvider();
@@ -101,16 +101,35 @@ describe('a like that gets no answer', () => {
     const history = new ActionHistory();
     const post = freshPost();
     const liking = toggleLike(provider, post, history);
+    jest.advanceTimersByTime(LIKE_TIMEOUT_MS);
+    expect(await liking).toEqual({ outcome: 'unconfirmed', wasLiked: false });
     expect(history.size).toBe(1);
     expect(likeInFlight(post)).toBe(true);
+    expect(await toggleLike(provider, post, history)).toEqual({ outcome: 'busy' });
+    answer({ uri: 'at://me/like/late' });
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(likeUriOf(post)).toBe('at://me/like/late');
+    expect(likeInFlight(post)).toBe(false);
+    expect(history.size).toBe(1);
+    expect(provider.like).toHaveBeenCalledTimes(1);
+  });
+
+  it('takes its entry back when the late answer is a failure', async () => {
+    jest.useFakeTimers();
+    let fail!: (error: Error) => void;
+    const provider = fakeProvider();
+    provider.like.mockImplementationOnce(() => new Promise((_resolve, reject) => (fail = reject)));
+    const history = new ActionHistory();
+    const post = freshPost();
+    const liking = toggleLike(provider, post, history);
     jest.advanceTimersByTime(LIKE_TIMEOUT_MS);
-    expect(await liking).toEqual({ outcome: 'failed', wasLiked: false, reason: 'timeout' });
+    await liking;
+    fail(new Error('server error'));
+    await Promise.resolve();
+    await Promise.resolve();
     expect(history.size).toBe(0);
     expect(likeInFlight(post)).toBe(false);
     expect(likeUriOf(post)).toBeNull();
-    answer({ uri: 'at://me/like/late' });
-    await Promise.resolve();
-    expect(likeUriOf(post)).toBe('at://me/like/late');
-    expect(history.size).toBe(0);
   });
 });

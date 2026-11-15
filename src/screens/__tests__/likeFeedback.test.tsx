@@ -283,4 +283,12 @@ describe('two-finger hold to like', () => {
     expect(spoken()).toHaveLength(1);
     expect(spoken()[0]).toMatch(/^Couldn't connect\. Couldn't like Maya's post\. Nothing changed\. \S/);
   });
+
+  it('says an undo that failed after Bluesky answered the way it says a failed like', async () => {
+    await render(<MainScreen />);
+    mockNarrator.speak.mockClear();
+    await act(async () => actionHistory.tell("Couldn't remove your like on Maya's post. Nothing changed."));
+    expect(haptic).toHaveBeenLastCalledWith('likeFailed');
+    expect(spoken()).toEqual(["Couldn't remove your like on Maya's post. Nothing changed."]);
+  });
 });

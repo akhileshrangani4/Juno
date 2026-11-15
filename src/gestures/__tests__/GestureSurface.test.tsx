@@ -170,6 +170,7 @@ describe('GestureSurface', () => {
     jest.advanceTimersByTime(3000);
     touch(UP, [one], []);
     expect(props.onTwoFingerHold).not.toHaveBeenCalled();
+    expect(props.onUnrecognizedStroke).not.toHaveBeenCalled();
     expect(claims(tag)).toBe(0);
   });
 

@@ -247,6 +247,7 @@ export class AgentSession {
     this.countdownArmed?.();
     this.countdownArmed = null;
     const cancelled = this.deps.handlers.publisher.cancelPending();
+    this.deps.handlers.publisher.discard();
     this.deps.log('exit', { reason, cancelledPending: !!cancelled });
     this.deps.status('ended');
     this.deps.exit(reason, `${cancelled ? agentMessages.notSent : ''}${EXIT_MESSAGES[reason]}`);

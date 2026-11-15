@@ -35,6 +35,10 @@ export const commentMessages = {
 
 // A like that didn't go through, said whatever is in focus by then, so it names the post it was made on.
 export function likeFailure(whose: string, wasLiked: boolean, reason: LikeFailure): string {
-  if (reason === 'timeout') return `Bluesky didn't answer, so ${wasLiked ? `removing your like on ${whose}` : `the like on ${whose}`} isn't confirmed.`;
   return `${wasLiked ? `Couldn't remove your like on ${whose}.` : `Couldn't like ${whose}.`} ${reason === 'offline' ? "Bluesky can't be reached. Check your connection." : 'Nothing changed.'}`;
+}
+
+// Bluesky hasn't answered a like or unlike yet. It may still land, and then it counts like any other.
+export function likeUnconfirmed(whose: string, wasLiked: boolean): string {
+  return `Bluesky hasn't answered, so ${wasLiked ? `removing your like on ${whose}` : `the like on ${whose}`} isn't confirmed yet.`;
 }

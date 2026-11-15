@@ -2,6 +2,7 @@ import { useSyncExternalStore } from 'react';
 
 import type { ActionHistory, UndoEntry } from '@/actions/history';
 import { authorName } from '@/narration/buildNarration';
+import { likeFailure } from '@/narration/comments';
 import { OfflineError, type Post, type SocialProvider } from '@/social/types';
 
 type Likes = Pick<SocialProvider, 'like' | 'unlike'>;
@@ -50,150 +51,133 @@ export function whose(post: Post): string {
   return `${authorName(post)}'s ${'parentAuthor' in post ? 'reply' : 'post'}`;
 }
 
-// A like or unlike that gets no answer in this long is given up on and reported as unconfirmed, so nothing stays
-// pending for ever. If the answer comes later, the like state is updated to match it.
+// How long a like or unlike waits for Bluesky before the user is told it isn't confirmed. Only what the user hears
+// changes: the request, its undo entry and the post's in-flight guard all stay until Bluesky really answers.
 export const LIKE_TIMEOUT_MS = 10_000;
 
-export class LikeTimeoutError extends Error {}
-
-export type LikeFailure = 'offline' | 'timeout' | 'other';
+export type LikeFailure = 'offline' | 'other';
 
 // busy: a like or unlike of this post is already on the network. undone: the user said undo while it was on the
-// network, and the undo tells them what happened.
-export type LikeOutcome = { outcome: 'liked' | 'unliked' | 'busy' | 'undone' } | { outcome: 'failed'; wasLiked: boolean; reason: LikeFailure };
+// network, and the undo tells them what happened. unconfirmed: Bluesky hasn't answered within LIKE_TIMEOUT_MS.
+export type LikeOutcome =
+  | { outcome: 'liked' | 'unliked' | 'busy' | 'undone' }
+  | { outcome: 'unconfirmed'; wasLiked: boolean }
+  | { outcome: 'failed'; wasLiked: boolean; reason: LikeFailure };
 
 // One like or unlike per post at a time, by gesture or by voice, so a post can never get two like records.
 export function likeInFlight(post: Pick<Post, 'uri'>): boolean {
   return sending.has(post.uri);
 }
 
-function bounded<T>(call: Promise<T>, late: (value: T) => void): Promise<T> {
-  return new Promise((resolve, reject) => {
-    let expired = false;
-    const timer = setTimeout(() => {
-      expired = true;
-      reject(new LikeTimeoutError('Bluesky did not answer in time'));
-    }, LIKE_TIMEOUT_MS);
-    call.then(
-      (value) => {
-        clearTimeout(timer);
-        if (expired) late(value);
-        else resolve(value);
-      },
-      (error: unknown) => {
-        clearTimeout(timer);
-        if (!expired) reject(error);
-      },
-    );
-  });
+function failure(error: unknown): LikeFailure {
+  return error instanceof OfflineError ? 'offline' : 'other';
 }
 
-// Sends one like or unlike. Its undo entry goes on the history before the request, so an undo said while it is on the
-// network reverses this action, never the one before it: the undo waits for the answer, then reverses it, or says
-// there was nothing to undo if it didn't go through. An action that fails or changes nothing takes its entry back.
-async function send<T>(
-  post: Post,
-  history: ActionHistory,
-  label: string,
-  call: () => Promise<T>,
-  settle: (value: T) => boolean,
-  reverse: (value: T) => Promise<string>,
-  nothingToUndo: string,
-): Promise<{ undone: boolean }> {
+type Settled<T> = { ok: true; value: T; changed: boolean } | { ok: false; error: unknown };
+
+type Send<T> = {
+  call: () => Promise<T>;
+  // Records the answer in the like state; false when it changed nothing.
+  settle: (value: T) => boolean;
+  // Reverses it for undo, and says what was reversed.
+  reverse: (value: T) => Promise<string>;
+  // What undo says while Bluesky hasn't answered yet.
+  pending: string;
+  // What the user hears if that deferred reversal fails.
+  reverseFailed: (error: unknown) => string;
+};
+
+// Sends one like or unlike. Its undo entry goes on the history before the request and the post is guarded until the
+// request settles, however long that takes, so undo never skips it to reach an older action and the post is never
+// sent twice. When it settles, an action that changed something stays on the history as an ordinary undoable action;
+// one that failed or changed nothing takes its entry back. An undo said before it settles is promised at once and
+// carried out when it settles; only a reversal that then fails is said.
+async function send<T>(post: Post, history: ActionHistory, label: string, steps: Send<T>): Promise<'done' | 'undone' | 'unconfirmed'> {
   sending.add(post.uri);
   const session = viewer;
   let undoAsked = false;
-  let landed: Promise<{ value: T; changed: boolean } | null> = Promise.resolve(null);
+  let state: Settled<T> | null = null;
   const entry: UndoEntry = {
     label,
     undo: async () => {
       undoAsked = true;
-      const done = await landed;
-      return done?.changed ? reverse(done.value) : nothingToUndo;
+      if (state?.ok) return steps.reverse(state.value);
+      return steps.pending;
     },
   };
   history.push(entry);
-  const result = (async () => {
-    try {
-      const value = await bounded(call(), (late) => {
-        if (session === viewer) settle(late);
-      });
-      const changed = session === viewer && settle(value);
-      if (!changed) history.remove(entry);
-      return { value, changed };
-    } catch (error) {
-      history.remove(entry);
-      throw error;
-    } finally {
-      if (session === viewer) sending.delete(post.uri);
-    }
-  })();
-  landed = result.catch(() => null);
-  try {
-    await result;
-  } catch (error) {
-    if (!undoAsked) throw error;
-  }
-  return { undone: undoAsked };
+  const settled = steps.call().then(
+    (value): Settled<T> => ({ ok: true, value, changed: session === viewer && steps.settle(value) }),
+    (error: unknown): Settled<T> => ({ ok: false, error }),
+  );
+  void settled.then((result) => {
+    state = result;
+    if (session === viewer) sending.delete(post.uri);
+    if (!result.ok || !result.changed) return history.remove(entry);
+    if (!undoAsked) return;
+    steps.reverse(result.value).catch((error: unknown) => {
+      history.push(entry);
+      history.tell(steps.reverseFailed(error));
+    });
+  });
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const first = await Promise.race([settled, new Promise<'timeout'>((resolve) => (timer = setTimeout(() => resolve('timeout'), LIKE_TIMEOUT_MS)))]);
+  clearTimeout(timer);
+  if (undoAsked) return 'undone';
+  if (first === 'timeout') return 'unconfirmed';
+  if (!first.ok) throw first.error;
+  return 'done';
 }
 
 // The one way the app likes and unlikes, by gesture or by voice, and what "undo" says it reversed.
-export async function likePost(provider: Likes, post: Post, history: ActionHistory): Promise<'liked' | 'alreadyLiked' | 'busy' | 'undone'> {
+export async function likePost(provider: Likes, post: Post, history: ActionHistory): Promise<'liked' | 'alreadyLiked' | 'busy' | 'undone' | 'unconfirmed'> {
   if (likeInFlight(post)) return 'busy';
   if (likeUriOf(post)) return 'alreadyLiked';
-  const { undone } = await send(
-    post,
-    history,
-    'like',
-    () => provider.like(post),
-    (record) => {
+  const sent = await send(post, history, 'like', {
+    call: () => provider.like(post),
+    settle: (record) => {
       recordLike(post.uri, record.uri);
       return true;
     },
-    async (record) => {
+    reverse: async (record) => {
       const removed = await provider.unlike(post, record);
       recordLike(post.uri, null);
       return removed ? `UNDONE: Removed your like on ${whose(post)}.` : 'NOTHING_TO_UNDO: It was not liked.';
     },
-    `NOTHING_TO_UNDO: The like on ${whose(post)} didn't go through, so there was nothing to undo. Tell the user.`,
-  );
-  return undone ? 'undone' : 'liked';
+    pending: `UNDO_PENDING: Bluesky hasn't answered the like on ${whose(post)} yet. The app removes the like as soon as Bluesky answers.`,
+    reverseFailed: (error) => likeFailure(whose(post), true, failure(error)),
+  });
+  return sent === 'done' ? 'liked' : sent;
 }
 
-export async function unlikePost(provider: Likes, post: Post, history: ActionHistory): Promise<'unliked' | 'notLiked' | 'busy' | 'undone'> {
+export async function unlikePost(provider: Likes, post: Post, history: ActionHistory): Promise<'unliked' | 'notLiked' | 'busy' | 'undone' | 'unconfirmed'> {
   if (likeInFlight(post)) return 'busy';
   const current = likeUriOf(post);
   let removed = false;
-  const { undone } = await send(
-    post,
-    history,
-    'unlike',
-    () => provider.unlike(post, current ? { uri: current } : undefined),
-    (result) => {
+  const sent = await send(post, history, 'unlike', {
+    call: () => provider.unlike(post, current ? { uri: current } : undefined),
+    settle: (result) => {
       removed = result;
       recordLike(post.uri, null);
       return result;
     },
-    async () => {
+    reverse: async () => {
       const record = await provider.like(post);
       recordLike(post.uri, record.uri);
       return `UNDONE: Liked ${whose(post)} again.`;
     },
-    `NOTHING_TO_UNDO: The like on ${whose(post)} wasn't removed, so there was nothing to undo. Tell the user.`,
-  );
-  if (undone) return 'undone';
+    pending: `UNDO_PENDING: Bluesky hasn't answered yet about removing the like on ${whose(post)}. The app puts the like back as soon as Bluesky answers.`,
+    reverseFailed: (error) => likeFailure(whose(post), false, failure(error)),
+  });
+  if (sent !== 'done') return sent;
   return removed ? 'unliked' : 'notLiked';
-}
-
-function failure(error: unknown): LikeFailure {
-  if (error instanceof OfflineError) return 'offline';
-  return error instanceof LikeTimeoutError ? 'timeout' : 'other';
 }
 
 export async function toggleLike(provider: Likes, post: Post, history: ActionHistory): Promise<LikeOutcome> {
   const wasLiked = !!likeUriOf(post);
   try {
     const result = wasLiked ? await unlikePost(provider, post, history) : await likePost(provider, post, history);
+    if (result === 'unconfirmed') return { outcome: 'unconfirmed', wasLiked };
     if (result === 'notLiked') return { outcome: 'unliked' };
     if (result === 'alreadyLiked') return { outcome: 'liked' };
     return { outcome: result };
