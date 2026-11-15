@@ -140,9 +140,13 @@ export function CameraScreen({ start }: { start: 'camera' | 'library' }) {
   useEffect(() => {
     if (!libraryId) return;
     let current = true;
+    logLine(`[camera] library preview wanted ${libraryId}`);
     void mediaLibrary
       .file(libraryId)
-      .catch(() => null)
+      .catch((error: unknown) => {
+        logLine(`[camera] library preview failed ${String(error)}`);
+        return null;
+      })
       .then((file) => {
         logLine(`[camera] library preview ${libraryId} ${file ? file.uri : 'no file'}${current ? '' : ' (moved on)'}`);
         if (current && file) setPreview({ id: libraryId, uri: file.uri });
