@@ -32,11 +32,12 @@ Two scripts produce Release binaries with the JavaScript bundle embedded, so the
 | Script | Output |
 | --- | --- |
 | `scripts/build-ios-simulator.sh` (needs macOS and Xcode) | `ios/build/Build/Products/Release-iphonesimulator/Juno.app` |
+| `scripts/build-ios-device.sh` (needs macOS, Xcode and an Apple ID, see [below](#on-a-physical-iphone-with-a-free-apple-id)) | `ios/build/Build/Products/Release-iphoneos/Juno.app` |
 | `scripts/build-android-apk.sh` (needs JDK 17+ and the Android SDK) | `android/app/build/outputs/apk/release/app-release.apk` |
 
 `EXPO_PUBLIC_*` variables are inlined at build time, so set them in the build environment.
 
-`patches/expo-dev-launcher@58.0.20.patch` removes a call to `axisBehavior`, an iOS 27.1 toolbar API that Xcode 27.0 (Revyl's runner) does not have. Drop the patch when expo-dev-launcher is upgraded past 58.0.20 with a fix, or when the iOS runner moves to Xcode 27.1 or later; pnpm refuses to install if the patched version changes, so an upgrade forces the decision.
+`patches/expo-dev-launcher@58.0.20.patch` removes a call to `axisBehavior`, an iOS 27.1 toolbar API that Xcode 27.0 (Revyl's runner) does not have. Drop the patch when expo-dev-launcher is upgraded past 58.0.20 with a fix, or when the iOS runner moves to Xcode 27.1 or later; pnpm refuses to install if the patched version changes, so an upgrade forces the decision. Xcode 27.2 has the API, and the patch still applies cleanly there, so it does no harm to local builds.
 
 ### On Revyl from a Capy thread
 
@@ -88,7 +89,7 @@ The lines that show whether the publish checks misfire on a real call:
 How to see them:
 
 - **Development build (`eas build --profile development`) with Metro running:** the lines appear in the terminal running `npx expo start`.
-- **Any build made with `EXPO_PUBLIC_DEV_AGENT_LINK=1`, without Metro:** the lines go to the iPhone's system log as errors. On a Mac, connect the iPhone, open the Console app, select the iPhone in the sidebar, press Start, and type `[agent]` in the search field. From a terminal, with libimobiledevice installed: `idevicesyslog | grep '\[agent\]'`.
+- **Any build made with `EXPO_PUBLIC_DEV_AGENT_LINK=1`, without Metro:** the lines go to the iPhone's system log as errors. On a Mac, connect the iPhone, open the Console app, select the iPhone in the sidebar, press Start, and type `[agent]` in the search field. From a terminal, with libimobiledevice installed: `idevicesyslog | grep '\[agent\]'`. From a terminal with nothing installed, launch the app through Xcode's tools so its log comes back to the Mac: `DEVICECTL_CHILD_OS_ACTIVITY_DT_MODE=enable xcrun devicectl device process launch --console --terminate-existing --device <udid> com.akhileshrangani.consumerhack | grep '\[agent\]'` (`xcrun devicectl list devices` shows the udid). The log stops when the app is closed by hand, so relaunch it the same way.
 - **Simulator:** `xcrun simctl spawn booted log stream --predicate 'eventMessage CONTAINS "[agent]"'`.
 
 Release builds without the variable print these lines with `console.log`, which iOS doesn't keep, so use a build with the variable for the first real calls.
@@ -96,6 +97,35 @@ Release builds without the variable print these lines with `console.log`, which 
 ### For a physical phone
 
 `eas.json` has `development` (dev client), `preview` and `production` profiles: `npx eas-cli build --profile development --platform ios`. This needs an Expo account and, for iOS, an Apple developer account.
+
+### On a physical iPhone with a free Apple ID
+
+`scripts/build-ios-device.sh` builds a signed Release app with the JavaScript bundle embedded, so it runs away from the Mac and without Metro. It needs no paid developer membership and no Expo account.
+
+1. **Mac:** Xcode, signed in under Xcode → Settings → Accounts. A free Apple ID gets a personal team and an "Apple Development" certificate. Node and CocoaPods must be on the PATH. The script runs pnpm through `corepack pnpm`, so it doesn't need `corepack enable` or a global pnpm.
+2. **iPhone:** connect it with a data cable, unlock it, tap Trust, and turn on Settings → Privacy & Security → Developer Mode (the phone restarts). `xcrun devicectl list devices` should then show it as `connected`.
+3. **Build:** set `APPLE_TEAM_ID` to your team identifier, which is the OU field of the signing certificate, and keep it out of tracked files. Put the `EXPO_PUBLIC_*` values in `build.env` as in [Build settings for Revyl](#build-settings-for-revyl).
+
+   ```bash
+   export APPLE_TEAM_ID=$(security find-certificate -c "Apple Development" -p | openssl x509 -noout -subject -nameopt sep_multiline | sed -n 's/^ *OU=//p')
+   bash scripts/build-ios-device.sh
+   ```
+
+   The script passes the team, automatic signing and `-allowProvisioningUpdates` to `xcodebuild` on the command line, so nothing is written into the generated project. It finds the workspace and the built `.app` by pattern, and prints the app's path on its last line. If the bundle identifier is already registered to another team, set `IOS_BUNDLE_ID` to a unique one for that build only. Bluesky sign-in doesn't depend on the bundle identifier, because its redirect is the Convex site host (see [Bluesky OAuth client metadata](#bluesky-oauth-client-metadata)).
+4. **Install and launch:**
+
+   ```bash
+   xcrun devicectl device install app --device <udid> ios/build/Build/Products/Release-iphoneos/Juno.app
+   xcrun devicectl device process launch --device <udid> com.akhileshrangani.consumerhack
+   ```
+
+   The first launch is refused until the phone trusts the developer: Settings → General → VPN & Device Management → the "Apple Development" entry → Trust.
+
+What a personal team means for this app:
+
+- **Entitlements:** none to remove. The generated entitlements file is empty, and background audio is an Info.plist key, not an entitlement. A capability added later, such as push notifications, associated domains or app groups, can't be signed by a personal team, and the build would then fail at signing.
+- **Expiry:** the install stops opening after 7 days. Rebuild and install again. Installing over an existing build keeps the sign-in.
+- **Disk:** a build uses about 5 GB in the checkout (`node_modules` about 1 GB, `ios/Pods` 1.5 GB, `ios/build` 2.7 GB), plus Xcode's device support files the first time a phone connects. Delete `ios/build` after installing.
 
 ## Convex
 
