@@ -14,13 +14,13 @@ describe('narration requests', () => {
   });
 
   it('labels the VoiceOver actions by what they will do', () => {
-    expect(narrationActions(getNarrationPreferences(), false).map((action) => action.label)).toEqual(['Brief narration', 'Speak faster', 'Speak slower', 'Turn post sounds off']);
+    expect(narrationActions(getNarrationPreferences(), false).map((action) => action.label)).toEqual(['Brief narration', 'Speak faster', 'Speak slower', 'Turn post sounds off', 'Stop translating posts']);
     narrationPreferences.update({ mode: 'brief', earcons: false });
-    expect(narrationActions(getNarrationPreferences(), false).map((action) => action.label)).toEqual(['Full narration', 'Speak faster', 'Speak slower', 'Turn post sounds on']);
+    expect(narrationActions(getNarrationPreferences(), false).map((action) => action.label)).toEqual(['Full narration', 'Speak faster', 'Speak slower', 'Turn post sounds on', 'Stop translating posts']);
   });
 
   it("offers no speed steps under a screen reader, and says that the screen reader's own rate applies", () => {
-    expect(narrationActions(getNarrationPreferences(), true).map((action) => action.label)).toEqual(['Brief narration', 'Speech speed', 'Turn post sounds off']);
+    expect(narrationActions(getNarrationPreferences(), true).map((action) => action.label)).toEqual(['Brief narration', 'Speech speed', 'Turn post sounds off', 'Stop translating posts']);
     expect(applyNarrationAction('speechRate', true)).toBe(messages.screenReaderRate);
     expect(applyNarrationAction('faster', true)).toBe(messages.screenReaderRate);
     expect(applyNarrationAction('slower', true)).toBe(messages.screenReaderRate);

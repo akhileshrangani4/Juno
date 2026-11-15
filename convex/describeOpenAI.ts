@@ -1,5 +1,4 @@
 import { costUsd, type Usage } from './describeCache';
-import { RESPONSE_SCHEMA } from './describePrompt';
 
 // gpt-6-luna is OpenAI's lowest-cost current model with image input ($0.10 / $0.50 per million tokens,
 // November 2026). Override with the DESCRIBE_MODEL environment variable in the Convex deployment.
@@ -13,7 +12,7 @@ export const env = (name: string): string | undefined => (globalThis as unknown 
 
 type Result = { parsed: unknown; usage: Usage; model: string };
 
-export async function describeWithOpenAI({ apiKey, model, instructions, content }: { apiKey: string; model: string; instructions: string; content: unknown[] }): Promise<Result> {
+export async function describeWithOpenAI({ apiKey, model, instructions, content, schema }: { apiKey: string; model: string; instructions: string; content: unknown[]; schema: object }): Promise<Result> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
   try {
@@ -31,7 +30,7 @@ export async function describeWithOpenAI({ apiKey, model, instructions, content 
         reasoning: { effort: 'low' },
         max_output_tokens: 4000,
         store: false,
-        text: { format: { type: 'json_schema', name: 'post_media_description', strict: true, schema: RESPONSE_SCHEMA } },
+        text: { format: { type: 'json_schema', name: 'post_media_description', strict: true, schema } },
       }),
     });
     const body = (await response.json()) as Record<string, any>;

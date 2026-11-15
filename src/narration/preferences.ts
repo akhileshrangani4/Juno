@@ -3,6 +3,7 @@ import { Platform } from 'react-native';
 import type { KeyValueStore } from '@/storage/keyValueStore';
 
 import type { DetailLevel } from './buildNarration';
+import { isLanguageCode, primary, type Languages } from './language';
 
 export type NarrationPreferences = {
   mode: 'full' | 'brief';
@@ -10,11 +11,55 @@ export type NarrationPreferences = {
   skipHashtags: boolean;
   detail: DetailLevel;
   earcons: boolean;
+  // Posts in a language the user does not read are read as labeled translations. By default the target is the
+  // device's first language and every device language is read as it is; the two overrides replace those.
+  translate: boolean;
+  translateInto: string | null;
+  keepLanguages: string[] | null;
 };
 
 // iOS does not let apps read the Spoken Content rate, so the in-app rate starts at normal speed.
 // VoiceOver users are unaffected: with VoiceOver on, narration is spoken by VoiceOver at its own rate.
-export const DEFAULT_PREFERENCES: NarrationPreferences = { mode: 'full', rate: 1, skipHashtags: false, detail: 'standard', earcons: true };
+export const DEFAULT_PREFERENCES: NarrationPreferences = {
+  mode: 'full',
+  rate: 1,
+  skipHashtags: false,
+  detail: 'standard',
+  earcons: true,
+  translate: true,
+  translateInto: null,
+  keepLanguages: null,
+};
+
+type TranslationPreferences = Pick<NarrationPreferences, 'translate' | 'translateInto' | 'keepLanguages'>;
+
+// What the server is told: the language to translate into and every language to read as it is.
+export function effectiveLanguages(prefs: TranslationPreferences, device: string[]): Languages | null {
+  if (!prefs.translate) return null;
+  const target = prefs.translateInto ?? device[0] ?? 'en';
+  return { target, keep: [...new Set([target, ...(prefs.keepLanguages ?? device)].map(primary))] };
+}
+
+export type TranslationChange = { kind: 'on' | 'off' | 'device' } | { kind: 'into' | 'keep' | 'translate'; language: string };
+
+// "Translate everything into English" (into), "don't translate Spanish" (keep), "translate Spanish again"
+// (translate), "stop translating" (off), "start translating" (on), "translate like my phone" (device).
+export function changeTranslation(prefs: TranslationPreferences, device: string[], change: TranslationChange): TranslationPreferences {
+  const current = effectiveLanguages({ ...prefs, translate: true }, device)!;
+  switch (change.kind) {
+    case 'on':
+    case 'off':
+      return { ...prefs, translate: change.kind === 'on' };
+    case 'device':
+      return { translate: true, translateInto: null, keepLanguages: null };
+    case 'into':
+      return { translate: true, translateInto: change.language, keepLanguages: [change.language] };
+    case 'keep':
+      return { ...prefs, translate: true, keepLanguages: [...new Set([...current.keep, change.language])] };
+    case 'translate':
+      return { ...prefs, translate: true, keepLanguages: current.keep.filter((code) => code !== change.language || code === current.target) };
+  }
+}
 export const RATE_LIMITS = { min: 0.5, max: 3, step: 0.25 };
 
 const STORAGE_KEY = 'narration.preferences';
@@ -43,6 +88,11 @@ function sanitize(value: unknown): NarrationPreferences {
     skipHashtags: saved.skipHashtags === true,
     detail: saved.detail === 'detailed' ? 'detailed' : 'standard',
     earcons: saved.earcons !== false,
+    translate: saved.translate !== false,
+    translateInto: typeof saved.translateInto === 'string' && isLanguageCode(saved.translateInto) ? primary(saved.translateInto) : null,
+    keepLanguages: Array.isArray(saved.keepLanguages)
+      ? [...new Set(saved.keepLanguages.filter((code): code is string => typeof code === 'string' && isLanguageCode(code)).map(primary))].slice(0, 10)
+      : null,
   };
 }
 

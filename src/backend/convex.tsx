@@ -2,6 +2,7 @@ import { ConvexProvider, ConvexReactClient } from 'convex/react';
 import type { ReactNode } from 'react';
 
 import type { DescriptionParts, DetailLevel } from '@/narration/buildNarration';
+import type { Languages } from '@/narration/language';
 import type { SocialAccount } from '@/social/types';
 import { secureStore } from '@/storage/keyValueStore';
 
@@ -32,12 +33,12 @@ export function getDeviceId(): Promise<string> {
   return deviceId;
 }
 
-export async function describePost(uri: string, detail: DetailLevel): Promise<DescriptionParts | null> {
+export async function describePost(uri: string, detail: DetailLevel, languages: Languages | null): Promise<DescriptionParts | null> {
   if (!convex) return null;
   let timer: ReturnType<typeof setTimeout> | undefined;
   const timeout = new Promise<null>((resolve) => (timer = setTimeout(() => resolve(null), DESCRIBE_TIMEOUT_MS)));
   const request = getDeviceId()
-    .then((id) => convex.action(api.describe.describePost, { uri, detail, deviceId: id }))
+    .then((id) => convex.action(api.describe.describePost, { uri, detail, deviceId: id, ...(languages ? { target: languages.target, keep: languages.keep } : {}) }))
     .then((result) => result?.parts ?? null)
     .catch(() => null);
   const parts = await Promise.race([request, timeout]);

@@ -11,7 +11,7 @@ describe('PreferencesStore', () => {
     await new Promise<void>((resolve) => setImmediate(() => resolve()));
     const relaunched = new PreferencesStore(store);
     expect(relaunched.get()).toEqual(DEFAULT_PREFERENCES);
-    expect(await relaunched.load()).toEqual({ mode: 'brief', rate: 2.25, skipHashtags: true, detail: 'detailed', earcons: false });
+    expect(await relaunched.load()).toEqual({ ...DEFAULT_PREFERENCES, mode: 'brief', rate: 2.25, skipHashtags: true, detail: 'detailed', earcons: false });
   });
 
   it('ignores corrupt or out-of-range saved values', async () => {

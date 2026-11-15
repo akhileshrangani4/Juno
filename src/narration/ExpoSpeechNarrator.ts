@@ -1,6 +1,7 @@
 import * as Speech from 'expo-speech';
 
-import type { Narrator } from './Narrator';
+import { primary } from './language';
+import type { Narrator, SpeakOptions } from './Narrator';
 import { speechEngineRate } from './preferences';
 
 export class ExpoSpeechNarrator implements Narrator {
@@ -8,10 +9,21 @@ export class ExpoSpeechNarrator implements Narrator {
   private current = 0;
   private active = false;
   private rate = 1;
+  private voices = new Set<string>();
 
-  speak(text: string): void {
+  constructor() {
+    void Speech.getAvailableVoicesAsync?.()
+      .then((voices) => (this.voices = new Set(voices.map((voice) => primary(voice.language)))))
+      .catch(() => undefined);
+  }
+
+  speak(text: string, options?: SpeakOptions): void {
     void Speech.stop();
-    this.utter(text);
+    this.utter(text, options?.language);
+  }
+
+  canSpeak(language: string): boolean {
+    return this.voices.has(primary(language));
   }
 
   append(text: string): void {
@@ -37,7 +49,7 @@ export class ExpoSpeechNarrator implements Narrator {
     return () => void this.listeners.delete(listener);
   }
 
-  private utter(text: string): void {
+  private utter(text: string, language?: string): void {
     const utterance = ++this.current;
     this.active = true;
     const end = (done: boolean) => () => {
@@ -45,6 +57,6 @@ export class ExpoSpeechNarrator implements Narrator {
       this.active = false;
       if (done) this.listeners.forEach((listener) => listener());
     };
-    Speech.speak(text.slice(0, Speech.maxSpeechInputLength), { rate: speechEngineRate(this.rate), onDone: end(true), onStopped: end(false), onError: end(false) });
+    Speech.speak(text.slice(0, Speech.maxSpeechInputLength), { rate: speechEngineRate(this.rate), ...(language ? { language } : {}), onDone: end(true), onStopped: end(false), onError: end(false) });
   }
 }

@@ -7,22 +7,22 @@ import { internalMutation, internalQuery } from './_generated/server';
 import { decideClaim, fetchChecks, LIMITS, settleReservation, windowStart, withinLimits } from './describeCache';
 import { detailValidator, partsValidator } from './schema';
 
-const key = { postUri: v.string(), promptVersion: v.number(), detail: detailValidator };
-type Key = { postUri: string; promptVersion: number; detail: Doc<'postDescriptions'>['detail'] };
+const key = { postUri: v.string(), promptVersion: v.number(), detail: detailValidator, languages: v.string() };
+type Key = { postUri: string; promptVersion: number; detail: Doc<'postDescriptions'>['detail']; languages: string };
 const GLOBAL = 'global';
 
-const row = (ctx: MutationCtx, { postUri, promptVersion, detail }: Key) =>
+const row = (ctx: MutationCtx, { postUri, promptVersion, detail, languages }: Key) =>
   ctx.db
     .query('postDescriptions')
-    .withIndex('by_post', (q) => q.eq('postUri', postUri).eq('promptVersion', promptVersion).eq('detail', detail))
+    .withIndex('by_post', (q) => q.eq('postUri', postUri).eq('promptVersion', promptVersion).eq('detail', detail).eq('languages', languages))
     .unique();
 
 export const get = internalQuery({
   args: key,
-  handler: (ctx, { postUri, promptVersion, detail }) =>
+  handler: (ctx, { postUri, promptVersion, detail, languages }) =>
     ctx.db
       .query('postDescriptions')
-      .withIndex('by_post', (q) => q.eq('postUri', postUri).eq('promptVersion', promptVersion).eq('detail', detail))
+      .withIndex('by_post', (q) => q.eq('postUri', postUri).eq('promptVersion', promptVersion).eq('detail', detail).eq('languages', languages))
       .unique(),
 });
 
@@ -133,8 +133,8 @@ export const complete = internalMutation({
     }),
   },
   handler: async (ctx, { windowStart: start, ...result }) => {
-    const { postUri, promptVersion, detail, ...done } = result;
-    const existing = await row(ctx, { postUri, promptVersion, detail });
+    const { postUri, promptVersion, detail, languages, ...done } = result;
+    const existing = await row(ctx, { postUri, promptVersion, detail, languages });
     if (!existing) return;
     const actualUsd = done.usage.costUsd ?? LIMITS.reserveUsd;
     const held = existing.status === 'pending' ? existing.reservation : undefined;

@@ -12,14 +12,16 @@ const none: Schema = { type: 'object', properties: {} };
 const definitions: { name: string; description: string; parameters: Schema; answersReadBack?: true }[] = [
   {
     name: 'read_post',
-    description: 'Read the post in focus aloud. The app speaks it itself. Use for "read that again", "what does it say", "read the hashtags", "describe the picture".',
+    description:
+      'Read the post in focus aloud. The app speaks it itself. Use for "read that again", "what does it say", "read the hashtags", "describe the picture", "translate this", "read the original".',
     parameters: {
       type: 'object',
       properties: {
         mode: {
           type: 'string',
-          enum: ['full', 'brief', 'exact', 'hashtags', 'picture'],
-          description: 'full: everything; brief: author and first line; exact: the exact words; hashtags: all hashtags; picture: detailed picture and video descriptions.',
+          enum: ['full', 'brief', 'exact', 'hashtags', 'picture', 'translation'],
+          description:
+            'full: everything; brief: author and first line; exact: the exact words, in the original language ("read the original"); hashtags: all hashtags; picture: detailed picture and video descriptions; translation: the post translated into the user\'s language.',
         },
       },
       required: ['mode'],
@@ -100,6 +102,14 @@ const definitions: { name: string; description: string; parameters: Schema; answ
         mode: { type: 'string', enum: ['full', 'brief'], description: 'How posts are read while scrolling.' },
         skipHashtags: { type: 'boolean' },
         pictureDetail: { type: 'string', enum: ['short', 'long'] },
+        translation: {
+          type: 'string',
+          enum: ['on', 'off', 'device'],
+          description: 'off: "stop translating"; on: "start translating again"; device: translate into the phone\'s language and read the phone\'s other languages as written.',
+        },
+        translateInto: { type: 'string', description: 'A language name, for "translate everything into English": every other language is translated into it.' },
+        dontTranslate: { type: 'string', description: 'A language name, for "don\'t translate Spanish": posts in it are read as written.' },
+        translateAgain: { type: 'string', description: 'A language name, for "translate Spanish again" after it was set not to be translated.' },
       },
     },
   },

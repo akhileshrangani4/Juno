@@ -1,6 +1,6 @@
 export type Mode = 'scroll' | 'agent';
 
-export type SurfaceActionName = 'next' | 'previous' | 'reread' | 'toggleAgent' | 'instructions' | 'account' | 'camera' | 'increment' | 'decrement';
+export type SurfaceActionName = 'next' | 'previous' | 'reread' | 'readExactly' | 'toggleAgent' | 'instructions' | 'account' | 'camera' | 'increment' | 'decrement';
 
 export type SurfaceAction = { name: SurfaceActionName; label?: string };
 
@@ -11,6 +11,7 @@ export function surfaceActions(mode: Mode, platform: string): SurfaceAction[] {
           { name: 'next', label: 'Next post' },
           { name: 'previous', label: 'Previous post' },
           { name: 'reread', label: 'Read this post again' },
+          { name: 'readExactly', label: 'Read exactly' },
           { name: 'toggleAgent', label: 'Wake the agent' },
           { name: 'camera', label: 'Open the camera' },
         ]
