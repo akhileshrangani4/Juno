@@ -20,7 +20,7 @@ const narrationEnds = () => act(async () => mockQuietListeners.forEach((listener
 const mockSurface: { props: Record<string, any> } = { props: {} };
 
 jest.mock('@/narration/useNarrator', () => ({ useNarrator: () => mockNarrator }));
-jest.mock('@/agent/narrationSettings', () => ({ useFeedNarrator: () => mockNarrator }));
+jest.mock('@/narration/postNarration', () => ({ postNarratorFor: () => ({ speaking: () => mockNarrator.speaking() }) }));
 jest.mock('@/accessibility/useScreenReader', () => ({ useScreenReader: () => false }));
 jest.mock('@/feedback/haptics', () => ({ haptic: jest.fn() }));
 jest.mock('expo-router', () => ({ useIsFocused: () => true }));

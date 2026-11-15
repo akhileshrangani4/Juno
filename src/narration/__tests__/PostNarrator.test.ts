@@ -101,6 +101,20 @@ describe('PostNarrator', () => {
     expect(spoken(log)).toEqual(['speak: Alice Chen, 2 hours ago. Hello world. One image, with no description yet. About the image: A cat on a sofa.']);
   });
 
+  it('counts as speaking while the earcon plays, before speech has started', () => {
+    jest.useFakeTimers();
+    const { postNarrator, narrator } = setup({ earconMs: 200 });
+    expect(postNarrator.speaking()).toBe(false);
+    postNarrator.focus(withImage());
+    expect(narrator.speaking()).toBe(false);
+    expect(postNarrator.speaking()).toBe(true);
+    jest.advanceTimersByTime(200);
+    expect(postNarrator.speaking()).toBe(false);
+    postNarrator.focus(withImage());
+    postNarrator.stop();
+    expect(postNarrator.speaking()).toBe(false);
+  });
+
   it('skips earcons when they are switched off, and applies the rate', () => {
     const { postNarrator, earcons, preferences, narrator } = setup({ earconMs: 200 });
     preferences.update({ earcons: false, rate: 2.5 });

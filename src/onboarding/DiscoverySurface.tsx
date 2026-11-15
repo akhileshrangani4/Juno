@@ -1,8 +1,9 @@
 import { useIsFocused } from 'expo-router';
 import { useEffect, useEffectEvent, useRef, type ComponentProps } from 'react';
 
-import { useFeedNarrator } from '@/agent/narrationSettings';
 import { GestureSurface } from '@/gestures/GestureSurface';
+import { postNarratorFor } from '@/narration/postNarration';
+import { useNarrator } from '@/narration/useNarrator';
 
 import { discoveryReducer, startDiscovery, type DiscoveryEvent, type DiscoveryState } from './discovery';
 import { circleGesture, gestureHelp, type FeedMode, type GestureId } from './gestures';
@@ -26,7 +27,8 @@ export function DiscoverySurface({
   onAccessibilityTap,
   ...props
 }: Props) {
-  const narrator = useFeedNarrator();
+  const narrator = useNarrator();
+  const postNarrator = postNarratorFor(narrator);
   const focused = useIsFocused();
   const discovery = useRef<{ sessions: number; state: DiscoveryState } | null>(null);
 
@@ -63,9 +65,9 @@ export function DiscoverySurface({
   useEffect(() => {
     if (!focused) return;
     onEffectEvent({ type: 'quiet', at: Date.now() });
-    const timer = setInterval(() => onEffectEvent({ type: 'tick', mode: discoveryMode, narrating: narrator.speaking(), at: Date.now() }), TICK_MS);
+    const timer = setInterval(() => onEffectEvent({ type: 'tick', mode: discoveryMode, narrating: postNarrator.speaking(), at: Date.now() }), TICK_MS);
     return () => clearInterval(timer);
-  }, [focused, discoveryMode, narrator]);
+  }, [focused, discoveryMode, postNarrator]);
 
   const recognized = (gesture: GestureId) => dispatch({ type: 'recognized', gesture, at: Date.now() });
   const activity = () => dispatch({ type: 'activity', at: Date.now() });
@@ -86,7 +88,7 @@ export function DiscoverySurface({
         onCircle(direction);
       }}
       onUnrecognizedStroke={(points) => {
-        const hinted = dispatch({ type: 'unrecognized', stroke: classifyStroke(points), mode: discoveryMode, narrating: narrator.speaking(), at: Date.now() });
+        const hinted = dispatch({ type: 'unrecognized', stroke: classifyStroke(points), mode: discoveryMode, narrating: postNarrator.speaking(), at: Date.now() });
         if (!hinted) onUnrecognizedStroke?.(points);
       }}
       accessibilityActions={discoveryMode === 'scroll' ? [...(accessibilityActions ?? []), { name: 'gestureHelp', label: 'Gesture help' }] : accessibilityActions}
