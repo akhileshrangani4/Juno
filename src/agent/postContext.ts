@@ -64,7 +64,8 @@ export function describeSettings(settings: NarrationSettings): string {
     .join(' ');
 }
 
-export function describeMemories(memories: Memory[] | null): string {
+export function describeMemories(memories: Memory[] | null | 'signInNeeded'): string {
+  if (memories === 'signInNeeded') return "Memory needs them to sign in again, because their sign-in is older than memory. Don't bring it up yourself; if memory comes up, a result will say what to tell them.";
   if (memories === null) return 'Memory is unavailable right now.';
   if (!memories.length) return 'Nothing yet.';
   return memories.map((memory) => `- [${memory.id}] ${memory.text}`).join('\n');

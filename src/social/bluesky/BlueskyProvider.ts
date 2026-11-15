@@ -3,7 +3,7 @@ import { OAuthCallbackError, isExpectedSessionError, type OAuthSession } from '@
 
 import type { KeyValueStore } from '@/storage/keyValueStore';
 
-import type { NewPost, Post, PostRef, RecordRef, ReplyParent, RestoreResult, SignInResult, SocialAccount, SocialProvider, TimelinePage, UploadedImage } from '../types';
+import { PermissionMissingError, type NewPost, type Post, type PostRef, type RecordRef, type ReplyParent, type RestoreResult, type SignInResult, type SocialAccount, type SocialProvider, type TimelinePage, type UploadedImage } from '../types';
 import { mapFeedItem } from './mapPost';
 import { withMentionNames } from './mentionNames';
 import { isHiddenByModeration } from './moderation';
@@ -199,6 +199,22 @@ export class BlueskyProvider implements SocialProvider {
     if (!did) return null;
     const { data } = await this.agent().getAuthorFeed({ actor: did, limit: 10, filter: 'posts_with_replies' });
     return data.feed.filter((item) => !item.reason).map(mapFeedItem).find((post) => post?.author.id === did) ?? null;
+  }
+
+  async serviceAuth({ aud, lxm }: { aud: string; lxm: string }): Promise<string> {
+    const signed = this.signed;
+    if (!signed) throw new Error('Not signed in');
+    try {
+      const { data } = await this.agent().com.atproto.server.getServiceAuth({ aud, lxm });
+      return data.token;
+    } catch (error) {
+      // An OAuth grant without this rpc scope is refused with 403 "Missing required scope".
+      const refused = error as { status?: number; message?: string };
+      if (signed.kind === 'oauth' && (refused.status === 403 || /missing required scope/i.test(refused.message ?? ''))) {
+        throw new PermissionMissingError(`The sign-in lacks the permission for ${lxm}`, { cause: error });
+      }
+      throw error;
+    }
   }
 
   async uploadImage(image: { uri: string; mimeType: string }, alt: string): Promise<UploadedImage> {

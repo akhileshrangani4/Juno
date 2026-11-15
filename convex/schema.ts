@@ -65,4 +65,31 @@ export default defineSchema({
     windowStart: v.number(),
     count: v.number(),
   }).index('by_key', ['key']),
+
+  // Signed-in memory (convex/memoryAuth.ts). A proof is `${did} ${jti}` and is kept until it expires, so it
+  // can't be used twice; the session it opened is a hash of a secret the phone made.
+  memoryProofs: defineTable({
+    proofId: v.string(),
+    sessionHash: v.string(),
+    expiresAt: v.number(),
+  })
+    .index('by_proof', ['proofId'])
+    .index('by_expiry', ['expiresAt']),
+
+  memorySessions: defineTable({
+    sessionHash: v.string(),
+    did: v.string(),
+    expiresAt: v.number(),
+  })
+    .index('by_hash', ['sessionHash'])
+    .index('by_expiry', ['expiresAt']),
+
+  // The signing key from each DID document, so most proofs are checked without a fetch. No key means the last
+  // fetch found none, which stops that DID being fetched again for a while.
+  didKeys: defineTable({
+    did: v.string(),
+    curve: v.optional(v.union(v.literal('p256'), v.literal('k256'))),
+    publicKey: v.optional(v.string()),
+    fetchedAt: v.number(),
+  }).index('by_did', ['did']),
 });

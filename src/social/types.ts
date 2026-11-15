@@ -81,4 +81,11 @@ export interface SocialProvider {
   unrepost(post: PostRef, repost?: RecordRef): Promise<boolean>;
   deletePost(post: PostRef): Promise<void>;
   getMyLatestPost(): Promise<Post | null>;
+  // A short-lived token from the account's own server that proves to the named service (aud) that this app is
+  // signed in as the account, for one method (lxm) only. Never a session token.
+  serviceAuth(request: { aud: string; lxm: string }): Promise<string>;
 }
+
+// The account's sign-in doesn't include a permission this call needs, for example an OAuth sign-in made before
+// the app asked for it. Signing in again grants it.
+export class PermissionMissingError extends Error {}

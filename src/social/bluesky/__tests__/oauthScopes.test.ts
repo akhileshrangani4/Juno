@@ -1,5 +1,6 @@
-import { OAUTH_SCOPES } from '../../../../convex/oauthClientMetadata';
-import type { SocialProvider } from '../../types';
+import { OAUTH_SCOPES, oauthClientMetadata, oauthScopes } from '../../../../convex/oauthClientMetadata';
+import { MEMORY_METHOD, memoryAudience } from '../../../../convex/memoryService';
+import { PermissionMissingError, type SocialProvider } from '../../types';
 import { BlueskyProvider } from '../BlueskyProvider';
 import type { BlueskyOAuth } from '../oauth';
 
@@ -9,7 +10,11 @@ const APPVIEW = 'did:web:api.bsky.app%23bsky_appview';
 const LIKE = `at://${DID}/app.bsky.feed.like/3kaaaaaaaaaaa`;
 const REPOST = `at://${DID}/app.bsky.feed.repost/3kaaaaaaaaaab`;
 
-type Request = { nsid: string; body: any; contentType: string | null };
+type Request = { nsid: string; params: URLSearchParams; body: any; contentType: string | null };
+
+const ORIGIN = 'https://dependable-goshawk-583.convex.site';
+const MEMORY_AUDIENCE = memoryAudience(ORIGIN);
+const SCOPES = oauthScopes(ORIGIN);
 
 const postView = (n: number) => ({
   uri: `at://${DID}/app.bsky.feed.post/${n}`,
@@ -28,10 +33,14 @@ const responses: Record<string, (body: any) => unknown> = {
   'app.bsky.feed.getPostThread': () => ({ thread: { $type: 'app.bsky.feed.defs#threadViewPost', post: postView(1), replies: [] } }),
   'com.atproto.repo.createRecord': (body) => ({ uri: `at://${DID}/${body.collection}/3kaaaaaaaaaac`, cid: CID }),
   'com.atproto.repo.deleteRecord': () => ({}),
+  'com.atproto.server.getServiceAuth': () => ({ token: 'proof' }),
   'com.atproto.repo.uploadBlob': () => ({ blob: { $type: 'blob', ref: { $link: CID }, mimeType: 'image/jpeg', size: 4 } }),
 };
 
-function scopeFor({ nsid, body, contentType }: Request): string {
+// A service-auth token is granted by the rpc scope of the method and audience it is for, not by the method
+// that fetches it (https://atproto.com/specs/permission).
+function scopeFor({ nsid, params, body, contentType }: Request): string {
+  if (nsid === 'com.atproto.server.getServiceAuth') return `rpc:${params.get('lxm')}?aud=${params.get('aud')}`;
   if (nsid === 'com.atproto.repo.createRecord') return `repo:${body.collection}?action=create`;
   if (nsid === 'com.atproto.repo.putRecord') return `repo:${body.collection}?action=update`;
   if (nsid === 'com.atproto.repo.deleteRecord') return `repo:${body.collection}?action=delete`;
@@ -42,9 +51,9 @@ function scopeFor({ nsid, body, contentType }: Request): string {
 function granted(scope: string): boolean {
   if (scope.startsWith('blob:')) {
     const mime = scope.slice('blob:'.length);
-    return OAUTH_SCOPES.some((candidate) => candidate.startsWith('blob:') && new RegExp(`^${candidate.slice(5).replace('*', '[^/]+')}$`).test(mime));
+    return SCOPES.some((candidate) => candidate.startsWith('blob:') && new RegExp(`^${candidate.slice(5).replace('*', '[^/]+')}$`).test(mime));
   }
-  return OAUTH_SCOPES.includes(scope);
+  return SCOPES.includes(scope.replace('#', '%23'));
 }
 
 async function signedIn() {
@@ -52,14 +61,16 @@ async function signedIn() {
   const session = {
     did: DID,
     fetchHandler: async (path: string, init: RequestInit) => {
-      const nsid = path.split('?')[0].replace('/xrpc/', '');
+      const [route, query] = path.split('?');
+      const nsid = route.replace('/xrpc/', '');
       const contentType = new Headers(init.headers).get('content-type');
       const raw = init.body instanceof Uint8Array && contentType === 'application/json' ? new TextDecoder().decode(init.body) : init.body;
       const body = typeof raw === 'string' ? JSON.parse(raw) : undefined;
-      requests.push({ nsid, body, contentType });
+      requests.push({ nsid, params: new URLSearchParams(query), body, contentType });
       const respond = responses[nsid];
       if (!respond) throw new Error(`No fake response for ${nsid}`);
-      return new Response(JSON.stringify(respond(body)), { status: 200, headers: { 'content-type': 'application/json' } });
+      const result = respond(body);
+      return result instanceof Response ? result : new Response(JSON.stringify(result), { status: 200, headers: { 'content-type': 'application/json' } });
     },
   };
   const client = {
@@ -106,6 +117,7 @@ const everyMethod: Record<Exclude<keyof SocialProvider, 'id' | 'name'>, (provide
   unrepost: async (provider) => [await provider.unrepost(post, { uri: REPOST }), await provider.unrepost(post)],
   deletePost: (provider) => provider.deletePost(post),
   getMyLatestPost: (provider) => provider.getMyLatestPost(),
+  serviceAuth: (provider) => provider.serviceAuth({ aud: MEMORY_AUDIENCE, lxm: MEMORY_METHOD }),
 };
 
 describe('OAuth scopes', () => {
@@ -138,8 +150,15 @@ describe('OAuth scopes', () => {
         `rpc:app.bsky.feed.getAuthorFeed?aud=${APPVIEW}`,
         `rpc:app.bsky.feed.getPosts?aud=${APPVIEW}`,
         `rpc:app.bsky.feed.getTimeline?aud=${APPVIEW}`,
+        `rpc:${MEMORY_METHOD}?aud=${MEMORY_AUDIENCE}`,
       ].sort(),
     );
+  });
+
+  it('pin the memory proof to the deployment that serves the metadata', () => {
+    expect(SCOPES.at(-1)).toBe(`rpc:${MEMORY_METHOD}?aud=did:web:dependable-goshawk-583.convex.site%23juno_memory`);
+    expect(oauthClientMetadata(ORIGIN).scope.split(' ')).toEqual(SCOPES);
+    expect(oauthScopes('https://other-deployment-1.convex.site').at(-1)).toBe(`rpc:${MEMORY_METHOD}?aud=did:web:other-deployment-1.convex.site%23juno_memory`);
   });
 
   it('ask for nothing beyond those calls and the post thread read that comments will use', () => {
@@ -158,5 +177,22 @@ describe('OAuth scopes', () => {
       `rpc:app.bsky.feed.getPostThread?aud=${APPVIEW}`,
       `rpc:app.bsky.actor.getProfile?aud=${APPVIEW}`,
     ]);
+  });
+});
+
+describe('an OAuth sign-in made before the memory scope', () => {
+  it('is told apart from any other failure, so the agent can ask the user to sign in again', async () => {
+    const original = responses['com.atproto.server.getServiceAuth'];
+    responses['com.atproto.server.getServiceAuth'] = () =>
+      new Response(JSON.stringify({ error: 'ScopeMissingError', message: `Missing required scope "rpc:${MEMORY_METHOD}?aud=${MEMORY_AUDIENCE}"` }), {
+        status: 403,
+        headers: { 'content-type': 'application/json' },
+      });
+    try {
+      const { provider } = await signedIn();
+      await expect(provider.serviceAuth({ aud: MEMORY_AUDIENCE, lxm: MEMORY_METHOD })).rejects.toBeInstanceOf(PermissionMissingError);
+    } finally {
+      responses['com.atproto.server.getServiceAuth'] = original;
+    }
   });
 });

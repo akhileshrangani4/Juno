@@ -3,10 +3,12 @@ import { authorName, lateDescription, messages, type DescriptionParts, type Deta
 import type { Post, PostRef, RecordRef, ReplyParent, SocialAccount, SocialProvider } from '@/social/types';
 
 import { agentMessages } from './agentMessages';
-import { memoryRejection, type MemoryClient } from './memoryClient';
+import { memoryRejection, MemorySignInNeededError, MemoryUnavailableError, type MemoryClient } from './memoryClient';
+import type { MemoryOffer } from './memoryOffer';
 import { detailFor, narrateForFeed, narratePost, usesDescriptions, type ReadMode } from './narrationAdapter';
 import { describeFocus } from './postContext';
 import { isAffirmative, Publisher, type ConfirmOutcome, type Draft, type DraftOutcome } from './publisher';
+import { MAX_FACTS } from './memoryRateLimits';
 import { MAX_RATE, MIN_RATE, RATE_STEP, type NarrationSettings, type SettingsStore } from './settings';
 import type { ToolName } from './tools';
 
@@ -38,6 +40,8 @@ export type AgentDeps = {
   cachedDescription(post: Post, detail: DetailLevel): DescriptionParts | null;
   settings: SettingsStore;
   memory: MemoryClient | null;
+  // Open when the agent's first words asked to keep what was saved before sign-in (memoryOffer.ts).
+  memoryOffer?: MemoryOffer | null;
   conversation: Conversation;
   // Tells the model something happened outside a tool call, e.g. a post finished sending. With speak, the app
   // says those words itself and the model is told not to answer.
@@ -73,6 +77,11 @@ const ALREADY_REMOVED: UndoEntry = { label: 'removed', undo: async () => 'NOTHIN
 
 const NOT_SIGNED_IN =
   "NOT_SIGNED_IN: The user isn't signed in, so this can't be done. Tell them they need to sign in for that, and ask if they want to open the sign-in screen.";
+const MEMORY_NEEDS_SIGN_IN =
+  "MEMORY_NEEDS_SIGN_IN: Nothing was saved, read or forgotten, because their sign-in is older than memory. Say in one plain sentence that remembering needs them to sign in again, and ask if they want to open the sign-in screen. Call open_sign_in only if they say yes.";
+const MEMORY_NEEDS_SIGN_IN_TOLD =
+  "MEMORY_NEEDS_SIGN_IN: Memory still needs them to sign in again, and you already told them in this conversation. Don't say it again; answer in a few words without memory.";
+const MEMORY_UNREACHABLE = "MEMORY_UNREACHABLE: The user's memory can't be reached right now, so nothing was saved, read or forgotten. Say in one short sentence that you can't reach their memory right now, then carry on.";
 const NO_FOCUS = 'NO_POST: No post is in focus. Tell the user there is no post to act on right now.';
 const ACCOUNT_TOOLS = new Set<ToolName>(['like_post', 'unlike_post', 'draft_post', 'draft_reply', 'draft_repost', 'draft_delete_my_last_post', 'publish_draft']);
 
@@ -127,6 +136,8 @@ export function createToolHandlers(deps: AgentDeps) {
   const history: UndoEntry[] = [];
   let lastUndoneAt = -Infinity;
   let slow: string | null = null;
+  // An old sign-in's "sign in again for memory" is said once per conversation, not on every memory call.
+  let toldSignInForMemory = false;
 
   const within = <T,>(promise: Promise<T>, ms: number) =>
     new Promise<{ done: true; value: T } | { done: false }>((resolve) => {
@@ -436,6 +447,36 @@ export function createToolHandlers(deps: AgentDeps) {
           result: forgotten.length ? `FORGOTTEN: ${forgotten.map((memory) => memory.text).join(' ')} Confirm in a few words.` : 'NOTHING_FORGOTTEN: No matching memories were found.',
         };
       }
+      case 'ask_to_keep_saved_memories': {
+        const offer = deps.memoryOffer;
+        if (!deps.account()) return { respond: true, result: NOT_SIGNED_IN };
+        const question = offer ? await offer.ask(turn) : null;
+        if (!question) return { respond: true, result: "NOTHING_SAVED: Nothing was saved on this phone before they signed in. Tell them in a few words." };
+        return {
+          speak: question,
+          respond: false,
+          result: 'ASKED: The app asked the question aloud. Say nothing now. If their very next reply is a yes, call answer_memory_offer with keep true; if it is a no, keep false.',
+        };
+      }
+      case 'answer_memory_offer': {
+        const offer = deps.memoryOffer;
+        if (!offer?.isOpen(turn)) {
+          return {
+            respond: true,
+            result: 'NO_OFFER: The question about saved memories was only open for their reply right after it, so nothing moved. If they want them kept with their account, call ask_to_keep_saved_memories.',
+          };
+        }
+        if (args.keep !== true) {
+          await offer.decline();
+          return { respond: true, result: "KEPT_ON_PHONE: What they saved stays on this phone for when they're signed out, and you won't ask again. Confirm in a few words." };
+        }
+        if (!isAffirmative(deps.conversation.lastUtterance())) {
+          return { respond: true, result: 'NOT_A_YES: Their last words were not a plain yes, so nothing moved. Ask once more whether to keep what they saved before signing in with their account.' };
+        }
+        const { carried, left } = await offer.accept();
+        const full = left ? ` ${left} didn't fit, because memory holds ${MAX_FACTS} things; they stay on this phone.` : '';
+        return { respond: true, result: `CARRIED_OVER: ${carried} saved ${carried === 1 ? 'thing is' : 'things are'} now kept with their account.${full} Confirm in a few words.` };
+      }
       case 'open_sign_in':
         return { respond: false, after: 'signIn', result: 'OPENING_SIGN_IN: The conversation ends now.' };
       case 'end_conversation':
@@ -451,12 +492,18 @@ export function createToolHandlers(deps: AgentDeps) {
       if (slow && !FREE_WHILE_SLOW.has(name)) {
         return { respond: true, result: `BUSY: The app is still finishing ${slow}. Tell the user it's still working and to ask again in a moment.` };
       }
-      const work = run(name, args).catch(
-        (error: unknown): ToolOutcome => ({
+      const work = run(name, args).catch((error: unknown): ToolOutcome => {
+        if (error instanceof MemorySignInNeededError) {
+          const told = toldSignInForMemory;
+          toldSignInForMemory = true;
+          return { respond: true, result: told ? MEMORY_NEEDS_SIGN_IN_TOLD : MEMORY_NEEDS_SIGN_IN };
+        }
+        if (error instanceof MemoryUnavailableError) return { respond: true, result: MEMORY_UNREACHABLE };
+        return {
           respond: true,
           result: `FAILED: ${error instanceof Error ? error.message : 'Something went wrong'}. Nothing changed. Tell the user it didn't work and they can try again.`,
-        }),
-      );
+        };
+      });
       const outcome = await within(work, TOOL_CEILING_MS);
       if (outcome.done) return outcome.value;
       slow = name;

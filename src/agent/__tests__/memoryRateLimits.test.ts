@@ -1,7 +1,8 @@
-import { callerChecks, deviceCheck, MEMORY_LIMITS, takeOne, type Bucket, type RateCheck } from '../memoryRateLimits';
+import { callerChecks, didFetchChecks, MEMORY_LIMITS, userCheck, takeOne, type Bucket, type RateCheck } from '../memoryRateLimits';
 
 // The same take-all-or-nothing rule as convex/memoryLimits.ts, in the order convex/memory.ts uses: the caller's
-// windows, then the owner check, then the device window.
+// windows, then the owner check, then the user's window. (Signed-in accounts prove their DID instead of a secret;
+// see memoryAuth.test.ts.)
 function memory(owners: Map<string, string>) {
   const buckets = new Map<string, Bucket>();
   const take = (checks: RateCheck[], now: number) => {
@@ -14,22 +15,22 @@ function memory(owners: Map<string, string>) {
     if (!take(callerChecks(address), now)) return 'tooMany';
     if (!owners.has(userKey)) owners.set(userKey, secret);
     if (owners.get(userKey) !== secret) return 'notOwner';
-    return take(deviceCheck(userKey), now) ? 'ok' : 'tooMany';
+    return take(userCheck(userKey), now) ? 'ok' : 'tooMany';
   };
 }
 
 describe('memory rate limits', () => {
-  it('allows 30 calls per device in 10 minutes, then refuses until the window passes', () => {
+  it('allows 30 calls per user in 10 minutes, then refuses until the window passes', () => {
     const call = memory(new Map());
-    for (let i = 0; i < MEMORY_LIMITS.device.limit; i++) expect(call('device:a', 'secret-a', `hash-${i}`, 1000 + i)).toBe('ok');
+    for (let i = 0; i < MEMORY_LIMITS.user.limit; i++) expect(call('device:a', 'secret-a', `hash-${i}`, 1000 + i)).toBe('ok');
     expect(call('device:a', 'secret-a', 'hash-x', 2000)).toBe('tooMany');
-    expect(call('device:a', 'secret-a', 'hash-x', 1000 + MEMORY_LIMITS.device.windowMs)).toBe('ok');
+    expect(call('device:a', 'secret-a', 'hash-x', 1000 + MEMORY_LIMITS.user.windowMs)).toBe('ok');
   });
 
-  it("doesn't let a stranger who knows a public DID use up that person's allowance", () => {
-    const call = memory(new Map([['bsky:did:plc:me', 'my-secret']]));
-    for (let i = 0; i < 200; i++) expect(call('bsky:did:plc:me', 'wrong-secret', `hash-stranger-${i}`)).toBe('notOwner');
-    expect(call('bsky:did:plc:me', 'my-secret', 'hash-me')).toBe('ok');
+  it("doesn't let a stranger with the wrong secret use up a device's allowance", () => {
+    const call = memory(new Map([['device:mine', 'my-secret']]));
+    for (let i = 0; i < 200; i++) expect(call('device:mine', 'wrong-secret', `hash-stranger-${i}`)).toBe('notOwner');
+    expect(call('device:mine', 'my-secret', 'hash-me')).toBe('ok');
   });
 
   it('limits one caller address to 60 calls in 10 minutes even with fresh device keys', () => {
@@ -49,6 +50,11 @@ describe('memory rate limits', () => {
 
   it('skips the address window when the request has no address', () => {
     expect(callerChecks(null).map((check) => check.key)).toEqual(['deployment']);
-    expect(deviceCheck('device:a').map((check) => check.key)).toEqual(['device:device:a']);
+    expect(userCheck('device:a').map((check) => check.key)).toEqual(['user:device:a']);
+    expect(didFetchChecks('hash-a')).toEqual([
+      { key: 'didFetch:hash-a', limit: 6, windowMs: 60 * 60_000 },
+      { key: 'didFetch', limit: 300, windowMs: 60 * 60_000 },
+    ]);
+    expect(didFetchChecks(null).map((check) => check.key)).toEqual(['didFetch']);
   });
 });
