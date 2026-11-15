@@ -21,9 +21,9 @@ No configuration is needed: signed out, the app shows a public Bluesky feed. Cop
 | `src/social` | `SocialProvider` interface; `bluesky/` is the only code allowed to import `@atproto` (lint enforces it) |
 | `src/feed` | feed state: one focused post, paging |
 | `src/gestures` | circle recognition math and the gesture surface |
-| `src/narration` | `Narrator` interface, expo-speech and screen reader implementations, narration text builder |
+| `src/narration` | `Narrator` interface, expo-speech and screen reader implementations, the narration script builder, description cache, earcons, preferences, and `requests.ts` for the voice agent ([docs/narration.md](docs/narration.md)) |
 | `src/backend` | optional Convex client |
-| `convex` | schema (`users`, `postDescriptions`) and functions |
+| `convex` | schema (`users`, `postDescriptions`) and functions, including the `describe` action that calls the vision model |
 
 ## Checks
 

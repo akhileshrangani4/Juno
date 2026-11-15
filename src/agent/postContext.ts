@@ -1,4 +1,4 @@
-import { authorName, formatAge } from '@/narration/buildNarration';
+import { authorName, cleanModelText, formatAge, type DescriptionParts } from '@/narration/buildNarration';
 import type { Post, PostMedia, SocialAccount } from '@/social/types';
 
 import type { Memory } from './memoryClient';
@@ -6,14 +6,14 @@ import type { NarrationSettings } from './settings';
 
 const plural = (count: number, unit: string) => `${count} ${unit}${count === 1 ? '' : 's'}`;
 
-function mediaFacts(media: PostMedia, description: string | null): string {
+function mediaFacts(media: PostMedia, parts: DescriptionParts | null, imageOffset: number): string {
   switch (media.kind) {
     case 'images':
       return media.images
-        .map((image, i) => `image ${i + 1}: ${image.alt ?? (media.images.length === 1 ? description : null) ?? 'no description yet'}`)
+        .map((image, i) => `image ${i + 1}: ${image.alt ?? (cleanModelText(parts?.images[imageOffset + i]?.description) || 'no description yet')}`)
         .join('; ');
     case 'video':
-      return `video: ${media.alt ?? description ?? 'no description yet'}`;
+      return `video: ${media.alt ?? (cleanModelText(parts?.video) || 'no description yet')}`;
     case 'link':
       return `link: ${media.title || media.url}`;
     case 'quote':
@@ -21,9 +21,20 @@ function mediaFacts(media: PostMedia, description: string | null): string {
   }
 }
 
+function mediaList(post: Post, parts: DescriptionParts | null): string {
+  let offset = 0;
+  return post.media
+    .map((media) => {
+      const facts = mediaFacts(media, parts, offset);
+      if (media.kind === 'images') offset += media.images.length;
+      return facts;
+    })
+    .join('; ');
+}
+
 // Facts about the post in focus, for the agent's understanding only. The agent reads posts aloud through
 // read_post, never from this text.
-export function describeFocus(post: Post | null, description: string | null = null, now = new Date()): string {
+export function describeFocus(post: Post | null, parts: DescriptionParts | null = null, now = new Date()): string {
   if (!post) return 'No post is in focus right now (the feed is empty or still loading).';
   return [
     `Author: ${authorName(post)} (@${post.author.handle}).`,
@@ -31,7 +42,7 @@ export function describeFocus(post: Post | null, description: string | null = nu
     `Posted ${formatAge(post.createdAt, now)}.`,
     post.replyRoot ? 'It is a reply to another post.' : null,
     `Text: ${post.text ? JSON.stringify(post.text) : '(no text)'}.`,
-    post.media.length ? `Media: ${post.media.map((media) => mediaFacts(media, description)).join('; ')}.` : null,
+    post.media.length ? `Media: ${mediaList(post, parts)}.` : null,
     `Counts: ${plural(post.counts.likes, 'like')}, ${plural(post.counts.reposts, 'repost')}, ${post.counts.replies} ${post.counts.replies === 1 ? 'reply' : 'replies'}.`,
   ]
     .filter(Boolean)

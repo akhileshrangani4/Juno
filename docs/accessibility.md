@@ -21,11 +21,11 @@ Users can turn direct touch off per app in the VoiceOver rotor. For them, and as
 | Screen reader action | Scroll mode | Agent mode |
 | --- | --- | --- |
 | Double tap (`onAccessibilityTap`) | Next post | Account settings |
-| Actions rotor (swipe up or down to pick, double tap to run) | Next post, Previous post, Read this post again, Wake the agent | Back to scrolling, Hear the instructions, Account settings |
+| Actions rotor (swipe up or down to pick, double tap to run) | Next post, Previous post, Read this post again, Wake the agent, Brief or Full narration, Speech speed, Turn post sounds off or on | Back to scrolling, Hear the instructions, Account settings |
 | Two-finger double tap (magic tap) | Wake the agent | Back to scrolling |
 | Two-finger scrub (escape) | Warning buzz and "You are already scrolling." | Back to scrolling |
 
-The rotor lists only these human-labeled actions (`surfaceActions` in `src/screens/surfaceActions.ts`, unit tested). On iOS the element is not `adjustable`, so a swipe up or down moves through the rotor's actions, not through posts.
+The rotor lists only these human-labeled actions (`surfaceActions` in `src/screens/surfaceActions.ts` and `narrationActions` in `src/narration/requests.ts`, both unit tested). Without a screen reader the narration actions offer Speak faster and Speak slower instead of Speech speed; with VoiceOver on, VoiceOver's own rate governs speech, so Speech speed only says so. On iOS the element is not `adjustable`, so a swipe up or down moves through the rotor's actions, not through posts.
 
 The current narration is also the element's accessibility value, so VoiceOver reads the post again whenever focus returns to the feed, and "Read this post again" replays it on demand if an announcement was cut off.
 
@@ -70,6 +70,10 @@ A long post scrolls inside the card at the same time as the pan collects the str
 
 The intro screen is one button. Its label is the welcome line and its hint is the gesture instructions, so VoiceOver reads them on focus. The visible text says "Double tap to continue" when a screen reader is on and "Tap anywhere to continue" when it is off. Without a screen reader the app also speaks the instructions on first launch. The sign-in screen has a header, two labeled text fields with hints, a live error region, and two labeled buttons. Without a screen reader the app also speaks a description of the sign-in screen. Typing a handle and app password without sight needs VoiceOver or TalkBack for the keyboard; "Continue without signing in" opens a public demo feed.
 
+## Narration settings
+
+The narration actions above change a saved preference, say what changed ("Brief narration.", "Speed 1.5 times normal."), and read the current post again in the new way. The in-app speed goes from half to three times normal in quarter steps; three times normal is the fastest the iOS speech engine allows. iOS does not let apps read the Spoken Content rate, so the app starts at normal speed. With VoiceOver on, narration is spoken by VoiceOver at the user's own VoiceOver rate and the in-app speed does not apply, so the speed steps are not offered; the Speech speed action says that VoiceOver's own speaking rate applies and where to change it. The feed element's accessibility value is the current post's script, so VoiceOver reads it again when focus returns to the feed. See [narration.md](narration.md) for what is said and when.
+
 ## Low vision
 
 Black background, white 30 point bold text, a thick yellow border around the focused post. Text scales with the system font size up to 1.6 times, and long posts keep that size and scroll inside the card. Taps on the halves still move between posts, and narration always reads the whole post.
@@ -82,4 +86,7 @@ Black background, white 30 point bold text, a thick yellow border around the foc
 4. A circle drawn over a long post that scrolls: does the post scroll a little and the circle still switch modes? Does a plain vertical scroll stay silent and leave the narration playing?
 5. Later, when Android is in scope: TalkBack swipe up and down, double tap, actions menu, two-finger circle.
 6. Haptic patterns: are the six patterns distinguishable?
-7. Speech with the ringer switch on silent (iOS silences expo-speech in silent mode unless an audio session is configured; that belongs with the Vapi audio work).
+7. Speech and earcons with the ringer switch on silent. The earcon player sets the audio session to play in silent mode, which should also make expo-speech audible; confirm both.
+8. Earcons: are the four sounds quiet, short, and easy to tell apart, and does speech start right after them without a noticeable gap?
+9. Speech rate with VoiceOver off: do "Speak faster" and "Speak slower" change speed audibly, and is the top step close to three times normal?
+10. Does a description that arrives late get appended after the post without cutting it off?

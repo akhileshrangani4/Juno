@@ -1,9 +1,9 @@
 import { useEffect, useRef, useState } from 'react';
 
-import { fetchCachedDescription } from '@/backend/convex';
 import { move, type FeedState, type MoveOutcome } from '@/feed/feedState';
 import { haptic } from '@/feedback/haptics';
 import type { Narrator } from '@/narration/Narrator';
+import { descriptionCache } from '@/narration/postNarration';
 import { useSession } from '@/session/SessionContext';
 import type { Post } from '@/social/types';
 import { secureStore } from '@/storage/keyValueStore';
@@ -14,6 +14,7 @@ import { buildAssistant } from './assistant';
 import { createConvexMemory } from './convexMemory';
 import { memoryIdentity } from './identity';
 import { ensureMicrophone } from './microphone';
+import { detailFor } from './narrationAdapter';
 import { narrationSettings } from './narrationSettings';
 import { describeAccount, describeFocus, describeMemories, describeSettings } from './postContext';
 import { createToolHandlers } from './toolHandlers';
@@ -86,7 +87,7 @@ export function useVoiceAgent({
         const outcome = go(direction);
         return { outcome, post: outcome === 'moved' ? (state.posts[index] ?? null) : null };
       },
-      description: (target) => fetchCachedDescription(target.uri),
+      description: (target, detail) => descriptionCache.request(target, detail),
       settings: narrationSettings,
       memory,
       conversation,
@@ -104,7 +105,7 @@ export function useVoiceAgent({
         const focus = latest.current.post;
         const [memories, description] = await Promise.all([
           memory ? withTimeout(memory.list(), MEMORY_TIMEOUT_MS) : Promise.resolve(null),
-          focus ? fetchCachedDescription(focus.uri) : Promise.resolve(null),
+          focus ? Promise.resolve(descriptionCache.peek(focus, detailFor('full', narrationSettings.get()))) : Promise.resolve(null),
         ]);
         return buildAssistant({
           account: describeAccount(latest.current.account),

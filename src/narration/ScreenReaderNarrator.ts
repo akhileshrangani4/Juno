@@ -19,6 +19,11 @@ export class ScreenReaderNarrator implements Narrator {
     AccessibilityInfo.announceForAccessibilityWithOptions(text, { queue: false });
   }
 
+  append(text: string): void {
+    this.current = text;
+    AccessibilityInfo.announceForAccessibilityWithOptions(text, { queue: true });
+  }
+
   stop(): void {
     this.current = null;
   }
@@ -26,6 +31,8 @@ export class ScreenReaderNarrator implements Narrator {
   speaking(): boolean {
     return this.current !== null;
   }
+
+  setRate(): void {}
 
   onDone(listener: () => void): () => void {
     this.listeners.add(listener);

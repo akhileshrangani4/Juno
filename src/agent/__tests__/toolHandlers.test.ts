@@ -1,4 +1,5 @@
-import { messages } from '@/narration/buildNarration';
+import { messages, type DetailLevel } from '@/narration/buildNarration';
+import type { Post } from '@/social/types';
 import { makeMemory, makeProvider, maya, nextPost, setup } from '@/testing/agent';
 import { makePost } from '@/testing/fixtures';
 
@@ -19,15 +20,29 @@ describe('agent tools', () => {
     const { handlers, settings } = setup();
     const full = await handlers.run('read_post', { mode: 'full' });
     expect(full).toMatchObject({ respond: false, result: expect.stringMatching(/^READ_ALOUD/) });
-    expect(full.speak).toBe('Maya, 2 hours ago. Meet our new puppy Biscuit! #puppy #dogsofbluesky. One image: A golden puppy asleep on a red blanket.');
-    expect((await handlers.run('read_post', { mode: 'brief' })).speak).toBe('Maya, 2 hours ago. Meet our new puppy Biscuit! It has an image.');
+    expect(full.speak).toBe('Maya, 2 hours ago. Meet our new puppy Biscuit! One image: A golden puppy asleep on a red blanket. Its paws twitch. Tagged puppy and dogsofbluesky.');
+    expect((await handlers.run('read_post', { mode: 'brief' })).speak).toBe('Maya. Meet our new puppy Biscuit! Has an image and two hashtags.');
     expect((await handlers.run('read_post', { mode: 'exact' })).speak).toBe('Maya wrote, word for word: Meet our new puppy Biscuit! #puppy #dogsofbluesky');
-    expect((await handlers.run('read_post', { mode: 'hashtags' })).speak).toBe('This post has 2 hashtags: #puppy, #dogsofbluesky.');
-    expect((await handlers.run('read_post', { mode: 'picture' })).speak).toBe('The image: A golden puppy asleep on a red blanket. Its paws twitch.');
+    expect((await handlers.run('read_post', { mode: 'hashtags' })).speak).toBe('2 hashtags: puppy, dogsofbluesky.');
+    expect((await handlers.run('read_post', { mode: 'picture' })).speak).toBe('Maya. One image: A golden puppy asleep on a red blanket. Its paws twitch.');
     await settings.update({ skipHashtags: true, pictureDetail: 'long' });
     expect((await handlers.run('read_post', { mode: 'full' })).speak).toBe(
       'Maya, 2 hours ago. Meet our new puppy Biscuit! One image: A golden puppy asleep on a red blanket. Its paws twitch.',
     );
+  });
+
+  it('asks for a description only when the reading uses one, at the detail the reading needs', async () => {
+    const { handlers, deps, settings } = setup();
+    const description = jest.fn(async (_post: Post, _detail: DetailLevel) => null);
+    deps.description = description;
+    await handlers.run('read_post', { mode: 'brief' });
+    await handlers.run('read_post', { mode: 'exact' });
+    expect(description).not.toHaveBeenCalled();
+    await handlers.run('read_post', { mode: 'full' });
+    await handlers.run('read_post', { mode: 'picture' });
+    await settings.update({ pictureDetail: 'long' });
+    await handlers.run('read_post', { mode: 'full' });
+    expect(description.mock.calls.map(([, detail]) => detail)).toEqual(['standard', 'detailed', 'detailed']);
   });
 
   it('says there is no post when nothing is in focus', async () => {
