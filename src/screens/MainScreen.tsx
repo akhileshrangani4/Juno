@@ -3,18 +3,19 @@ import { useEffect, useRef, useState } from 'react';
 import { Platform, StyleSheet, Text, View, type AccessibilityActionEvent, type AccessibilityRole } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
+import { useScreenReader } from '@/accessibility/useScreenReader';
 import type { AgentStatus, EndReason } from '@/agent/AgentSession';
 import { onDevWake } from '@/agent/devWake';
-import { narrateForFeed, postHasUndescribedMedia } from '@/agent/narrationAdapter';
-import { useFeedNarrator, useNarrationSettings } from '@/agent/narrationSettings';
 import { useVoiceAgent } from '@/agent/useVoiceAgent';
-import { fetchCachedDescription } from '@/backend/convex';
 import { haptic } from '@/feedback/haptics';
 import { useFeed } from '@/feed/useFeed';
 import type { CircleDirection } from '@/gestures/circle';
 import { GestureSurface } from '@/gestures/GestureSurface';
 import { createRateLimiter } from '@/gestures/rateLimit';
 import { messages } from '@/narration/buildNarration';
+import { useNarrationPreferences, usePostNarrator } from '@/narration/postNarration';
+import { applyNarrationAction, isNarrationAction, narrationActions } from '@/narration/requests';
+import { useNarrator } from '@/narration/useNarrator';
 import { useSession } from '@/session/SessionContext';
 import { colors, type } from '@/theme';
 
@@ -37,8 +38,10 @@ let mountedFeeds = 0;
 
 export function MainScreen() {
   const { provider } = useSession();
-  const narrator = useFeedNarrator();
-  const settings = useNarrationSettings();
+  const narrator = useNarrator();
+  const postNarrator = usePostNarrator();
+  const screenReader = useScreenReader();
+  const narrationPrefs = useNarrationPreferences();
   const { state, post, go } = useFeed(provider);
   const [mode, setMode] = useState<Mode>('scroll');
   const [narration, setNarration] = useState('');
@@ -82,15 +85,19 @@ export function MainScreen() {
     };
     if (mode === 'agent') narrator.stop();
     else if (!post) say(status ?? '');
-    else if (postHasUndescribedMedia(post)) {
-      show(narrateForFeed(post, settings, null));
-      fetchCachedDescription(post.uri).then((description) => say(narrateForFeed(post, settings, description)));
-    } else say(narrateForFeed(post, settings, null));
+    else {
+      postNarrator.focus(post, { prefix: prefix.current });
+      prefix.current = '';
+    }
     return () => {
       cancelled = true;
+      postNarrator.stop();
       narrator.stop();
     };
-  }, [mode, post, status, narrator, settings]);
+  }, [mode, post, status, narrator, postNarrator]);
+
+  useEffect(() => postNarrator.onScript(setNarration), [postNarrator]);
+  useEffect(() => postNarrator.prefetch(state.posts.slice(state.index + 1)), [postNarrator, state.posts, state.index]);
 
   const step = (direction: 'next' | 'previous') => {
     const outcome = go(direction);
@@ -148,6 +155,11 @@ export function MainScreen() {
       case 'account':
         return mode === 'scroll' ? router.push('/sign-in') : onTapBottom();
     }
+    if (isNarrationAction(nativeEvent.actionName)) {
+      const message = applyNarrationAction(nativeEvent.actionName, screenReader);
+      if (post && mode === 'scroll') postNarrator.focus(post, { prefix: message });
+      else narrator.speak(message);
+    }
   };
 
   const scrolling = mode === 'scroll';
@@ -169,7 +181,7 @@ export function MainScreen() {
             : 'Tap the top half to hear the instructions, the bottom half for account settings. Draw a counter-clockwise circle to go back to scrolling.'
         }
         accessibilityValue={{ text: narration }}
-        accessibilityActions={surfaceActions(mode, Platform.OS)}
+        accessibilityActions={[...surfaceActions(mode, Platform.OS), ...(scrolling ? narrationActions(narrationPrefs, screenReader) : [])]}
         onAccessibilityTap={onTapBottom}
         onAccessibilityAction={onAccessibilityAction}
         onMagicTap={() => switchMode(scrolling ? 'agent' : 'scroll')}

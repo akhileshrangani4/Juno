@@ -1,10 +1,10 @@
 import type { MoveOutcome } from '@/feed/feedState';
-import { authorName, messages } from '@/narration/buildNarration';
+import { authorName, messages, type DescriptionParts, type DetailLevel } from '@/narration/buildNarration';
 import type { Post, PostRef, RecordRef, ReplyParent, SocialAccount, SocialProvider } from '@/social/types';
 
 import { agentMessages } from './agentMessages';
 import { memoryRejection, type MemoryClient } from './memoryClient';
-import { narrateForFeed, narratePost, type ReadMode } from './narrationAdapter';
+import { detailFor, narrateForFeed, narratePost, usesDescriptions, type ReadMode } from './narrationAdapter';
 import { describeFocus } from './postContext';
 import { isAffirmative, Publisher, type ConfirmOutcome, type Draft, type DraftOutcome } from './publisher';
 import { MAX_RATE, MIN_RATE, RATE_STEP, type NarrationSettings, type SettingsStore } from './settings';
@@ -31,7 +31,7 @@ export type AgentDeps = {
   account(): SocialAccount | null;
   focused(): Post | null;
   move(direction: 'next' | 'previous'): { outcome: MoveOutcome; post: Post | null };
-  description(post: Post): Promise<string | null>;
+  description(post: Post, detail: DetailLevel): Promise<DescriptionParts | null>;
   settings: SettingsStore;
   memory: MemoryClient | null;
   conversation: Conversation;
@@ -244,7 +244,7 @@ export function createToolHandlers(deps: AgentDeps) {
       case 'read_post': {
         if (!focus) return { respond: true, result: NO_FOCUS };
         const mode = (['full', 'brief', 'exact', 'hashtags', 'picture'] as const).includes(args.mode as ReadMode) ? (args.mode as ReadMode) : 'full';
-        const speak = narratePost(focus, mode, deps.settings.get(), { now: deps.now(), description: await deps.description(focus) });
+        const speak = narratePost(focus, mode, deps.settings.get(), { now: deps.now(), parts: usesDescriptions(mode) ? await deps.description(focus, detailFor(mode, deps.settings.get())) : null });
         return { speak, respond: false, result: "READ_ALOUD: The app read the post aloud. Don't repeat or reword it." };
       }
       case 'go_to_post': {
@@ -255,7 +255,7 @@ export function createToolHandlers(deps: AgentDeps) {
           return { speak, respond: false, result: `NOT_MOVED (${outcome}): The app told the user. Focus did not change.` };
         }
         return {
-          speak: narrateForFeed(post, deps.settings.get(), await deps.description(post), deps.now()),
+          speak: narrateForFeed(post, deps.settings.get(), usesDescriptions(deps.settings.get().mode) ? await deps.description(post, detailFor(deps.settings.get().mode, deps.settings.get())) : null, deps.now()),
           respond: false,
           result: `MOVED: The app read the new post aloud. Don't repeat it. The post in focus is now: ${describeFocus(post, null, deps.now())}`,
         };

@@ -2,9 +2,19 @@ export type PostRef = { uri: string; cid: string };
 
 export type PostImage = { url: string; alt: string | null };
 
+export type VideoCaption = { lang: string; cid: string };
+
+export type PostFacet = { start: number; end: number } & (
+  | { kind: 'link'; url: string }
+  | { kind: 'mention'; did: string; name: string | null }
+  | { kind: 'tag'; tag: string }
+);
+
+export type PostReplyContext = { authorName: string | null; isSelf: boolean };
+
 export type PostMedia =
   | { kind: 'images'; images: PostImage[] }
-  | { kind: 'video'; alt: string | null; thumbUrl: string | null }
+  | { kind: 'video'; alt: string | null; thumbUrl: string | null; captions?: VideoCaption[]; aspectRatio?: { width: number; height: number } | null }
   | { kind: 'link'; url: string; title: string }
   | { kind: 'quote'; authorName: string; text: string };
 
@@ -22,6 +32,8 @@ export type Post = PostRef & {
   media: PostMedia[];
   repostedBy: string | null;
   replyRoot: PostRef | null;
+  replyTo?: PostReplyContext | null;
+  facets?: PostFacet[];
   counts: { likes: number; reposts: number; replies: number };
 };
 

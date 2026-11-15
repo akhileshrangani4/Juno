@@ -21,7 +21,7 @@ describe('Publisher', () => {
     const { publisher } = setup();
     const outcome = publisher.draftText('reply', "That's beautiful, where was this?", maya, 1);
     expect(outcome.ok && outcome.readBack).toBe(
-      'Replying to Maya\'s post that starts "Meet our new puppy Biscuit! #puppy #dogsofbluesky": That\'s beautiful, where was this? Shall I send the reply?',
+      'Replying to Maya\'s post that starts "Meet our new puppy Biscuit!": That\'s beautiful, where was this? Shall I send the reply?',
     );
   });
 
@@ -116,7 +116,7 @@ describe('Publisher', () => {
   it('reads back reposts and deletions', () => {
     const { publisher } = setup();
     const repost = publisher.draftAction('repost', maya, 1);
-    expect(repost.ok && repost.readBack).toBe('Reposting Maya\'s post that starts "Meet our new puppy Biscuit! #puppy #dogsofbluesky" to your followers. Shall I repost it?');
+    expect(repost.ok && repost.readBack).toBe('Reposting Maya\'s post that starts "Meet our new puppy Biscuit!" to your followers. Shall I repost it?');
     const mine = makePost({ text: 'My old post', createdAt: '2026-11-15T09:00:00.000Z' });
     const del = publisher.draftAction('delete', mine, 1);
     expect(del.ok && del.readBack).toBe("Deleting your post from 3 hours ago: My old post. A deleted post can't be brought back. Shall I delete it?");
