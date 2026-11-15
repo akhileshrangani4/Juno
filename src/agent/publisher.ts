@@ -216,8 +216,15 @@ export class Publisher {
 
   // The assistant said something of its own after the read-back and before the user answered, so the user's next
   // yes may be answering that instead.
-  assistantSpoke(turn: number): void {
-    if (this.draft?.readBackTurn === turn) this.draft.voided = true;
+  assistantSpoke(turn: number): boolean {
+    if (this.draft?.readBackTurn !== turn || this.draft.voided) return false;
+    this.draft.voided = true;
+    return true;
+  }
+
+  // A draft was read back and its yes would still count.
+  get awaitingAnswer(): boolean {
+    return this.draft?.readBackTurn != null && !this.draft.voided;
   }
 
   // The user said something other than yes or undo while the send was counting down (for example the second half

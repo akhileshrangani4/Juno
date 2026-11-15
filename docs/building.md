@@ -60,7 +60,26 @@ Only public values go in it: the Vapi public key is meant to ship in the app. Le
 
 Cloud phones cannot draw a circle. In a build made with `EXPO_PUBLIC_DEV_AGENT_LINK=1`, opening the link `consumerhack://dev-agent` wakes the voice agent exactly as a clockwise circle does (handled in `src/app/+native-intent.tsx` and `src/agent/devWake.ts`). If the feed is not showing yet, the agent wakes as soon as it is. In a build without the variable the check is the constant `false`, the bundler removes the code, and the link just opens the app. On a simulator: `xcrun simctl openurl booted consumerhack://dev-agent`.
 
-The same test builds print the call's lifecycle to the device log as `[agent] ...` lines (connecting, connected, each tool name, ended reason, exit). They never include what was said.
+The same test builds print the call's lifecycle to the device log as `[agent] ...` lines (connecting, connected, each tool name, ended reason, exit). They never include what was said or any post text.
+
+### Reading the agent's log on a physical iPhone
+
+The lines that show whether the publish checks misfire on a real call:
+
+| Line | Meaning |
+| --- | --- |
+| `[agent] assistant speech during read-back {"speaker":"app","by":"speech"}` | Assistant speech arrived while a read-back waited for its yes, and was put down to the app's own words. `by` is `speech` when Vapi's speech events decided it, `words` when only the word match did. Many `by":"words` lines mean Vapi's speech events aren't arriving as expected. |
+| `[agent] assistant speech during read-back {"speaker":"model",...}` then `[agent] yes voided by assistant speech` | The model said something of its own after the read-back, so the next yes doesn't count and the draft is read back again. If this follows every read-back, the app is mistaking its own read-back for the model's speech. |
+| `[agent] publish refused {"reason":"..."}` | `publish_draft` was refused: `expired` (the yes wasn't the very next answer), `wrongVerb` ("delete it" for a post), `notAffirmative`, `sameTurn`, `notReadBack`, `staleDraft`, `noDraft` or `alreadyPending`. |
+| `[agent] publish confirmed`, `[agent] held from transcript`, `[agent] undone from transcript` | A yes was accepted; something other than a yes during the five seconds held the send; an undo stopped it. |
+
+How to see them:
+
+- **Development build (`eas build --profile development`) with Metro running:** the lines appear in the terminal running `npx expo start`.
+- **Any build made with `EXPO_PUBLIC_DEV_AGENT_LINK=1`, without Metro:** the lines go to the iPhone's system log as errors. On a Mac, connect the iPhone, open the Console app, select the iPhone in the sidebar, press Start, and type `[agent]` in the search field. From a terminal, with libimobiledevice installed: `idevicesyslog | grep '\[agent\]'`.
+- **Simulator:** `xcrun simctl spawn booted log stream --predicate 'eventMessage CONTAINS "[agent]"'`.
+
+Release builds without the variable print these lines with `console.log`, which iOS doesn't keep, so use a build with the variable for the first real calls.
 
 ### For a physical phone
 

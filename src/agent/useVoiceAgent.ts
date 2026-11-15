@@ -128,6 +128,7 @@ export function useVoiceAgent({
         latest.current.onExit(reason, message);
       },
       schedule,
+      now: Date.now,
       log: (event, detail) => logLine(`[agent] ${event}${detail ? ` ${JSON.stringify(detail)}` : ''}`),
     });
     session.current = current;

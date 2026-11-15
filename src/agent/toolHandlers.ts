@@ -18,6 +18,8 @@ export type ToolOutcome = {
   // Whether the model should answer the result; false when the app already said what was needed.
   respond: boolean;
   after?: 'end' | 'signIn' | 'countdown';
+  // Why publish_draft was refused, for the device log.
+  refused?: string;
 };
 
 export type Conversation = {
@@ -49,6 +51,9 @@ type UndoEntry = { label: string; undo(): Promise<string> };
 export type Heard = { kind: 'undone' | 'held'; speak: string; message: string };
 
 const UNDO_WORDS = /\b(undo|stop|cancel|wait|don'?t|no)\b/i;
+
+// Said during the five seconds, these are neither an undo nor a reason to hold the send.
+const ACKNOWLEDGEMENT = /^\W*(?:(?:thanks|thank you|okay|ok|great)\W*)+$/i;
 
 // Kept on top of the history once the user's last confirmed action was stopped or removed, so another undo
 // never reaches back to an earlier action.
@@ -297,8 +302,10 @@ export function createToolHandlers(deps: AgentDeps) {
       case 'publish_draft': {
         const utterance = deps.conversation.lastUtterance();
         const outcome = publisher.confirm(typeof args.draftId === 'string' ? args.draftId : '', turn, utterance);
-        if (!outcome.ok && (outcome.reason === 'expired' || outcome.reason === 'wrongVerb')) return { speak: outcome.readBack, respond: false, result: refusal(outcome, utterance) };
-        if (!outcome.ok) return { respond: true, result: refusal(outcome, utterance) };
+        if (!outcome.ok && (outcome.reason === 'expired' || outcome.reason === 'wrongVerb')) {
+          return { speak: outcome.readBack, respond: false, result: refusal(outcome, utterance), refused: outcome.reason };
+        }
+        if (!outcome.ok) return { respond: true, result: refusal(outcome, utterance), refused: outcome.reason };
         return {
           speak: outcome.announcement,
           respond: false,
@@ -404,7 +411,7 @@ export function createToolHandlers(deps: AgentDeps) {
         history.push(ALREADY_REMOVED);
         return { kind: 'undone', speak: agentMessages.undone, message: 'The user said undo during the five seconds. The app stopped it, nothing was sent, and it told them. Say nothing.' };
       }
-      if (isAffirmative(utterance, busy.kind)) return null;
+      if (isAffirmative(utterance, busy.kind) || ACKNOWLEDGEMENT.test(utterance)) return null;
       const held = publisher.hold(deps.conversation.turn());
       if (!held) return null;
       return {
@@ -414,8 +421,8 @@ export function createToolHandlers(deps: AgentDeps) {
       };
     },
     // The assistant said something of its own (not the app's words), which voids a read-back the user hasn't answered.
-    assistantSaid(): void {
-      publisher.assistantSpoke(deps.conversation.turn());
+    assistantSaid(): boolean {
+      return publisher.assistantSpoke(deps.conversation.turn());
     },
   };
 }

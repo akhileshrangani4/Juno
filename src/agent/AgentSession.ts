@@ -1,6 +1,7 @@
 import type { Post } from '@/social/types';
 
 import { agentMessages } from './agentMessages';
+import { AgentVoice } from './agentVoice';
 import { describeFocus } from './postContext';
 import type { Conversation, ToolHandlers, ToolOutcome } from './toolHandlers';
 import type { VapiMessage, VoiceCall } from './voiceCall';
@@ -25,6 +26,7 @@ export type SessionDeps = {
   listening(): void;
   exit(reason: EndReason, message: string): void;
   schedule(run: () => void, ms: number): () => void;
+  now(): number;
   log(event: string, detail?: Record<string, unknown>): void;
 };
 
@@ -74,9 +76,11 @@ export class AgentSession {
   private announcementStarted = false;
   private focusUri: string | null = null;
   private queue: Promise<void> = Promise.resolve();
-  private appSaid: string[] = [];
+  private readonly voice: AgentVoice;
 
-  constructor(private readonly deps: SessionDeps) {}
+  constructor(private readonly deps: SessionDeps) {
+    this.voice = new AgentVoice(deps.now);
+  }
 
   async start(): Promise<void> {
     const { deps } = this;
@@ -159,7 +163,11 @@ export class AgentSession {
       case 'tool-calls':
         for (const call of (message.toolCallList as ToolCall[] | undefined) ?? []) this.queue = this.queue.then(() => this.runTool(call));
         return;
+      case 'assistant.speechStarted':
+        this.voice.sourceReported(message.source, message.turn);
+        return;
       case 'speech-update':
+        if (message.role === 'assistant' && message.status === 'started') this.voice.speechStarted(message.turn);
         if (message.role !== 'assistant' || !this.countdownArmed) return;
         if (message.status === 'started') this.announcementStarted = true;
         if (message.status === 'stopped' && this.announcementStarted) this.startCountdown();
@@ -184,15 +192,18 @@ export class AgentSession {
     this.deps.call?.addMessage(heard.message, false);
   }
 
-  // The assistant's own words (not the app's, which go through speak) void a read-back the user hasn't answered.
+  // The model's own words (not the app's, which go through speak) void a read-back the user hasn't answered. While
+  // one is waiting for an answer, every assistant transcript is logged with who it was put down to, never its words.
   private onAssistantSaid(transcript: string) {
-    const said = spoken(transcript);
-    if (said && !this.appSaid.some((text) => text.includes(said))) this.deps.handlers.assistantSaid();
+    const awaiting = this.deps.handlers.publisher.awaitingAnswer;
+    const { speaker, by } = this.voice.attribute(transcript);
+    if (awaiting) this.deps.log('assistant speech during read-back', { speaker, by });
+    if (speaker === 'model' && this.deps.handlers.assistantSaid()) this.deps.log('yes voided by assistant speech', { by });
   }
 
   // Everything the app says in the agent's voice goes through here, so its transcript is known to be the app's.
   private speak(text: string) {
-    this.appSaid = [...this.appSaid.slice(-9), spoken(text)];
+    this.voice.appSays(text);
     this.deps.call?.say(text);
   }
 
@@ -201,6 +212,8 @@ export class AgentSession {
     const args = parseArguments(call.function?.arguments ?? call.arguments);
     this.deps.log('tool', { name });
     const outcome = await this.deps.handlers.run(name, args);
+    if (outcome.refused) this.deps.log('publish refused', { reason: outcome.refused });
+    if (outcome.after === 'countdown') this.deps.log('publish confirmed');
     if (this.finished) return;
     this.deliver(name, outcome);
   }
@@ -238,11 +251,6 @@ export class AgentSession {
   }
 }
 
-const spoken = (text: string) =>
-  text
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, ' ')
-    .trim();
 
 type ToolCall = { id?: string; name?: string; arguments?: unknown; function?: { name?: string; arguments?: unknown } };
 
