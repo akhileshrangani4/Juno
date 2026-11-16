@@ -34,6 +34,14 @@ export function createVoiceCall(publicKey: string): VoiceCall {
       }),
     stop: () => vapi.stop(),
     say: (text, interrupt) => vapi.say(text, false, true, interrupt),
+    setMuted: (muted) => {
+      try {
+        vapi.setMuted(muted);
+      } catch {
+        // No call object yet or any more: nothing to mute.
+      }
+    },
+    muteAssistant: (muted) => vapi.send({ type: 'control', control: muted ? 'mute-assistant' : 'unmute-assistant' } as Parameters<Vapi['send']>[0]),
     addMessage: (content, triggerResponse) =>
       vapi.send({ type: 'add-message', message: { role: 'system', content }, triggerResponseEnabled: triggerResponse } as Parameters<Vapi['send']>[0]),
   };

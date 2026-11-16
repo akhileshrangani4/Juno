@@ -11,6 +11,8 @@ export const agentMessages = {
   couldNotConnect: "I couldn't connect. Check your internet and try again.",
   notConfigured: "The voice agent isn't set up in this version of the app. Back to scrolling.",
   asleep: 'Agent is asleep. Back to scrolling.',
+  pushToTalkOn: "Push to talk is on. Hold one finger on the screen while you talk, and let go when you're done.",
+  handsFreeOn: "Hands-free is on. I'm listening all the time now, so just talk.",
   silence: 'The agent went to sleep after 30 seconds of quiet. Back to scrolling.',
   maxDuration: 'The conversation reached its 10 minute limit, so the agent went to sleep. Back to scrolling.',
   dropped: 'The agent disconnected. Back to scrolling.',

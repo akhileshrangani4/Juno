@@ -120,6 +120,8 @@ const definitions: { name: string; description: string; parameters: Schema; answ
     parameters: none,
   },
   { name: 'gesture_help', description: 'Repeat how the gestures work. The app speaks it itself.', parameters: none },
+  { name: 'use_push_to_talk', description: 'Switch to push to talk: the microphone is off unless the user holds one finger on the screen. Use for "use push to talk". The app says how it works.', parameters: none },
+  { name: 'use_hands_free', description: 'Switch back to hands-free listening, with the microphone always on. Use for "go hands-free". The app says how it works.', parameters: none },
   {
     name: 'remember',
     description: 'Remember a lasting preference or fact the user stated about themselves, like "call me Sam". Never other people\'s posts, passwords or codes.',
@@ -181,6 +183,8 @@ export type ToolName =
   | 'read_comments'
   | 'summarize_comments'
   | 'gesture_help'
+  | 'use_push_to_talk'
+  | 'use_hands_free'
   | 'remember'
   | 'recall_memories'
   | 'forget_memory'
