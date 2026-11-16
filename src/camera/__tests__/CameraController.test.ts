@@ -289,7 +289,58 @@ describe('aiming', () => {
     await env.feed(frame(), 30_000);
     expect(env.look.describe).toHaveBeenCalledTimes(1);
     expect(env.look.describe).toHaveBeenCalledWith('base64-frame', 'view');
-    expect(env.spoken).toContain('A desk with a red mug in the middle.');
+    expect(env.spoken).toContain('I see a desk with a red mug in the middle.');
+  });
+
+  it('says the first look of each opening by itself, short, as "I see …", and later ones in full', async () => {
+    const env = setup();
+    env.look.describe.mockImplementation(async () => ({
+      description: 'A wooden desk with a red mug, a laptop and a notebook in soft afternoon light near a big window with plants on the sill. Behind it is a bookshelf.',
+      altText: '',
+      visibleText: [],
+      latencyMs: 900,
+      costUsd: 0.0002,
+    }));
+    await settle(env, env.controller.start());
+    await env.feed(frame(), 3000);
+    expect(env.spoken).toContain('I see a wooden desk with a red mug, a laptop and a notebook in soft afternoon.');
+    await env.feed(frame({ signature: flat(0.9) }), 12_000);
+    expect(env.look.describe).toHaveBeenCalledTimes(2);
+    expect(env.spoken.filter((line) => line.startsWith('I see'))).toHaveLength(1);
+    env.controller.close();
+    await settle(env, env.controller.start());
+    await env.feed(frame(), 3000);
+    expect(env.spoken.filter((line) => line.startsWith('I see'))).toHaveLength(2);
+  });
+
+  it('never looks by itself before descriptions are allowed, or after they were declined', async () => {
+    const asking = setup({ consent: null });
+    void asking.controller.start();
+    await settle(asking, Promise.resolve());
+    await asking.feed(frame(), 3000);
+    expect(asking.controller.snapshot.phase).toBe('consent');
+    expect(asking.look.describe).not.toHaveBeenCalled();
+    const declined = setup({ consent: 'no' });
+    await settle(declined, declined.controller.start());
+    await declined.feed(frame(), 3000);
+    expect(declined.look.describe).not.toHaveBeenCalled();
+  });
+
+  it('drops the first look silently if the shutter is tapped or the camera is left first, and says nothing when it fails', async () => {
+    for (const before of ['shutter', 'close', 'fail'] as const) {
+      const env = setup();
+      let answer: (value: Awaited<ReturnType<LookClient['describe']>>) => void = () => undefined;
+      env.look.describe.mockImplementationOnce(() => (before === 'fail' ? Promise.resolve(null) : new Promise((resolve) => (answer = resolve))));
+      await settle(env, env.controller.start());
+      await env.feed(frame(), 1500);
+      expect(env.look.describe).toHaveBeenCalledWith('base64-frame', 'view');
+      if (before === 'shutter') void env.controller.shutter();
+      if (before === 'close') env.controller.close();
+      answer({ description: 'A person at a desk.', altText: '', visibleText: [], latencyMs: 900, costUsd: 0.0002 });
+      await settle(env, Promise.resolve());
+      expect(env.spoken.some((line) => line.startsWith('I see'))).toBe(false);
+      expect(env.spoken).not.toContain(messages.noDescription);
+    }
   });
 
   it('describes when asked, whatever the gate says', async () => {

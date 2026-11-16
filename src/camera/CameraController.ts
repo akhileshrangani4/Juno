@@ -132,6 +132,8 @@ export class CameraController {
   private generation = 0;
   private hintGiven = false;
   private latest: Analysis | null = null;
+  // The first description the camera gives by itself in this opening is said short, as "I see …".
+  private firstLookSaid = false;
 
   constructor(private readonly deps: ControllerDeps) {}
 
@@ -150,6 +152,7 @@ export class CameraController {
 
   async start({ library = false }: { library?: boolean } = {}): Promise<void> {
     const generation = this.generation;
+    this.firstLookSaid = false;
     const consent = await this.deps.consent.get();
     this.set({ descriptionsOn: consent === 'yes' });
     await this.deps.voice.speak(this.deps.voice.inCall() ? messages.enterInCall : messages.enter, 'status');
@@ -301,9 +304,11 @@ export class CameraController {
         return;
       }
       if (devLog) this.deps.log('view described', { latencyMs: result.latencyMs, costUsd: result.costUsd, description: result.description });
+      const spoken = asked || this.firstLookSaid ? result.description : firstLook(result.altText || result.description);
+      if (!asked) this.firstLookSaid = true;
       this.set({ detail: result.description });
       this.describing = false;
-      await this.deps.voice.speak(result.description, 'description');
+      await this.deps.voice.speak(spoken, 'description');
     } finally {
       this.describing = false;
     }
@@ -626,5 +631,12 @@ export class CameraController {
 }
 
 const photoCount = (position: number, library: LibraryWalk) => (library.hasMore ? `Photo ${position + 1}` : `Photo ${position + 1} of ${library.count}`);
+// "I see" and the shortest form of the description: the alt text or the first sentence, cut to about 15 words.
+const FIRST_LOOK_WORDS = 15;
+export function firstLook(text: string): string {
+  const sentence = text.trim().split(/(?<=[.!?])\s+/)[0] ?? '';
+  const words = sentence.replace(/[.!?]+$/, '').split(/\s+/).filter(Boolean);
+  return `I see ${lowerFirst(words.slice(0, FIRST_LOOK_WORDS).join(' '))}.`;
+}
 const upperFirst = (text: string) => text.charAt(0).toUpperCase() + text.slice(1);
 const lowerFirst = (text: string) => (/^[A-Z](?![A-Z])/.test(text) && !/^I\b/.test(text) ? text.charAt(0).toLowerCase() + text.slice(1) : text);
