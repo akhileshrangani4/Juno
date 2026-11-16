@@ -27,6 +27,15 @@ describe('toggleLike', () => {
     expect(likeUriOf(post)).toBeNull();
   });
 
+  it('tells the For You feed about a like that went through', async () => {
+    const provider = { ...fakeProvider(), sendFeedFeedback: jest.fn(async () => undefined) };
+    const post = freshPost();
+    await toggleLike(provider, post, new ActionHistory());
+    expect(provider.sendFeedFeedback).toHaveBeenCalledWith(post, 'like');
+    await toggleLike(provider, post, new ActionHistory());
+    expect(provider.sendFeedFeedback).toHaveBeenCalledTimes(1);
+  });
+
   it('removes the like from a post the feed says is already liked', async () => {
     const provider = fakeProvider();
     const post = freshPost('at://me/like/9');

@@ -15,9 +15,17 @@ describe('surfaceActions', () => {
   });
 
   it('lists the feed, comments and agent actions', () => {
-    expect(labels('feed')).toEqual(['Next post', 'Previous post', 'Like', 'Open comments', 'Read this post again', 'Read exactly', 'Wake the agent', 'Open the camera']);
+    expect(labels('feed')).toEqual(['Next post', 'Previous post', 'Like', 'Open comments', 'Read this post again', 'Read exactly', 'Refresh', 'Wake the agent', 'Open the camera']);
     expect(labels('comments')).toEqual(['Next reply', 'Previous reply', 'Like', 'Back to posts', 'Read this reply again']);
     expect(labels('agent')).toEqual(['Back to scrolling', 'Like', 'Hear the instructions', 'Account settings', 'Open the camera']);
+  });
+
+  it('names the feed switch after the feed it goes to, and offers it only signed in', () => {
+    const switchLabel = (feed: 'forYou' | 'following' | null) => surfaceActions('feed', 'ios', false, feed).find((action) => action.name === 'switchFeed')?.label;
+    expect(switchLabel('forYou')).toBe('Switch to Following');
+    expect(switchLabel('following')).toBe('Switch to For You');
+    expect(switchLabel(null)).toBeUndefined();
+    expect(surfaceActions('comments', 'ios', false, 'forYou').map((action) => action.name)).not.toContain('switchFeed');
   });
 
   it('names the like action after the like state', () => {

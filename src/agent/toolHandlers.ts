@@ -1,12 +1,13 @@
 import type { MoveOutcome } from '@/feed/feedState';
 import type { ActionHistory, UndoEntry } from '@/actions/history';
+import { feedMessages, feedNames, otherFeed } from '@/feed/feedMessages';
 import { likePost, unlikePost, whose } from '@/feed/likes';
 import { commentMessages, commentsEntry, likeUnconfirmed } from '@/narration/comments';
 import { authorName, lateAddition, messages, translationMessages, type DescriptionParts, type DetailLevel, type TranslationState } from '@/narration/buildNarration';
 import { deviceLanguages } from '@/narration/deviceLanguages';
 import { languageCode, languageName } from '@/narration/language';
 import { changeTranslation, effectiveLanguages, type TranslationChange } from '@/narration/preferences';
-import type { Post, PostRef, RecordRef, ReplyParent, SocialAccount, SocialProvider } from '@/social/types';
+import type { FeedName, Post, PostRef, RecordRef, ReplyParent, SocialAccount, SocialProvider } from '@/social/types';
 
 import { agentMessages } from './agentMessages';
 import { memoryRejection, MemorySignInNeededError, MemoryUnavailableError, type MemoryClient } from './memoryClient';
@@ -56,6 +57,17 @@ export type AgentDeps = {
   account(): SocialAccount | null;
   focused(): Post | null;
   move(direction: 'next' | 'previous'): { outcome: MoveOutcome; post: Post | null };
+  feeds: {
+    // The feed showing, or null signed out, when only the public feed is offered.
+    current(): FeedName | null;
+    // True while something covers the feed, such as the camera, so it must not change.
+    busy(): boolean;
+    // Resolves with the new feed's first post, or null if it didn't load.
+    switchTo(feed: FeedName): Promise<Post | null>;
+    // How many new posts came in, or null when Bluesky couldn't be reached.
+    refresh(): Promise<number | null>;
+    toTop(): Post | null;
+  };
   // translationOnly: ask only when the post's text may need translating, not for picture descriptions.
   description(post: Post, detail: DetailLevel, options?: { translationOnly?: boolean }): Promise<DescriptionParts | null>;
   // A description already on the phone, without waiting.
@@ -109,6 +121,10 @@ const unconfirmed = (post: Post, wasLiked: boolean) =>
   `UNCONFIRMED: ${likeUnconfirmed(whose(post), wasLiked)} The app keeps waiting: if it lands it counts, and undo still reverses it. Tell the user in a few words.`;
 const LIKE_UNDONE = 'UNDONE_WHILE_SENDING: The user said undo while this was being sent, and the undo tells them what happened. Say nothing.';
 
+const CAMERA_OPEN = "CAMERA_OPEN: The camera is open over the feed, so the feed didn't change. Tell the user in a few words to close the camera first.";
+const NOT_FOR_YOU =
+  "NOT_FOR_YOU: Only posts in the user's For You feed can be tuned, and this one isn't from it. Tell them in one short sentence, and that they can say \"show my For You feed\".";
+
 const NOT_SIGNED_IN =
   "NOT_SIGNED_IN: The user isn't signed in, so this can't be done. Tell them they need to sign in for that, and ask if they want to open the sign-in screen.";
 const MEMORY_NEEDS_SIGN_IN =
@@ -127,7 +143,7 @@ const MAX_SUMMARY_REPLIES = 40;
 const WAITING_FOR_ANSWER =
   "WAITING_FOR_ANSWER: The app just read a draft back and is waiting for the user's answer, so nothing was done. Say nothing, and wait for the user.";
 
-const ACCOUNT_TOOLS = new Set<ToolName>(['edit_image_description', 'like_post', 'unlike_post', 'draft_post', 'draft_reply', 'draft_repost', 'draft_delete_my_last_post', 'publish_draft']);
+const ACCOUNT_TOOLS = new Set<ToolName>(['more_like_this', 'less_like_this', 'edit_image_description', 'like_post', 'unlike_post', 'draft_post', 'draft_reply', 'draft_repost', 'draft_delete_my_last_post', 'publish_draft']);
 
 const normalized = (text: string) =>
   text
@@ -571,6 +587,20 @@ export function createToolHandlers(deps: AgentDeps) {
     if (!answersReadBack.has(tool) && publisher.awaitingAnswer && publisher.currentDraft?.readBackTurn === turn) return { respond: false, result: WAITING_FOR_ANSWER, refused: 'awaitingAnswer' };
     if (tool !== 'publish_draft') publisher.interrupt();
 
+    // Reads the post focus just moved to, after any words that lead in to it.
+    const arrive = (post: Post, lead: string | null = null): ToolOutcome => {
+      const settings = deps.settings.get();
+      const dropped = leave(post);
+      const kept = !dropped && publisher.currentDraft?.readBackTurn === turn - 1 ? agentMessages.draftKept : null;
+      const before = [lead, dropped ?? kept].filter(Boolean).join(' ');
+      const now = partsNow(post, settings.mode, detailFor(settings.mode, settings));
+      return {
+        speak: (before ? `${before} ` : '') + narrateForFeed(post, settings, now.parts, deps.now(), now.translation),
+        respond: false,
+        result: `MOVED: The app read the new post aloud. Don't repeat it. The post in focus is now: ${describeFocus(post, null, deps.now())}`,
+      };
+    };
+
     switch (tool) {
       case 'read_post': {
         if (!focus) return { respond: true, result: NO_FOCUS };
@@ -608,16 +638,42 @@ export function createToolHandlers(deps: AgentDeps) {
           const speak = outcome === 'atStart' ? messages.atStart : outcome === 'atEnd' ? messages.atEnd : messages.loading;
           return { speak, respond: false, result: `NOT_MOVED (${outcome}): The app told the user. Focus did not change.` };
         }
-        const settings = deps.settings.get();
-        const dropped = leave(post);
-        const kept = !dropped && publisher.currentDraft?.readBackTurn === turn - 1 ? agentMessages.draftKept : null;
-        const before = dropped ?? kept;
-        const now = partsNow(post, settings.mode, detailFor(settings.mode, settings));
+        return arrive(post);
+      }
+      case 'switch_feed': {
+        const current = deps.feeds.current();
+        if (!current) return { respond: true, result: NOT_SIGNED_IN };
+        if (deps.feeds.busy()) return { respond: true, result: CAMERA_OPEN };
+        const target: FeedName = args.feed === 'following' ? 'following' : args.feed === 'for_you' ? 'forYou' : otherFeed(current);
+        if (target === current) return { speak: `Already on ${feedNames[target]}.`, respond: false, result: 'SAME_FEED: The app told the user. Nothing changed.' };
+        const first = await deps.feeds.switchTo(target);
+        if (!first) return { speak: `${feedMessages.switched(target)} ${messages.loading}`, respond: false, result: `SWITCHED: Now on ${feedNames[target]}, but its first post hasn't loaded. The app told the user.` };
+        return arrive(first, feedMessages.switched(target));
+      }
+      case 'refresh_feed': {
+        const count = await deps.feeds.refresh();
         return {
-          speak: (before ? `${before} ` : '') + narrateForFeed(post, settings, now.parts, deps.now(), now.translation),
+          speak: feedMessages.refreshed(count),
           respond: false,
-          result: `MOVED: The app read the new post aloud. Don't repeat it. The post in focus is now: ${describeFocus(post, null, deps.now())}`,
+          result:
+            count === null
+              ? "NOT_REFRESHED: Bluesky couldn't be reached. The app told the user."
+              : `REFRESHED: ${count} new posts, placed just before the post in focus, which didn't change. The app told the user. They can say "go to the newest" or "previous" to hear them.`,
         };
+      }
+      case 'go_to_newest': {
+        if (deps.feeds.busy()) return { respond: true, result: CAMERA_OPEN };
+        const newest = deps.feeds.toTop();
+        if (!newest) return { speak: messages.loading, respond: false, result: 'NO_POSTS: No posts are loaded yet. The app told the user.' };
+        if (newest.uri === focus?.uri) return { speak: 'This is the newest post.', respond: false, result: 'AT_NEWEST: Focus is already on the newest post. The app told the user.' };
+        return arrive(newest);
+      }
+      case 'more_like_this':
+      case 'less_like_this': {
+        if (!focus) return { respond: true, result: NO_FOCUS };
+        if (!focus.feedContext) return { respond: true, result: NOT_FOR_YOU };
+        void deps.provider.sendFeedFeedback(focus, tool === 'more_like_this' ? 'more' : 'less').catch(() => undefined);
+        return { speak: tool === 'more_like_this' ? feedMessages.more : feedMessages.less, respond: false, result: "FEEDBACK_SENT: The app told the For You feed and confirmed it to the user. Say nothing." };
       }
       case 'like_post': {
         if (!focus) return { respond: true, result: NO_FOCUS };

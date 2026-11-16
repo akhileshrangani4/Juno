@@ -9,8 +9,6 @@ import { createRefreshTriggers } from './refreshTriggers';
 
 const CHOICE_KEY = 'feed.choice';
 
-export const feedNames: Record<FeedName, string> = { forYou: 'For You', following: 'Following' };
-
 type Options = { store?: KeyValueStore; onAutoRefresh?: (count: number) => void };
 
 // The feed the user reads. Signed in, it is For You (Bluesky's Discover feed, picked for them) or Following, and
@@ -20,12 +18,9 @@ export function useFeed(provider: SocialProvider, account: SocialAccount | null,
   const [state, dispatch] = useReducer(feedReducer, initialFeedState);
   const feed: FeedName | null = account ? chosen : 'forYou';
   const source = feed && `${feed}:${account?.id ?? ''}`;
-  const latest = useRef({ state, feed, source, onAutoRefresh });
+  const latest = useRef({ state, feed, source, onAutoRefresh, refresh: async (): Promise<number | null> => null });
   const waiting = useRef<((post: Post | null) => void)[]>([]);
-
-  useEffect(() => {
-    latest.current = { state, feed, source, onAutoRefresh };
-  });
+  const triggers = useRef<ReturnType<typeof createRefreshTriggers> | null>(null);
 
   useEffect(() => {
     let live = true;
@@ -52,35 +47,34 @@ export function useFeed(provider: SocialProvider, account: SocialAccount | null,
     }
   };
 
-  const [triggers] = useState(() =>
-    createRefreshTriggers({
+  useEffect(() => {
+    latest.current = { state, feed, source, onAutoRefresh, refresh };
+  });
+
+  useEffect(() => {
+    const current = createRefreshTriggers({
       now: Date.now,
       schedule: (run, ms) => {
         const timer = setTimeout(run, ms);
         return () => clearTimeout(timer);
       },
-      refresh: () => void refreshRef.current().then((count) => count && latest.current.onAutoRefresh?.(count)),
+      refresh: () => void latest.current.refresh().then((count) => count && latest.current.onAutoRefresh?.(count)),
       retry: () => dispatch({ type: 'retry' }),
-    }),
-  );
-  const refreshRef = useRef(refresh);
-  useEffect(() => {
-    refreshRef.current = refresh;
-  });
-
-  useEffect(() => {
-    const subscription = AppState.addEventListener('change', triggers.appState);
+    });
+    triggers.current = current;
+    const subscription = AppState.addEventListener('change', current.appState);
     return () => {
       subscription.remove();
-      triggers.reset();
+      current.reset();
+      triggers.current = null;
     };
-  }, [triggers]);
+  }, []);
 
   useEffect(() => {
     if (!source || state.source === source) return;
-    triggers.reset();
+    triggers.current?.reset();
     dispatch({ type: 'reset', source });
-  }, [source, state.source, triggers]);
+  }, [source, state.source]);
 
   useEffect(() => {
     if (!feed || state.source !== source || !shouldLoadMore(state)) return;
@@ -90,14 +84,14 @@ export function useFeed(provider: SocialProvider, account: SocialAccount | null,
     provider.getTimeline({ cursor: state.cursor ?? undefined, feed }).then(
       (page) => {
         dispatch({ type: 'pageLoaded', posts: page.posts, cursor: page.cursor, generation });
-        if (latest.current.state.generation === generation) triggers.loaded(hadPosts);
+        if (latest.current.state.generation === generation) triggers.current?.loaded(hadPosts);
       },
       (error: unknown) => {
         dispatch({ type: 'loadFailed', error: error instanceof Error ? error.message : 'Unknown error', generation });
-        if (latest.current.state.generation === generation) triggers.failed();
+        if (latest.current.state.generation === generation) triggers.current?.failed();
       },
     );
-  }, [state, provider, feed, source, triggers]);
+  }, [state, provider, feed, source]);
 
   useEffect(() => {
     if (state.source !== source || !waiting.current.length) return;

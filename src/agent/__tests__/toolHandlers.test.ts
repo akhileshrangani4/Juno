@@ -68,6 +68,54 @@ describe('agent tools', () => {
     expect(await handlers.run('go_to_post', { direction: 'previous' })).toMatchObject({ speak: messages.atStart, respond: false });
   });
 
+  it('switches feeds by name or to the other one, says the feed and reads its first post', async () => {
+    const { handlers, deps } = setup();
+    const switched = await handlers.run('switch_feed', { feed: 'other' });
+    expect(deps.feeds.switchTo).toHaveBeenCalledWith('following');
+    expect(switched.speak).toMatch(/^Following. .*Second post here./);
+    expect(switched.result).toMatch(/^MOVED/);
+    expect(await handlers.run('switch_feed', { feed: 'for_you' })).toMatchObject({ speak: 'Already on For You.', respond: false });
+    expect((await setup({ signedIn: false }).handlers.run('switch_feed', { feed: 'following' })).result).toMatch(/^NOT_SIGNED_IN/);
+  });
+
+  it('leaves the feed alone while the camera is open', async () => {
+    const { handlers, deps } = setup({ feeds: { busy: () => true } });
+    expect((await handlers.run('switch_feed', { feed: 'following' })).result).toMatch(/^CAMERA_OPEN/);
+    expect((await handlers.run('go_to_newest', {})).result).toMatch(/^CAMERA_OPEN/);
+    expect(deps.feeds.switchTo).not.toHaveBeenCalled();
+    expect(deps.feeds.toTop).not.toHaveBeenCalled();
+  });
+
+  it('says how many new posts a refresh found, nothing new, or that it could not refresh', async () => {
+    const refresh = jest.fn<Promise<number | null>, []>();
+    const { handlers } = setup({ feeds: { refresh } });
+    refresh.mockResolvedValueOnce(3).mockResolvedValueOnce(1).mockResolvedValueOnce(0).mockResolvedValueOnce(null);
+    expect(await handlers.run('refresh_feed', {})).toMatchObject({ speak: '3 new posts.', respond: false });
+    expect((await handlers.run('refresh_feed', {})).speak).toBe('1 new post.');
+    expect((await handlers.run('refresh_feed', {})).speak).toBe('Nothing new.');
+    expect((await handlers.run('refresh_feed', {})).speak).toMatch(/^Couldn't refresh/);
+  });
+
+  it('goes to the newest post, or says it is already there', async () => {
+    const { handlers } = setup({ focus: nextPost });
+    expect((await handlers.run('go_to_newest', {})).speak).toMatch(/Maya/);
+    expect((await setup().handlers.run('go_to_newest', {})).speak).toBe('This is the newest post.');
+  });
+
+  it('tells the For You feed more or less like this, only for its own posts', async () => {
+    const forYou = makePost({ uri: 'at://did:plc:maya/app.bsky.feed.post/fy', feedContext: { context: 'ctx', reqId: 'req' } });
+    const { handlers, provider } = setup({ focus: forYou });
+    expect(await handlers.run('more_like_this', {})).toMatchObject({ speak: 'More like this.', respond: false });
+    expect(await handlers.run('less_like_this', {})).toMatchObject({ speak: 'Less like this.', respond: false });
+    expect(provider.sendFeedFeedback.mock.calls).toEqual([
+      [forYou, 'more'],
+      [forYou, 'less'],
+    ]);
+    const failing = setup({ focus: forYou, provider: makeProvider({ sendFeedFeedback: jest.fn(async () => Promise.reject(new Error('offline'))) }) });
+    expect((await failing.handlers.run('more_like_this', {})).speak).toBe('More like this.');
+    expect((await setup().handlers.run('more_like_this', {})).result).toMatch(/^NOT_FOR_YOU/);
+  });
+
   it('likes without confirmation and undoes the like', async () => {
     const { handlers, provider } = setup();
     expect((await handlers.run('like_post', {})).result).toBe("LIKED: Liked Maya's post. Confirm in a word or two.");

@@ -1,6 +1,6 @@
 import { makePosts } from '@/testing/fixtures';
 
-import { feedReducer, initialFeedState, move, PREFETCH_DISTANCE, shouldLoadMore, type FeedState } from '../feedState';
+import { feedReducer, initialFeedState, move, newPosts, PREFETCH_DISTANCE, shouldLoadMore, type FeedState } from '../feedState';
 
 const loaded = (count: number, overrides: Partial<FeedState> = {}): FeedState => ({
   ...feedReducer(initialFeedState, { type: 'pageLoaded', posts: makePosts(count), cursor: 'c1' }),
@@ -77,5 +77,38 @@ describe('shouldLoadMore', () => {
     expect(shouldLoadMore(loaded(3, { loading: true }))).toBe(false);
     expect(shouldLoadMore(loaded(3, { error: 'offline' }))).toBe(false);
     expect(shouldLoadMore(loaded(3, { exhausted: true }))).toBe(false);
+  });
+});
+
+describe('switching and refreshing', () => {
+  const uris = (state: FeedState) => state.posts.map((post) => post.uri);
+
+  it('starts a switched feed empty at its first post, and drops pages asked for before the switch', () => {
+    const before = loaded(3, { index: 2, generation: 1 });
+    const switched = feedReducer(before, { type: 'reset', source: 'following:did:plc:me' });
+    expect(switched).toMatchObject({ posts: [], index: 0, top: 0, source: 'following:did:plc:me', generation: 2 });
+    expect(feedReducer(switched, { type: 'pageLoaded', posts: makePosts(2), cursor: 'c', generation: 1 })).toBe(switched);
+    expect(feedReducer(switched, { type: 'loadFailed', error: 'offline', generation: 1 })).toBe(switched);
+    expect(uris(feedReducer(switched, { type: 'pageLoaded', posts: makePosts(2), cursor: 'c', generation: 2 }))).toEqual(['at://post/0', 'at://post/1']);
+  });
+
+  it('puts new posts just before the one in focus, keeps focus on it, and can jump to the newest', () => {
+    const reading = loaded(4, { index: 2 });
+    const refreshed = feedReducer(reading, { type: 'refreshed', posts: [...makePosts(3, 10), ...makePosts(2)], cursor: 'r' });
+    expect(uris(refreshed)).toEqual(['at://post/0', 'at://post/1', 'at://post/10', 'at://post/11', 'at://post/12', 'at://post/2', 'at://post/3']);
+    expect(refreshed.posts[refreshed.index].uri).toBe('at://post/2');
+    expect(refreshed.cursor).toBe('c1');
+    expect(move(refreshed, 'previous').index).toBe(4);
+    const top = feedReducer(refreshed, { type: 'toTop' });
+    expect(top.posts[top.index].uri).toBe('at://post/10');
+    expect(newPosts(reading, [...makePosts(3, 10), ...makePosts(2)])).toHaveLength(3);
+  });
+
+  it('changes nothing when there is nothing new, and loads the first posts into an empty feed', () => {
+    const reading = loaded(4, { index: 2, error: 'offline' });
+    expect(feedReducer(reading, { type: 'refreshed', posts: makePosts(4), cursor: 'r' })).toEqual({ ...reading, error: null });
+    const empty = feedReducer(initialFeedState, { type: 'refreshed', posts: makePosts(2), cursor: 'r' });
+    expect(empty).toMatchObject({ index: 0, cursor: 'r' });
+    expect(uris(empty)).toEqual(['at://post/0', 'at://post/1']);
   });
 });

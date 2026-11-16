@@ -119,6 +119,20 @@ const definitions: { name: string; description: string; parameters: Schema; answ
     description: 'Get the replies to the post in focus so you can say in one or two sentences what people are saying. Use for "what are people saying", "how are people reacting".',
     parameters: none,
   },
+  {
+    name: 'switch_feed',
+    description:
+      'Switch between the two feeds: For You, posts Bluesky picks for the user from what they like, and Following, posts from people they follow. Use for "show my For You feed", "show Following", "switch feeds". The app says the feed and reads its first post.',
+    parameters: {
+      type: 'object',
+      properties: { feed: { type: 'string', enum: ['for_you', 'following', 'other'], description: 'other: the feed not showing now, for "switch feeds".' } },
+      required: ['feed'],
+    },
+  },
+  { name: 'refresh_feed', description: 'Check the feed for new posts, for "refresh" or "what\'s new". The app says how many came in, without moving the user.', parameters: none },
+  { name: 'go_to_newest', description: 'Move to the newest post, for "go to the newest" or "take me to the top". The app reads it aloud.', parameters: none },
+  { name: 'more_like_this', description: 'Tell the For You feed to show more posts like the one in focus, for "more like this". The app confirms.', parameters: none },
+  { name: 'less_like_this', description: 'Tell the For You feed to show fewer posts like the one in focus, for "less like this" or "show me less of this". The app confirms.', parameters: none },
   { name: 'gesture_help', description: 'Repeat how the gestures work. The app speaks it itself.', parameters: none },
   {
     name: 'remember',
@@ -181,6 +195,11 @@ export type ToolName =
   | 'read_comments'
   | 'summarize_comments'
   | 'gesture_help'
+  | 'switch_feed'
+  | 'refresh_feed'
+  | 'go_to_newest'
+  | 'more_like_this'
+  | 'less_like_this'
   | 'remember'
   | 'recall_memories'
   | 'forget_memory'

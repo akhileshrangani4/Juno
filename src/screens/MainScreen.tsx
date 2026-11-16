@@ -14,6 +14,7 @@ import { registerCommentsController } from '@/comments/commentsControl';
 import { useComments } from '@/comments/useComments';
 import { haptic } from '@/feedback/haptics';
 import { likeInFlight, likeUriOf, toggleLike, useLikeLedger, whose } from '@/feed/likes';
+import { feedMessages, otherFeed } from '@/feed/feedMessages';
 import { useFeed } from '@/feed/useFeed';
 import type { CircleDirection } from '@/gestures/circle';
 import { createRateLimiter } from '@/gestures/rateLimit';
@@ -51,7 +52,8 @@ export function MainScreen() {
   const postNarrator = usePostNarrator();
   const screenReader = useScreenReader();
   const narrationPrefs = useNarrationPreferences();
-  const { state, post, go } = useFeed(provider);
+  const feeds = useFeed(provider, account, { onAutoRefresh: (count) => announceNewPosts(count) });
+  const { state, post, go } = feeds;
   const comments = useComments(provider);
   const { thread, reply } = comments;
   const [mode, setMode] = useState<Mode>('scroll');
@@ -85,7 +87,13 @@ export function MainScreen() {
     changeMode('scroll');
     if (reason === 'signIn') router.push('/sign-in');
   };
-  const agent = useVoiceAgent({ active: mode === 'agent', post, feed: { state, go }, narrator, onExit: onAgentExit });
+  const agent = useVoiceAgent({
+    active: mode === 'agent',
+    post,
+    feed: { ...feeds, current: () => feeds.feed, busy: () => covered.current },
+    narrator,
+    onExit: onAgentExit,
+  });
   const agentStatus = agent.status;
 
   useEffect(() => onDevWake(() => changeMode('agent')), []);
@@ -155,6 +163,25 @@ export function MainScreen() {
   const tell = (text: string) => (mode === 'agent' ? tellInAgentMode(text) : narrator.speak(text));
   // Confirms something done to the post or reply in focus without cutting it off: after its earcon and script.
   const confirm = (text: string) => (mode === 'agent' ? tellInAgentMode(text) : postNarrator.sayAfter(text));
+
+  // New posts found without the user asking: said only over the feed itself, never over comments or the camera.
+  const announceNewPosts = (count: number) => {
+    if (!covered.current && !thread) confirm(feedMessages.refreshed(count));
+  };
+
+  const switchFeed = () => {
+    if (!feeds.feed || covered.current) return haptic('edge');
+    const next = otherFeed(feeds.feed);
+    haptic('next');
+    if (mode === 'agent') tellInAgentMode(feedMessages.switched(next));
+    else prefix.current = feedMessages.switched(next);
+    void feeds.switchTo(next);
+  };
+
+  const refreshFeed = async () => {
+    const count = await feeds.refresh();
+    if (!covered.current) confirm(feedMessages.refreshed(count));
+  };
 
   const step = (direction: 'next' | 'previous') => {
     const outcome = go(direction);
@@ -379,6 +406,10 @@ export function MainScreen() {
         return mode === 'scroll' ? router.push('/sign-in') : onTapBottom();
       case 'camera':
         return void openCamera();
+      case 'switchFeed':
+        return switchFeed();
+      case 'refresh':
+        return void refreshFeed();
     }
     if (isNarrationAction(nativeEvent.actionName)) {
       const message = applyNarrationAction(nativeEvent.actionName, screenReader);
@@ -416,7 +447,7 @@ export function MainScreen() {
               : 'Tap the top half to hear the instructions, the bottom half for account settings. Hold two fingers on the screen to like the post. Draw a counter-clockwise circle to go back to scrolling.'
         }
         accessibilityValue={{ text: narration }}
-        accessibilityActions={[...surfaceActions(view, Platform.OS, liked), ...(scrolling ? narrationActions(narrationPrefs, screenReader) : [])]}
+        accessibilityActions={[...surfaceActions(view, Platform.OS, liked, feeds.feed), ...(scrolling ? narrationActions(narrationPrefs, screenReader) : [])]}
         onAccessibilityTap={onTapBottom}
         onAccessibilityAction={onAccessibilityAction}
         onMagicTap={() => switchMode(scrolling ? 'agent' : 'scroll')}

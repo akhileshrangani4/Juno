@@ -36,6 +36,7 @@ async function main() {
     account: () => account,
     focused: () => focus,
     move: () => ({ outcome: 'atEnd', post: null }),
+    feeds: { current: () => 'forYou', busy: () => false, switchTo: async () => null, refresh: async () => 0, toTop: () => null },
     description: async () => null,
     cachedDescription: () => null,
     loadedReplies: () => null,

@@ -22,7 +22,7 @@ import { ensureMicrophone } from './microphone';
 import { detailFor } from './narrationAdapter';
 import { narrationSettings } from './narrationSettings';
 import { describeAccount, describeFocus, describeMemories, describeSettings } from './postContext';
-import { createToolHandlers } from './toolHandlers';
+import { createToolHandlers, type AgentDeps } from './toolHandlers';
 import { createVoiceCall } from './vapiCall';
 
 const MEMORY_TIMEOUT_MS = 2500;
@@ -53,7 +53,7 @@ function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T | null> {
   return Promise.race([promise.catch(() => null), new Promise<null>((resolve) => setTimeout(() => resolve(null), ms))]);
 }
 
-type Feed = { state: FeedState; go(direction: 'next' | 'previous'): MoveOutcome };
+type Feed = { state: FeedState; go(direction: 'next' | 'previous'): MoveOutcome } & AgentDeps['feeds'];
 
 export function useVoiceAgent({
   active,
@@ -99,6 +99,13 @@ export function useVoiceAgent({
         const { index } = move(state, direction);
         const outcome = go(direction);
         return { outcome, post: outcome === 'moved' ? (state.posts[index] ?? null) : null };
+      },
+      feeds: {
+        current: () => latest.current.feed.current(),
+        busy: () => latest.current.feed.busy(),
+        switchTo: (target) => latest.current.feed.switchTo(target),
+        refresh: () => latest.current.feed.refresh(),
+        toTop: () => latest.current.feed.toTop(),
       },
       description: (target, detail, options) => descriptionCache.request(target, detail, options),
       cachedDescription: (target, detail) => descriptionCache.peek(target, detail),

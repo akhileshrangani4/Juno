@@ -5,7 +5,7 @@ import { authorName } from '@/narration/buildNarration';
 import { likeFailure, likeGaveUp } from '@/narration/comments';
 import { OfflineError, type Post, type SocialProvider } from '@/social/types';
 
-type Likes = Pick<SocialProvider, 'like' | 'unlike'>;
+type Likes = Pick<SocialProvider, 'like' | 'unlike'> & Partial<Pick<SocialProvider, 'sendFeedFeedback'>>;
 
 const known = new Map<string, string | null>();
 const sending = new Set<string>();
@@ -179,6 +179,8 @@ export async function likePost(provider: Likes, post: Post, history: ActionHisto
     call: () => provider.like(post),
     settle: (record) => {
       recordLike(post.uri, record.uri);
+      // A like on a For You post also tells that feed; it is best effort and never heard.
+      void Promise.resolve(provider.sendFeedFeedback?.(post, 'like')).catch(() => undefined);
       return true;
     },
     reverse: async (record) => {

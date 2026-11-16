@@ -30,6 +30,7 @@ export function makeProvider(overrides: Partial<SocialProvider> = {}): jest.Mock
     deletePost: jest.fn(async () => undefined),
     getMyLatestPost: jest.fn(async () => null),
     serviceAuth: jest.fn(async () => 'proof'),
+    sendFeedFeedback: jest.fn(async () => undefined),
     getReplies: jest.fn(async () => []),
     ...overrides,
   } as jest.Mocked<SocialProvider>;
@@ -102,6 +103,7 @@ export function setup(
     loadedReplies?: string[];
     history?: ActionHistory;
     readBacksHeard?: boolean;
+    feeds?: Partial<AgentDeps['feeds']>;
   } = {},
 ) {
   if (!options.history) forgetLikes();
@@ -121,6 +123,14 @@ export function setup(
       if (direction === 'previous') return { outcome: 'atStart', post: null };
       focus = nextPost;
       return { outcome: 'moved', post: nextPost };
+    },
+    feeds: {
+      current: () => (options.signedIn === false ? null : 'forYou'),
+      busy: () => false,
+      switchTo: jest.fn(async () => nextPost),
+      refresh: jest.fn(async () => 0),
+      toTop: jest.fn(() => maya),
+      ...options.feeds,
     },
     description: async () => null,
     cachedDescription: () => null,
