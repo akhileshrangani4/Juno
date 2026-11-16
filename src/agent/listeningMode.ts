@@ -57,6 +57,7 @@ type Cues = { pressed(): void; released(): void };
 // that unmutes it while a finger is down, and silences the agent if it was speaking when the finger went down.
 export function withPushToTalk(call: VoiceCall, mode: Mode, cues: Cues): { call: VoiceCall; talk(): TalkHold | undefined; dispose(): void } {
   let live = false;
+  let ended = false;
   let held = false;
   let assistantSpeaking = false;
   let assistantMuted = false;
@@ -83,11 +84,13 @@ export function withPushToTalk(call: VoiceCall, mode: Mode, cues: Cues): { call:
           },
         })
         .then(() => {
+          if (ended) return;
           live = true;
           if (pushToTalk()) call.setMuted?.(true);
         }),
     stop: () => {
       live = false;
+      ended = true;
       call.stop();
     },
   };
