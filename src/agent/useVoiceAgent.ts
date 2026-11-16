@@ -68,7 +68,7 @@ export function useVoiceAgent({
   feed: Feed;
   narrator: Narrator;
   onExit(reason: EndReason, message: string): void;
-}): { status: AgentStatus | null; say(text: string): boolean; notify(text: string, speak?: string): void } {
+}): { status: AgentStatus | null; say(text: string): boolean; notify(text: string, speak?: string): void; draftInPlay(): boolean } {
   const { provider, account } = useSession();
   const [status, setStatus] = useState<AgentStatus | null>(null);
   const latest = useRef({ post, feed, narrator, onExit, account });
@@ -172,5 +172,5 @@ export function useVoiceAgent({
     session.current?.focusChanged(post);
   }, [post]);
 
-  return { status: active ? status : null, say: (text) => session.current?.say(text) ?? false, notify: (text, speak) => session.current?.notify(text, speak) };
+  return { status: active ? status : null, say: (text) => session.current?.say(text) ?? false, notify: (text, speak) => session.current?.notify(text, speak), draftInPlay: () => session.current?.draftInPlay ?? false };
 }

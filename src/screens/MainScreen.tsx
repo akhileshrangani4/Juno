@@ -336,7 +336,12 @@ export function MainScreen() {
   );
 
   const onSwipe = (direction: SwipeDirection) => {
-    if (mode === 'agent') return haptic('edge');
+    if (mode === 'agent') {
+      // Awake, a swipe down opens the camera the way the agent's camera tool does, but never over a draft or a send.
+      if (direction !== 'down' || agentStatus !== 'listening' || agent.draftInPlay()) return haptic('edge');
+      haptic('camera');
+      return void openCamera();
+    }
     switch (direction) {
       case 'left':
         return page('previous');

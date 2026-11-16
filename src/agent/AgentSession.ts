@@ -145,6 +145,12 @@ export class AgentSession {
     this.deps.call?.addMessage(text, !speak);
   }
 
+  // A draft waiting for its answer, or a send counting down or in flight: gestures leave it alone.
+  get draftInPlay(): boolean {
+    const { publisher } = this.deps.handlers;
+    return publisher.currentDraft !== null || publisher.busy;
+  }
+
   // While the call is live it owns the audio, so the app's own messages (gesture help) are spoken by the agent.
   say(text: string): boolean {
     if (!this.live) return false;

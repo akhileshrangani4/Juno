@@ -18,7 +18,7 @@ jest.mock('@/narration/earcons', () => ({ createEarconPlayer: () => ({ play: () 
 jest.mock('@/agent/useVoiceAgent', () => ({
   useVoiceAgent: (args: { active: boolean; onExit(reason: string, message: string): void }) => {
     mockAgentCalls.push(args);
-    return { status: args.active ? 'listening' : null, say: mockAgentSay };
+    return { status: args.active ? 'listening' : null, say: mockAgentSay, draftInPlay: () => false };
   },
 }));
 jest.mock('@/session/SessionContext', () => ({ useSession: () => ({ provider: {} }) }));
@@ -94,7 +94,7 @@ describe('narration hand-off between the feed and the agent', () => {
 
     await act(async () => mockSurface!.onTwoFingerHold());
     expect(mockAgentSay).toHaveBeenLastCalledWith(commentMessages.signInToLike);
-    for (const direction of ['up', 'down', 'left', 'right']) await act(async () => mockSurface!.onSwipe(direction));
+    for (const direction of ['up', 'left', 'right']) await act(async () => mockSurface!.onSwipe(direction));
     expect(haptic).toHaveBeenLastCalledWith('edge');
     expect(mockAgentSay).toHaveBeenCalledTimes(1);
     expect(mockNarrator.speak).not.toHaveBeenCalled();
