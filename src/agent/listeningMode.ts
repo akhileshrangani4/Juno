@@ -54,8 +54,10 @@ type Mode = { get(): ListeningMode; subscribe(listener: (mode: ListeningMode) =>
 
 // How often the open-microphone window (a send counting down) is checked.
 export const OPEN_POLL_MS = 200;
-// After the finger lifts the agent keeps listening this long, so the last word isn't cut off.
-export const RELEASE_TAIL_MS = 400;
+// After the finger lifts the agent keeps listening until Vapi says the user stopped speaking, or this long at most.
+// On a live call, muting the instant speech ended still let the final transcript through, but the model never
+// answered; muting after Vapi's "user stopped" let it answer.
+export const RELEASE_TAIL_MS = 1500;
 
 export type PushToTalkDeps = {
   // The hold started (true) or ended (false): the haptic, the tone and the on-screen state.
@@ -118,6 +120,11 @@ export function withPushToTalk(call: VoiceCall, mode: Mode, deps: PushToTalkDeps
           ...listener,
           onMessage: (message) => {
             if (message.type === 'speech-update' && message.role === 'assistant') assistantSpeaking = message.status === 'started';
+            if (message.type === 'speech-update' && message.role === 'user' && message.status === 'stopped' && tail && !held) {
+              tail();
+              tail = null;
+              update('user stopped');
+            }
             if (message.type === 'transcript' && message.role === 'user') {
               restoreAssistant();
               if (message.transcriptType === 'final' && pushToTalk()) {

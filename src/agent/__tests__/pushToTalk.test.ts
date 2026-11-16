@@ -159,6 +159,20 @@ describe('push to talk', () => {
     expect({ ...ptt, firstMessage: '', silenceTimeoutSeconds: 0, messagePlan: null }).toEqual({ ...usual, firstMessage: '', silenceTimeoutSeconds: 0, messagePlan: null });
   });
 
+  it('after a release keeps listening until Vapi says the user stopped, so the model still answers', async () => {
+    const w = world('pushToTalk');
+    await w.session.start();
+    const hold = w.ptt.talk()!;
+    hold.start();
+    w.userSays('next post');
+    hold.end(false);
+    await w.scheduler.advance(RELEASE_TAIL_MS - 100);
+    expect(w.muted()).toBe(false);
+    w.emit({ type: 'speech-update', role: 'user', status: 'stopped' });
+    expect(w.muted()).toBe(true);
+    expect(w.logs.at(-1)).toBe('mic {"muted":true,"reason":"user stopped"}');
+  });
+
   it('silences the agent when the finger goes down while it is speaking, and gives its voice back once the user is heard', async () => {
     const w = world('pushToTalk');
     await w.session.start();
