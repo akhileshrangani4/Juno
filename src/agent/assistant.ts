@@ -21,7 +21,7 @@ export const KEYTERMS = [APP_NAME, 'post', 'post it', 'repost', 'reply', 'undo',
 // The model behind the voice agent, chosen by measuring tool use, publish safety and time to first word against
 // gpt-4.1 (docs/building.md, "The voice agent's model"). Reasoning stays off, because any effort adds time before the
 // first word and OpenAI then refuses the temperature; the fast tier keeps the first word close to gpt-4.1's.
-export const AGENT_MODEL = 'gpt-5.6-sol';
+export const AGENT_MODEL = 'gpt-4.1';
 
 // assistant.speechStarted names who is speaking each turn (the app's say() or the model); see agentVoice.ts.
 export const clientMessages = ['tool-calls', 'transcript', 'status-update', 'speech-update', 'assistant.speechStarted'] as const;
@@ -34,8 +34,6 @@ export function buildAssistant(context: PromptContext) {
     model: {
       provider: 'openai' as const,
       model: AGENT_MODEL,
-      reasoningEffort: 'none' as const,
-      serviceTier: 'fast' as const,
       temperature: 0.2,
       messages: [{ role: 'system' as const, content: buildSystemPrompt(context) }],
       tools: vapiTools,
