@@ -69,6 +69,8 @@ jest.mock('@/gestures/GestureSurface', () => {
 });
 
 // eslint-disable-next-line import/first
+import { listeningMode } from '@/agent/listeningMode';
+// eslint-disable-next-line import/first
 import { actionHistory } from '@/actions/history';
 // eslint-disable-next-line import/first
 import { recordLike } from '@/feed/likes';
@@ -379,6 +381,17 @@ describe('swiping down while the agent is awake', () => {
     for (const direction of ['up', 'left', 'right']) await act(async () => swipe(direction));
     expect(mockOpenCamera).not.toHaveBeenCalled();
     expect(jest.mocked(haptic).mock.calls).toEqual([['edge'], ['edge'], ['edge']]);
+  });
+
+  it('in hold to talk still opens the camera, with the talk hold on the surface for a still finger only', async () => {
+    listeningMode.set('pushToTalk');
+    await awake();
+    const surface = mockSurface as unknown as { onTalkHold?: unknown; talkHoldMs?: number };
+    expect(surface.onTalkHold).toBeDefined();
+    expect(surface.talkHoldMs).toBe(400);
+    await act(async () => swipe('down'));
+    expect(mockOpenCamera).toHaveBeenCalledTimes(1);
+    expect(haptic).toHaveBeenCalledWith('camera');
   });
 
   it('still opens the camera from the feed while the agent is asleep', async () => {

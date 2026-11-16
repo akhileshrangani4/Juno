@@ -7,7 +7,9 @@ import { Text } from '@/accessibility/ScaledText';
 import { useScreenReader } from '@/accessibility/useScreenReader';
 import { actionHistory } from '@/actions/history';
 import type { AgentStatus, EndReason } from '@/agent/AgentSession';
+import { agentMessages } from '@/agent/agentMessages';
 import { onDevWake } from '@/agent/devWake';
+import { listeningMode, type TalkHold } from '@/agent/listeningMode';
 import { useVoiceAgent } from '@/agent/useVoiceAgent';
 import { launchWake, wakeOnOpen } from '@/agent/wakeOnOpen';
 import { cameraMessages } from '@/camera/cameraMessages';
@@ -34,6 +36,8 @@ import { PostCard } from './PostCard';
 import { surfaceActions, type Mode, type SurfaceActionName } from './surfaceActions';
 import { playUnrecognizedCue } from './unrecognizedCue';
 
+// Push to talk starts listening after 0.4 s of a still finger: a stroke has moved by then, and a tap has lifted.
+const PUSH_TO_TALK_HOLD_MS = 400;
 const STROKE_CUE_INTERVAL_MS = 2500;
 const CAMERA_TIP_AFTER_POSTS = 5;
 const LIKE_TIP_AFTER_POSTS = 10;
@@ -91,6 +95,20 @@ export function MainScreen() {
     if (reason === 'signIn') router.push('/sign-in');
   };
   const agent = useVoiceAgent({ active: mode === 'agent', post, feed: { state, go }, narrator, onExit: onAgentExit });
+  const listening = useSyncExternalStore(listeningMode.subscribe, listeningMode.get);
+  // Push to talk, in agent mode only: holding one finger still unmutes the microphone until it lifts.
+  const talking = useRef<TalkHold | undefined>(undefined);
+  const talkHold = {
+    start: () => {
+      talking.current = agent.talk();
+      talking.current?.start();
+    },
+    end: (cancelled: boolean) => {
+      talking.current?.end(cancelled);
+      talking.current = undefined;
+    },
+  };
+  const pushToTalk = mode === 'agent' && listening === 'pushToTalk';
   const wakeSetting = useSyncExternalStore(wakeOnOpen.subscribe, wakeOnOpen.get);
   const signedIn = !!account;
   const agentStatus = agent.status;
@@ -360,7 +378,14 @@ export function MainScreen() {
 
   const onTapTop = () => (mode === 'scroll' ? page('previous') : tellInAgentMode(messages.gestures));
   const onTapBottom = () => (mode === 'scroll' ? page('next') : onAgentExit('signIn', 'Opening the sign-in screen.'));
-  const onCircle = (direction: CircleDirection) => switchMode(direction === 'clockwise' ? 'agent' : 'scroll');
+  // A clockwise circle while the agent is awake switches between hold to talk and hands-free: a way out by touch alone.
+  const toggleListening = () => {
+    const next = listening === 'pushToTalk' ? 'handsFree' : 'pushToTalk';
+    haptic('edge');
+    listeningMode.set(next);
+    tellInAgentMode(next === 'pushToTalk' ? agentMessages.pushToTalkOn : agentMessages.handsFreeOn);
+  };
+  const onCircle = (direction: CircleDirection) => (direction === 'clockwise' && mode === 'agent' ? toggleListening() : switchMode(direction === 'clockwise' ? 'agent' : 'scroll'));
   const onUnrecognizedStroke = () =>
     playUnrecognizedCue({
       narrator,
@@ -374,6 +399,11 @@ export function MainScreen() {
     });
 
   const onAccessibilityAction = ({ nativeEvent }: AccessibilityActionEvent) => {
+    if (nativeEvent.actionName === 'listening') {
+      const next = listening === 'pushToTalk' ? 'handsFree' : 'pushToTalk';
+      listeningMode.set(next);
+      return tellInAgentMode(next === 'pushToTalk' ? agentMessages.pushToTalkOn : agentMessages.handsFreeOn);
+    }
     switch (nativeEvent.actionName as SurfaceActionName) {
       case 'next':
       case 'increment':
@@ -437,6 +467,8 @@ export function MainScreen() {
         onCircle={onCircle}
         onSwipe={onSwipe}
         onTwoFingerHold={like}
+        onTalkHold={pushToTalk ? talkHold : undefined}
+        talkHoldMs={pushToTalk ? PUSH_TO_TALK_HOLD_MS : undefined}
         onTwoFingerHoldWarning={() => haptic('holdWarning')}
         onUnrecognizedStroke={onUnrecognizedStroke}
         accessible
@@ -447,10 +479,13 @@ export function MainScreen() {
             ? 'Tap the bottom half or swipe right for the next post, the top half or swipe left for the previous post. Swipe up for replies, swipe down for the camera. Hold two fingers through the buzz until the like sound to like. Draw a clockwise circle to wake the agent.'
             : view === 'comments'
               ? 'Tap the bottom half or swipe right for the next reply, the top half or swipe left for the previous reply. Hold two fingers through the buzz until the like sound to like. Swipe down to go back to posts.'
-              : 'Tap the top half to hear the instructions, the bottom half for account settings. Hold two fingers through the buzz until the like sound to like the post. Draw a counter-clockwise circle to go back to scrolling.'
+              : `${pushToTalk ? 'Hold one finger still on the screen while you talk. ' : ''}Tap the top half to hear the instructions, the bottom half for account settings. Hold two fingers through the buzz until the like sound to like the post. Draw a counter-clockwise circle to go back to scrolling.`
         }
         accessibilityValue={{ text: narration }}
-        accessibilityActions={[...surfaceActions(view, Platform.OS, liked), ...(scrolling ? narrationActions(narrationPrefs, screenReader) : [])]}
+        accessibilityActions={[
+          ...surfaceActions(view, Platform.OS, liked),
+          ...(scrolling ? narrationActions(narrationPrefs, screenReader) : [{ name: 'listening', label: listening === 'pushToTalk' ? 'Switch to hands-free' : 'Switch to push to talk' }]),
+        ]}
         onAccessibilityTap={onTapBottom}
         onAccessibilityAction={onAccessibilityAction}
         onMagicTap={() => switchMode(scrolling ? 'agent' : 'scroll')}
@@ -459,9 +494,9 @@ export function MainScreen() {
           {view === 'feed' ? '▲ Previous post' : view === 'comments' ? '▲ Previous reply' : '▲ Hear the instructions'}
         </Text>
         {!scrolling ? (
-          <View style={styles.agentBar}>
-            <Text style={[styles.agentTitle, { color: colors.agent }]} maxFontSizeMultiplier={type.maxScale}>
-              Agent: {AGENT_STATUS[agentStatus ?? 'starting']}
+          <View style={[styles.agentBar, agent.talking && styles.agentBarTalking]}>
+            <Text style={[styles.agentTitle, { color: agent.talking ? colors.focus : colors.agent }]} maxFontSizeMultiplier={type.maxScale}>
+              {agent.talking ? 'Listening: speak now' : pushToTalk && agentStatus === 'listening' ? 'Hold to talk' : `Agent: ${AGENT_STATUS[agentStatus ?? 'starting']}`}
             </Text>
           </View>
         ) : null}
@@ -498,6 +533,7 @@ const styles = StyleSheet.create({
   hint: { color: colors.muted, fontSize: type.label, fontWeight: '700', textAlign: 'center', paddingVertical: 6 },
   panel: { flex: 1, borderWidth: 6, borderColor: colors.focus, borderRadius: 24, backgroundColor: colors.surface, padding: 20, gap: 16, justifyContent: 'center' },
   agentBar: { borderWidth: 4, borderColor: colors.agent, borderRadius: 16, padding: 12 },
+  agentBarTalking: { borderColor: colors.focus, backgroundColor: colors.surface, paddingVertical: 48 },
   agentTitle: { fontSize: type.title, fontWeight: '800', textAlign: 'center' },
   statusText: { color: colors.text, fontSize: type.body, lineHeight: type.bodyLineHeight, fontWeight: '600' },
 });
