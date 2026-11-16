@@ -292,7 +292,7 @@ describe('aiming', () => {
     expect(env.spoken).toContain('I see a desk with a red mug in the middle.');
   });
 
-  it('says the first look of each opening by itself, short, as "I see …", and later ones in full', async () => {
+  it('says the looks it takes by itself short, the first of each opening as "I see …", and the full description only when asked', async () => {
     const env = setup();
     env.look.describe.mockImplementation(async () => ({
       description: 'A wooden desk with a red mug, a laptop and a notebook in soft afternoon light near a big window with plants on the sill. Behind it is a bookshelf.',
@@ -307,10 +307,30 @@ describe('aiming', () => {
     await env.feed(frame({ signature: flat(0.9) }), 12_000);
     expect(env.look.describe).toHaveBeenCalledTimes(2);
     expect(env.spoken.filter((line) => line.startsWith('I see'))).toHaveLength(1);
+    expect(env.spoken).toContain('A wooden desk with a red mug, a laptop and a notebook in soft afternoon.');
+    env.controller.askWhatIsInView();
+    await settle(env, Promise.resolve());
+    expect(env.spoken.at(-1)).toMatch(/^A wooden desk .* Behind it is a bookshelf\.$/);
     env.controller.close();
     await settle(env, env.controller.start());
     await env.feed(frame(), 3000);
     expect(env.spoken.filter((line) => line.startsWith('I see'))).toHaveLength(2);
+  });
+
+  it('drops a look it took by itself when the view moved before the answer came back, and looks again', async () => {
+    const env = setup();
+    let answer: (value: Awaited<ReturnType<LookClient['describe']>>) => void = () => undefined;
+    env.look.describe.mockImplementationOnce(() => new Promise((resolve) => (answer = resolve)));
+    await settle(env, env.controller.start());
+    await env.feed(frame(), 1500);
+    expect(env.look.describe).toHaveBeenCalledTimes(1);
+    env.controller.onAnalysis(frame({ signature: flat(0.9) }));
+    answer({ description: 'A person at a desk.', altText: '', visibleText: [], latencyMs: 900, costUsd: 0.0002 });
+    await settle(env, Promise.resolve());
+    expect(env.spoken.some((line) => line.includes('person at a desk'))).toBe(false);
+    await env.feed(frame({ signature: flat(0.9) }), 10_000);
+    expect(env.look.describe).toHaveBeenCalledTimes(2);
+    expect(env.spoken).toContain('I see a desk with a red mug in the middle.');
   });
 
   it('never looks by itself before descriptions are allowed, or after they were declined', async () => {

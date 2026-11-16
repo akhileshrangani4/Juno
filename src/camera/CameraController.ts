@@ -2,7 +2,7 @@ import { CHECKS, qualityCue, subjectCue, heardAs, type DecisionAnswer } from './
 import { cueText, guide, initialGuidance, tickIntervalMs, type Analysis, type Facing, type GuidanceState } from './guidance';
 import type { LibraryWalk } from './library';
 import { LOOK, type Check, type LookClient } from './lookClient';
-import { gateScene, initialGate, markDescribed, type GateState } from './sceneGate';
+import { gateScene, initialGate, markDescribed, SCENE, signatureDistance, type GateState } from './sceneGate';
 import type { CameraVoice } from './voice';
 import { whenTaken } from './whenTaken';
 
@@ -295,6 +295,7 @@ export class CameraController {
     if (this.state.phase !== 'aiming' || !this.frames || this.describing) return;
     this.describing = true;
     const generation = this.generation;
+    const seen = this.latest;
     try {
       const image = await this.frames.snapshot(LOOK.describeMaxPx, this.state.facing === 'front');
       const result = image ? await this.deps.look.describe(image, 'view') : null;
@@ -304,7 +305,10 @@ export class CameraController {
         return;
       }
       if (devLog) this.deps.log('view described', { latencyMs: result.latencyMs, costUsd: result.costUsd, description: result.description });
-      const spoken = asked || this.firstLookSaid ? result.description : firstLook(result.altText || result.description);
+      // A look the camera took by itself is dropped if the view has moved on since its frame, so it is never stale.
+      const now = this.latest;
+      if (!asked && seen && now && (signatureDistance(seen.signature, now.signature) >= SCENE.changeThreshold || now.motion >= SCENE.stillThreshold)) return;
+      const spoken = asked ? result.description : this.firstLookSaid ? shortLook(result.altText || result.description) : firstLook(result.altText || result.description);
       if (!asked) this.firstLookSaid = true;
       this.set({ detail: result.description });
       this.describing = false;
@@ -633,10 +637,12 @@ export class CameraController {
 const photoCount = (position: number, library: LibraryWalk) => (library.hasMore ? `Photo ${position + 1}` : `Photo ${position + 1} of ${library.count}`);
 // "I see" and the shortest form of the description: the alt text or the first sentence, cut to about 15 words.
 const FIRST_LOOK_WORDS = 15;
-export function firstLook(text: string): string {
+function shortWords(text: string): string {
   const sentence = text.trim().split(/(?<=[.!?])\s+/)[0] ?? '';
-  const words = sentence.replace(/[.!?]+$/, '').split(/\s+/).filter(Boolean);
-  return `I see ${lowerFirst(words.slice(0, FIRST_LOOK_WORDS).join(' '))}.`;
+  return sentence.replace(/[.!?]+$/, '').split(/\s+/).filter(Boolean).slice(0, FIRST_LOOK_WORDS).join(' ');
 }
+export const firstLook = (text: string): string => `I see ${lowerFirst(shortWords(text))}.`;
+// Later looks the camera takes by itself: the same short form, without "I see".
+export const shortLook = (text: string): string => `${upperFirst(shortWords(text))}.`;
 const upperFirst = (text: string) => text.charAt(0).toUpperCase() + text.slice(1);
 const lowerFirst = (text: string) => (/^[A-Z](?![A-Z])/.test(text) && !/^I\b/.test(text) ? text.charAt(0).toLowerCase() + text.slice(1) : text);
