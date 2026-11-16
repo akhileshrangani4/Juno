@@ -6,7 +6,7 @@ import { createCameraTools, describePendingPhoto } from '@/camera/agentTools';
 import { move, type FeedState, type MoveOutcome } from '@/feed/feedState';
 import { haptic } from '@/feedback/haptics';
 import type { Narrator } from '@/narration/Narrator';
-import { descriptionCache, earcons } from '@/narration/postNarration';
+import { descriptionCache } from '@/narration/postNarration';
 import { useSession } from '@/session/SessionContext';
 import type { Post } from '@/social/types';
 import { secureStore } from '@/storage/keyValueStore';
@@ -23,7 +23,6 @@ import { detailFor } from './narrationAdapter';
 import { narrationSettings } from './narrationSettings';
 import { describeAccount, describeFocus, describeMemories, describeSettings } from './postContext';
 import { createToolHandlers } from './toolHandlers';
-import { listeningMode, withPushToTalk, type TalkHold } from './listeningMode';
 import { createVoiceCall } from './vapiCall';
 
 const MEMORY_TIMEOUT_MS = 2500;
@@ -68,12 +67,11 @@ export function useVoiceAgent({
   feed: Feed;
   narrator: Narrator;
   onExit(reason: EndReason, message: string): void;
-}): { status: AgentStatus | null; say(text: string): boolean; notify(text: string, speak?: string): void; talk(): TalkHold | undefined } {
+}): { status: AgentStatus | null; say(text: string): boolean; notify(text: string, speak?: string): void } {
   const { provider, account } = useSession();
   const [status, setStatus] = useState<AgentStatus | null>(null);
   const latest = useRef({ post, feed, narrator, onExit, account });
   const session = useRef<AgentSession | null>(null);
-  const talkHold = useRef<{ talk(): TalkHold | undefined } | null>(null);
 
   useEffect(() => {
     latest.current = { post, feed, narrator, onExit, account };
@@ -92,21 +90,7 @@ export function useVoiceAgent({
     });
     const memory = createConvexMemory(access, secureStore);
     const memoryOffer = memory ? createMemoryOffer(secureStore, memory, () => latest.current.account) : null;
-    const pushToTalk = publicKey
-      ? withPushToTalk(createVoiceCall(publicKey), listeningMode, {
-          pressed: () => {
-            haptic('talkStart');
-            earcons.play('talkStart');
-          },
-          released: () => {
-            haptic('talkEnd');
-            earcons.play('talkEnd');
-          },
-        })
-      : null;
-    talkHold.current = pushToTalk;
     const handlers = createToolHandlers({
-      listening: listeningMode,
       provider,
       account: () => latest.current.account,
       focused: () => latest.current.post,
@@ -134,7 +118,7 @@ export function useVoiceAgent({
       now: () => new Date(),
     });
     const current = new AgentSession({
-      call: pushToTalk?.call ?? null,
+      call: publicKey ? createVoiceCall(publicKey) : null,
       handlers,
       conversation,
       microphone: () => ensureMicrophone((text) => speakAndWait(latest.current.narrator, text)).catch(() => 'denied' as const),
@@ -154,7 +138,7 @@ export function useVoiceAgent({
           focus: describeFocus(focus, description),
           memoryOffer: photo ? null : offer,
           photo,
-        }, listeningMode.get() === 'pushToTalk');
+        });
       },
       status: setStatus,
       connecting: () => {
@@ -179,8 +163,6 @@ export function useVoiceAgent({
     return () => {
       current.stop('user');
       session.current = null;
-      pushToTalk?.dispose();
-      talkHold.current = null;
     };
   }, [active, provider]);
 
@@ -188,10 +170,5 @@ export function useVoiceAgent({
     session.current?.focusChanged(post);
   }, [post]);
 
-  return {
-    status: active ? status : null,
-    say: (text) => session.current?.say(text) ?? false,
-    notify: (text, speak) => session.current?.notify(text, speak),
-    talk: () => talkHold.current?.talk(),
-  };
+  return { status: active ? status : null, say: (text) => session.current?.say(text) ?? false, notify: (text, speak) => session.current?.notify(text, speak) };
 }

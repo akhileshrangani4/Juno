@@ -1,14 +1,12 @@
 import { router, useIsFocused } from 'expo-router';
-import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Platform, StyleSheet, Text, View, type AccessibilityActionEvent, type AccessibilityRole } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { useScreenReader } from '@/accessibility/useScreenReader';
 import { actionHistory } from '@/actions/history';
 import type { AgentStatus, EndReason } from '@/agent/AgentSession';
-import { agentMessages } from '@/agent/agentMessages';
 import { onDevWake } from '@/agent/devWake';
-import { listeningMode, type TalkHold } from '@/agent/listeningMode';
 import { useVoiceAgent } from '@/agent/useVoiceAgent';
 import { cameraMessages } from '@/camera/cameraMessages';
 import { openCamera, registerCameraHost, setPendingPhoto } from '@/camera/host';
@@ -88,20 +86,6 @@ export function MainScreen() {
     if (reason === 'signIn') router.push('/sign-in');
   };
   const agent = useVoiceAgent({ active: mode === 'agent', post, feed: { state, go }, narrator, onExit: onAgentExit });
-  const listening = useSyncExternalStore(listeningMode.subscribe, listeningMode.get);
-  // Push to talk, in agent mode only: holding one finger still unmutes the microphone until it lifts.
-  const talking = useRef<TalkHold | undefined>(undefined);
-  const talkHold = {
-    start: () => {
-      talking.current = agent.talk();
-      talking.current?.start();
-    },
-    end: (cancelled: boolean) => {
-      talking.current?.end(cancelled);
-      talking.current = undefined;
-    },
-  };
-  const pushToTalk = mode === 'agent' && listening === 'pushToTalk';
   const agentStatus = agent.status;
 
   useEffect(() => onDevWake(() => changeMode('agent')), []);
@@ -369,11 +353,6 @@ export function MainScreen() {
     });
 
   const onAccessibilityAction = ({ nativeEvent }: AccessibilityActionEvent) => {
-    if (nativeEvent.actionName === 'listening') {
-      const next = listening === 'pushToTalk' ? 'handsFree' : 'pushToTalk';
-      listeningMode.set(next);
-      return tellInAgentMode(next === 'pushToTalk' ? agentMessages.pushToTalkOn : agentMessages.handsFreeOn);
-    }
     switch (nativeEvent.actionName as SurfaceActionName) {
       case 'next':
       case 'increment':
@@ -423,8 +402,7 @@ export function MainScreen() {
         onTapBottom={onTapBottom}
         onCircle={onCircle}
         onSwipe={onSwipe}
-        onTwoFingerHold={pushToTalk ? undefined : like}
-        onTalkHold={pushToTalk ? talkHold : undefined}
+        onTwoFingerHold={like}
         onTwoFingerHoldWarning={() => haptic('holdWarning')}
         onUnrecognizedStroke={onUnrecognizedStroke}
         accessible
@@ -438,10 +416,7 @@ export function MainScreen() {
               : 'Tap the top half to hear the instructions, the bottom half for account settings. Hold two fingers on the screen to like the post. Draw a counter-clockwise circle to go back to scrolling.'
         }
         accessibilityValue={{ text: narration }}
-        accessibilityActions={[
-          ...surfaceActions(view, Platform.OS, liked),
-          ...(scrolling ? narrationActions(narrationPrefs, screenReader) : [{ name: 'listening', label: listening === 'pushToTalk' ? 'Switch to hands-free' : 'Switch to push to talk' }]),
-        ]}
+        accessibilityActions={[...surfaceActions(view, Platform.OS, liked), ...(scrolling ? narrationActions(narrationPrefs, screenReader) : [])]}
         onAccessibilityTap={onTapBottom}
         onAccessibilityAction={onAccessibilityAction}
         onMagicTap={() => switchMode(scrolling ? 'agent' : 'scroll')}
