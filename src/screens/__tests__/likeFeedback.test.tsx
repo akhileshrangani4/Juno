@@ -28,6 +28,8 @@ let mockActive = false;
 // These tests are about the feed while scrolling, so the launch wake is off unless a test turns it on.
 let mockWakeSetting: boolean | null = false;
 let mockLaunch: { decide(state: never): string } | null = null;
+let mockDraftInPlay = false;
+const mockOpenCamera = jest.fn(() => true);
 let mockSurface: { onCircle(direction: string): void; onTwoFingerHold(): Promise<void>; onTwoFingerHoldWarning(): void; onTalkHold?: unknown } | null = null;
 
 jest.mock('@/narration/useNarrator', () => ({ useNarrator: () => mockNarrator }));
@@ -36,7 +38,7 @@ jest.mock('@/agent/useVoiceAgent', () => ({
   useVoiceAgent: (args: { active: boolean; onExit(reason: string, message: string): void }) => {
     mockAgentExit = args.onExit;
     mockActive = args.active;
-    return { status: args.active ? mockAgentStatus : null, say: mockAgentSay };
+    return { status: args.active ? mockAgentStatus : null, say: mockAgentSay, notify: jest.fn(), draftInPlay: () => mockDraftInPlay };
   },
 }));
 jest.mock('@/agent/wakeOnOpen', () => {
@@ -47,6 +49,7 @@ jest.mock('@/agent/wakeOnOpen', () => {
     launchWake: { decide: (state: never) => mockLaunch!.decide(state) },
   };
 });
+jest.mock('@/camera/host', () => ({ ...jest.requireActual('@/camera/host'), openCamera: () => mockOpenCamera() }));
 jest.mock('@/session/SessionContext', () => ({ useSession: () => ({ provider: mockProvider, account: { id: 'did:plc:me', handle: 'me.bsky.social' } }) }));
 jest.mock('@/feed/useFeed', () => ({
   useFeed: () => ({ state: { posts: [mockPost], index: 0, cursor: null, exhausted: true, loading: false, error: null }, post: mockPost, go: jest.fn() }),
@@ -328,5 +331,60 @@ describe('two-finger hold to like', () => {
     await act(async () => actionHistory.tell("Couldn't remove your like on Maya's post. Nothing changed."));
     expect(haptic).toHaveBeenLastCalledWith('likeFailed');
     expect(spoken()).toEqual(["Couldn't remove your like on Maya's post. Nothing changed."]);
+  });
+});
+
+describe('swiping down while the agent is awake', () => {
+  const swipe = (direction: string) => (mockSurface as unknown as { onSwipe(direction: string): void }).onSwipe(direction);
+  const awake = async () => {
+    await render(<MainScreen />);
+    await act(async () => mockSurface!.onCircle('clockwise'));
+    expect(mockActive).toBe(true);
+    jest.mocked(haptic).mockClear();
+  };
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    clearViewerState();
+    mockPost = maya;
+    mockAgentStatus = 'listening';
+    mockDraftInPlay = false;
+    mockWakeSetting = false;
+    mockLaunch = new LaunchWake();
+  });
+
+  it('opens the camera the way the camera tool does, with the call still live', async () => {
+    await awake();
+    await act(async () => swipe('down'));
+    expect(mockOpenCamera).toHaveBeenCalledTimes(1);
+    expect(haptic).toHaveBeenCalledWith('camera');
+    expect(mockActive).toBe(true);
+  });
+
+  it.each([
+    ['a draft is read back or counting down', () => void (mockDraftInPlay = true)],
+    ['the call is still connecting', () => void (mockAgentStatus = 'connecting')],
+  ])('does nothing but the edge buzz while %s', async (_when, arrange) => {
+    arrange();
+    await awake();
+    await act(async () => swipe('down'));
+    expect(mockOpenCamera).not.toHaveBeenCalled();
+    expect(haptic).toHaveBeenCalledWith('edge');
+    expect(mockAgentSay).not.toHaveBeenCalled();
+    expect(mockActive).toBe(true);
+  });
+
+  it('leaves the other swipes in the awake state as they were', async () => {
+    await awake();
+    for (const direction of ['up', 'left', 'right']) await act(async () => swipe(direction));
+    expect(mockOpenCamera).not.toHaveBeenCalled();
+    expect(jest.mocked(haptic).mock.calls).toEqual([['edge'], ['edge'], ['edge']]);
+  });
+
+  it('still opens the camera from the feed while the agent is asleep', async () => {
+    await render(<MainScreen />);
+    await act(async () => swipe('down'));
+    expect(mockOpenCamera).toHaveBeenCalledTimes(1);
+    expect(mockActive).toBe(false);
   });
 });
