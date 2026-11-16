@@ -164,7 +164,9 @@ export class AgentSession {
   }
 
   private onError(error: unknown) {
-    this.deps.log('call error', { error: error instanceof Error ? error.message : typeof error === 'object' ? JSON.stringify(error).slice(0, 200) : String(error) });
+    // A failed call start from Vapi's API carries the parsed response body as error (it names what was refused).
+    const body = typeof error === 'object' && error !== null && 'error' in error && error.error ? JSON.stringify(error.error).slice(0, 300) : undefined;
+    this.deps.log('call error', { error: error instanceof Error ? error.message : typeof error === 'object' ? JSON.stringify(error).slice(0, 200) : String(error), ...(body ? { body } : {}) });
     if (this.live) this.finish('dropped');
   }
 

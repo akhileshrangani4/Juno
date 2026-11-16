@@ -13,7 +13,9 @@ export const MAX_DURATION_SECONDS = 600;
 // In push to talk the microphone is muted between holds, so quiet is normal: the call waits five minutes, and the
 // "are you still there" prompt four, before ending on silence. The maximum call length is the same.
 export const PUSH_TO_TALK_SILENCE_SECONDS = 300;
-export const PUSH_TO_TALK_IDLE_SECONDS = 240;
+// Vapi refuses an idle prompt later than this ("assistant.messagePlan.idleTimeoutSeconds must not be greater than
+// 60"), so push to talk has no "are you still there" prompt: quiet between holds is normal.
+export const VAPI_MAX_IDLE_SECONDS = 60;
 export const FIRST_MESSAGE = "I'm listening.";
 // In push to talk the first words say how to be heard.
 export const HOLD_TO_TALK = 'Hold one finger on the screen while you talk.';
@@ -53,11 +55,15 @@ export function buildAssistant(context: PromptContext, pushToTalk = false) {
     transcriber: { provider: 'deepgram' as const, model: 'nova-3', language: 'en' as const, keyterm: [...KEYTERMS] },
     silenceTimeoutSeconds: pushToTalk ? PUSH_TO_TALK_SILENCE_SECONDS : SILENCE_TIMEOUT_SECONDS,
     maxDurationSeconds: MAX_DURATION_SECONDS,
-    messagePlan: {
-      idleMessages: ["Are you still there? I'll go to sleep soon if it stays quiet."],
-      idleMessageMaxSpokenCount: 1,
-      idleTimeoutSeconds: pushToTalk ? PUSH_TO_TALK_IDLE_SECONDS : 17,
-    },
+    ...(pushToTalk
+      ? {}
+      : {
+          messagePlan: {
+            idleMessages: ["Are you still there? I'll go to sleep soon if it stays quiet."],
+            idleMessageMaxSpokenCount: 1,
+            idleTimeoutSeconds: 17,
+          },
+        }),
     backgroundSound: 'off' as const,
     clientMessages: [...clientMessages],
     serverMessages: [],

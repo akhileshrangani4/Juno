@@ -4,7 +4,7 @@ import { PRESS, PressTracker } from '@/gestures/press';
 
 import { agentMessages } from '../agentMessages';
 import { AgentSession } from '../AgentSession';
-import { buildAssistant, FIRST_MESSAGE, HOLD_TO_TALK, PUSH_TO_TALK_IDLE_SECONDS, PUSH_TO_TALK_SILENCE_SECONDS, SILENCE_TIMEOUT_SECONDS } from '../assistant';
+import { buildAssistant, FIRST_MESSAGE, HOLD_TO_TALK, PUSH_TO_TALK_SILENCE_SECONDS, SILENCE_TIMEOUT_SECONDS, VAPI_MAX_IDLE_SECONDS } from '../assistant';
 import { ListeningModeStore, OPEN_POLL_MS, RELEASE_TAIL_MS, withPushToTalk, type ListeningMode } from '../listeningMode';
 import type { CallListener, VapiMessage } from '../voiceCall';
 
@@ -119,7 +119,7 @@ describe('push to talk', () => {
     expect(buildAssistant(context, false)).toEqual(usual);
     expect(usual.firstMessage).toBe(FIRST_MESSAGE);
     expect(usual.silenceTimeoutSeconds).toBe(SILENCE_TIMEOUT_SECONDS);
-    expect(usual.messagePlan.idleTimeoutSeconds).toBe(17);
+    expect(usual.messagePlan?.idleTimeoutSeconds).toBe(17);
   });
 
   it('stops the agent hearing once the call is live, lets it hear while a finger is held, and a moment after release', async () => {
@@ -152,7 +152,9 @@ describe('push to talk', () => {
     const ptt = buildAssistant(context, true);
     expect(ptt.firstMessage).toBe(`${FIRST_MESSAGE} ${HOLD_TO_TALK}`);
     expect(ptt.silenceTimeoutSeconds).toBe(PUSH_TO_TALK_SILENCE_SECONDS);
-    expect(ptt.messagePlan.idleTimeoutSeconds).toBe(PUSH_TO_TALK_IDLE_SECONDS);
+    // Vapi answers 400 to an idle prompt later than 60 s, so push to talk has none; hands-free stays within the limit.
+    expect(ptt.messagePlan).toBeUndefined();
+    expect(usual.messagePlan!.idleTimeoutSeconds).toBeLessThanOrEqual(VAPI_MAX_IDLE_SECONDS);
     expect(ptt.maxDurationSeconds).toBe(usual.maxDurationSeconds);
     expect({ ...ptt, firstMessage: '', silenceTimeoutSeconds: 0, messagePlan: null }).toEqual({ ...usual, firstMessage: '', silenceTimeoutSeconds: 0, messagePlan: null });
   });
