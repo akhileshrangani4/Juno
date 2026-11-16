@@ -21,8 +21,10 @@ public final class JunoCameraModule: Module {
 
     // A voice call records audio, and iOS mutes haptics and system sounds while an app records unless it opts
     // in. The camera's guidance ticks and shutter sound must still be felt and heard during a call.
-    Function("allowHapticsDuringRecording") { (allow: Bool) in
+    // Returns the session's setting afterwards, so a log can show whether it took.
+    Function("allowHapticsDuringRecording") { (allow: Bool) -> Bool in
       try? AVAudioSession.sharedInstance().setAllowHapticsAndSystemSoundsDuringRecording(allow)
+      return AVAudioSession.sharedInstance().allowHapticsAndSystemSoundsDuringRecording
     }
 
     // The development frame source runs only in simulator builds; a build for a phone has no analyzeImage at all.

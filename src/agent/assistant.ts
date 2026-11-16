@@ -15,6 +15,9 @@ export const MAX_DURATION_SECONDS = 600;
 export const PUSH_TO_TALK_SILENCE_SECONDS = 300;
 export const PUSH_TO_TALK_IDLE_SECONDS = 240;
 export const FIRST_MESSAGE = "I'm listening.";
+// In push to talk the first words say how to be heard.
+export const HOLD_TO_TALK = 'Hold one finger on the screen while you talk.';
+
 // When the call starts because a photo was kept or chosen, the agent opens by asking for the post's words.
 export const PHOTO_FIRST_MESSAGE = cameraMessages.photoReady;
 
@@ -33,7 +36,9 @@ export const clientMessages = ['tool-calls', 'transcript', 'status-update', 'spe
 export function buildAssistant(context: PromptContext, pushToTalk = false) {
   return {
     name: `${APP_NAME} voice agent`,
-    firstMessage: context.photo ? PHOTO_FIRST_MESSAGE : context.memoryOffer ? `${FIRST_MESSAGE} ${context.memoryOffer}` : FIRST_MESSAGE,
+    firstMessage: [context.photo ? PHOTO_FIRST_MESSAGE : context.memoryOffer ? `${FIRST_MESSAGE} ${context.memoryOffer}` : FIRST_MESSAGE, pushToTalk ? HOLD_TO_TALK : null]
+      .filter(Boolean)
+      .join(' '),
     firstMessageMode: 'assistant-speaks-first' as const,
     model: {
       provider: 'openai' as const,

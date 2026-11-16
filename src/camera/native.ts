@@ -17,7 +17,7 @@ type RawAnalysis = { faces: Box[]; salient: Box | null; sharpness: number; brigh
 type NativeModule = {
   cameraPermission(): PermissionStatus;
   requestCameraPermission(): Promise<boolean>;
-  allowHapticsDuringRecording(allow: boolean): void;
+  allowHapticsDuringRecording(allow: boolean): boolean;
   // Only in simulator builds (see JunoCameraModule.swift): a build for a phone has neither.
   devFramesSupported?: boolean;
   analyzeImage?(uri: string): Promise<RawAnalysis>;

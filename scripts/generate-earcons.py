@@ -9,8 +9,8 @@ Each sound is under 300 ms and differs from the others by pitch and pattern:
   shutter two quick falling clicks, played when the camera takes a picture
   like    three quick notes going up (the hold to like fired)
   unlike  the same three notes going down (the hold to remove a like fired)
-  talk-start  a short rising glide: push to talk, the microphone is on
-  talk-end    the same glide falling: the microphone is off again
+  talk-start  two loud rising notes: push to talk, the agent is listening
+  talk-end    the same notes falling: the agent stopped listening
 Run: python3 scripts/generate-earcons.py
 """
 import math
@@ -41,13 +41,13 @@ def silence(ms):
     return [0.0] * int(RATE * ms / 1000)
 
 
-def write(name, samples):
+def write(name, samples, peak=PEAK):
     OUT.mkdir(parents=True, exist_ok=True)
     with wave.open(str(OUT / f"earcon-{name}.wav"), "wb") as file:
         file.setnchannels(1)
         file.setsampwidth(2)
         file.setframerate(RATE)
-        file.writeframes(b"".join(struct.pack("<h", int(PEAK * s * 32767)) for s in samples))
+        file.writeframes(b"".join(struct.pack("<h", int(peak * s * 32767)) for s in samples))
     print(f"{name}: {len(samples) * 1000 // RATE} ms")
 
 
@@ -58,5 +58,5 @@ write("reply", tone(1046, 698, 220, 2.5))
 write("shutter", tone(2400, 1400, 35, 6.0) + silence(35) + tone(2000, 1000, 45, 6.0))
 write("like", tone(1046, 1046, 50, 2.0) + tone(1319, 1319, 50, 2.0) + tone(1568, 1568, 70, 3.0))
 write("unlike", tone(1568, 1568, 50, 2.0) + tone(1319, 1319, 50, 2.0) + tone(1046, 1046, 70, 3.0))
-write("talk-start", tone(660, 990, 120, 2.0))
-write("talk-end", tone(990, 660, 120, 2.0))
+write("talk-start", tone(880, 880, 90, 1.0) + silence(20) + tone(1320, 1320, 90, 1.0), peak=0.9)
+write("talk-end", tone(1320, 1320, 90, 1.0) + silence(20) + tone(880, 880, 90, 1.0), peak=0.9)

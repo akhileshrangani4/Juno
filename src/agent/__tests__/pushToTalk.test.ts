@@ -4,17 +4,16 @@ import { PRESS, PressTracker } from '@/gestures/press';
 
 import { agentMessages } from '../agentMessages';
 import { AgentSession } from '../AgentSession';
-import { buildAssistant, PUSH_TO_TALK_IDLE_SECONDS, PUSH_TO_TALK_SILENCE_SECONDS, SILENCE_TIMEOUT_SECONDS } from '../assistant';
-import { ListeningModeStore, withPushToTalk, type ListeningMode } from '../listeningMode';
+import { buildAssistant, FIRST_MESSAGE, HOLD_TO_TALK, PUSH_TO_TALK_IDLE_SECONDS, PUSH_TO_TALK_SILENCE_SECONDS, SILENCE_TIMEOUT_SECONDS } from '../assistant';
+import { ListeningModeStore, OPEN_POLL_MS, RELEASE_TAIL_MS, withPushToTalk, type ListeningMode } from '../listeningMode';
 import type { CallListener, VapiMessage } from '../voiceCall';
 
 function world(mode: ListeningMode) {
   const tools = setupTools({ readBacksHeard: false });
   const storage = createMemoryStore();
   const listening = new ListeningModeStore(storage);
-  if (mode === 'pushToTalk') listening.set('pushToTalk');
+  if (mode === 'handsFree') listening.set('handsFree');
   let listener: CallListener | null = null;
-  const received: VapiMessage[] = [];
   const raw = {
     start: jest.fn((_assistant: object, next: CallListener) => {
       listener = next;
@@ -23,11 +22,18 @@ function world(mode: ListeningMode) {
     stop: jest.fn(),
     say: jest.fn(),
     addMessage: jest.fn(),
-    setMuted: jest.fn(),
+    muteCustomer: jest.fn(),
     muteAssistant: jest.fn(),
   };
-  const cues: string[] = [];
-  const ptt = withPushToTalk(raw, listening, { pressed: () => cues.push('pressed'), released: () => cues.push('released') });
+  const cues: boolean[] = [];
+  const logs: string[] = [];
+  const ptt = withPushToTalk(raw, listening, {
+    cue: (on) => cues.push(on),
+    openWhile: () => tools.handlers.publisher.busy,
+    schedule: tools.scheduler.schedule,
+    now: tools.scheduler.now,
+    log: (event, detail) => logs.push(detail ? `${event} ${JSON.stringify(detail)}` : event),
+  });
   tools.deps.listening = listening;
   const session = new AgentSession({
     call: ptt.call,
@@ -44,10 +50,7 @@ function world(mode: ListeningMode) {
     log: () => undefined,
   });
   tools.deps.notify = (text) => session.notify(text);
-  const emit = (message: VapiMessage) => {
-    received.push(message);
-    listener!.onMessage(message);
-  };
+  const emit = (message: VapiMessage) => listener!.onMessage(message);
   const userSays = (transcript: string) => emit({ type: 'transcript', role: 'user', transcriptType: 'final', transcript });
   const toolCall = async (name: string, args: Record<string, unknown> = {}) => {
     emit({ type: 'tool-calls', toolCallList: [{ id: 'call', type: 'function', function: { name, arguments: JSON.stringify(args) } }] });
@@ -59,45 +62,99 @@ function world(mode: ListeningMode) {
     emit({ type: 'transcript', role: 'assistant', transcriptType: 'final', transcript: raw.say.mock.calls.at(-1)?.[0] as string });
     emit({ type: 'speech-update', role: 'assistant', status: 'stopped' });
   };
-  return { ...tools, raw, ptt, listening, storage, session, cues, emit, userSays, toolCall, playsReadBack };
+  const muted = () => raw.muteCustomer.mock.calls.at(-1)?.[0];
+  const saying = (words: string) => {
+    const hold = ptt.talk()!;
+    hold.start();
+    userSays(words);
+    hold.end(false);
+  };
+  return { ...tools, raw, ptt, listening, storage, session, cues, logs, emit, userSays, toolCall, playsReadBack, muted, saying };
 }
 
 const draftIdOf = (call: jest.Mock) => (call.mock.calls.map(([content]) => content as string).find((content) => content.includes('draftId=')) ?? '').match(/draftId="([^"]+)"/)?.[1];
 
 const context = { account: 'Signed in as @me.bsky.social.', settings: 'Full posts.', memories: 'Nothing yet.', focus: 'None', memoryOffer: null, photo: null };
 
+async function confirmed(w: ReturnType<typeof world>) {
+  await w.session.start();
+  w.saying('post hello from my new app');
+  await w.toolCall('draft_post', { text: 'Hello from my new app.' });
+  w.playsReadBack();
+  await w.scheduler.advance(RELEASE_TAIL_MS);
+  expect(w.muted()).toBe(true);
+  w.saying('post it');
+  await w.toolCall('publish_draft', { draftId: draftIdOf(w.raw.addMessage) });
+  expect(w.raw.say).toHaveBeenLastCalledWith('Posting in five seconds. Say undo to stop it.', true);
+  w.emit({ type: 'speech-update', role: 'assistant', status: 'started' });
+  w.emit({ type: 'speech-update', role: 'assistant', status: 'stopped' });
+}
+
 describe('push to talk', () => {
-  it('in hands-free changes nothing: no muting, no hold, the same messages and the same assistant as before', async () => {
+  it('is the default, and a saved choice of hands-free is kept after a relaunch', async () => {
+    const storage = createMemoryStore();
+    const fresh = new ListeningModeStore(storage);
+    await fresh.load();
+    expect(fresh.get()).toBe('pushToTalk');
+    fresh.set('handsFree');
+    const relaunched = new ListeningModeStore(storage);
+    expect(relaunched.get()).toBe('pushToTalk');
+    await relaunched.load();
+    expect(relaunched.get()).toBe('handsFree');
+  });
+
+  it('in hands-free changes nothing: no muting, no hold, the same assistant as before', async () => {
     const w = world('handsFree');
     await w.session.start();
-    expect(w.raw.setMuted).not.toHaveBeenCalled();
-    expect(w.ptt.talk()).toBeUndefined();
     w.emit({ type: 'speech-update', role: 'assistant', status: 'started' });
     w.userSays('hello');
+    await w.scheduler.advance(2000);
+    expect(w.ptt.talk()).toBeUndefined();
+    expect(w.raw.muteCustomer).not.toHaveBeenCalled();
     expect(w.raw.muteAssistant).not.toHaveBeenCalled();
     expect(w.cues).toEqual([]);
-    expect(w.raw.start).toHaveBeenCalledWith({ name: 'test' }, expect.any(Object));
+    expect(w.logs).toEqual([]);
 
     const usual = buildAssistant(context);
     expect(buildAssistant(context, false)).toEqual(usual);
+    expect(usual.firstMessage).toBe(FIRST_MESSAGE);
     expect(usual.silenceTimeoutSeconds).toBe(SILENCE_TIMEOUT_SECONDS);
     expect(usual.messagePlan.idleTimeoutSeconds).toBe(17);
-    expect(usual.model.tools.map((tool) => tool.function.name)).toEqual(expect.arrayContaining(['use_push_to_talk', 'use_hands_free']));
   });
 
-  it('mutes the microphone once the call is live, unmutes it while a finger is held, and mutes it again on release', async () => {
+  it('stops the agent hearing once the call is live, lets it hear while a finger is held, and a moment after release', async () => {
     const w = world('pushToTalk');
     expect(w.ptt.talk()).toBeUndefined();
     await w.session.start();
-    expect(w.raw.setMuted.mock.calls).toEqual([[true]]);
+    expect(w.raw.muteCustomer.mock.calls).toEqual([[true]]);
     const hold = w.ptt.talk()!;
     hold.start();
-    expect(w.raw.setMuted).toHaveBeenLastCalledWith(false);
-    expect(w.cues).toEqual(['pressed']);
+    expect(w.muted()).toBe(false);
+    expect(w.cues).toEqual([true]);
+    w.userSays('next post');
     hold.end(false);
-    expect(w.raw.setMuted).toHaveBeenLastCalledWith(true);
-    expect(w.cues).toEqual(['pressed', 'released']);
-    expect(w.raw.muteAssistant).not.toHaveBeenCalled();
+    expect(w.cues).toEqual([true, false]);
+    expect(w.muted()).toBe(false);
+    await w.scheduler.advance(RELEASE_TAIL_MS);
+    expect(w.muted()).toBe(true);
+    expect(w.logs).toEqual([
+      'mic {"muted":true,"reason":"call live"}',
+      'mic {"muted":false,"reason":"hold"}',
+      'talk start {"agentSpeaking":false}',
+      'heard {"chars":9,"held":true,"sinceOpenMs":0}',
+      'talk end {"heldMs":0,"cancelled":false}',
+      'mic {"muted":true,"reason":"release"}',
+    ]);
+  });
+
+  it('says how to be heard in its first words, and waits five minutes of quiet before ending, with the same maximum length', () => {
+    const usual = buildAssistant(context);
+    const ptt = buildAssistant(context, true);
+    expect(ptt.firstMessage).toBe(`${FIRST_MESSAGE} ${HOLD_TO_TALK}`);
+    expect(ptt.silenceTimeoutSeconds).toBe(PUSH_TO_TALK_SILENCE_SECONDS);
+    expect(ptt.messagePlan.idleTimeoutSeconds).toBe(PUSH_TO_TALK_IDLE_SECONDS);
+    expect(ptt.maxDurationSeconds).toBe(usual.maxDurationSeconds);
+    expect({ ...ptt, firstMessage: '', silenceTimeoutSeconds: 0, messagePlan: null }).toEqual({ ...usual, firstMessage: '', silenceTimeoutSeconds: 0, messagePlan: null });
   });
 
   it('silences the agent when the finger goes down while it is speaking, and gives its voice back once the user is heard', async () => {
@@ -110,90 +167,86 @@ describe('push to talk', () => {
     expect(w.raw.muteAssistant).toHaveBeenLastCalledWith(false);
   });
 
-  it('gives a muted call five minutes of quiet before it ends, with the same maximum length', () => {
-    const usual = buildAssistant(context);
-    const ptt = buildAssistant(context, true);
-    expect(ptt.silenceTimeoutSeconds).toBe(PUSH_TO_TALK_SILENCE_SECONDS);
-    expect(PUSH_TO_TALK_SILENCE_SECONDS).toBeGreaterThanOrEqual(180);
-    expect(ptt.messagePlan.idleTimeoutSeconds).toBe(PUSH_TO_TALK_IDLE_SECONDS);
-    expect(ptt.maxDurationSeconds).toBe(usual.maxDurationSeconds);
-    expect({ ...ptt, silenceTimeoutSeconds: 0, messagePlan: null }).toEqual({ ...usual, silenceTimeoutSeconds: 0, messagePlan: null });
-  });
-
-  it('switches by voice, says how each mode works, mutes or unmutes at once, and keeps the choice after a relaunch', async () => {
-    const w = world('handsFree');
-    await w.session.start();
-    await w.toolCall('use_push_to_talk');
-    expect(w.listening.get()).toBe('pushToTalk');
-    expect(w.raw.say).toHaveBeenLastCalledWith(agentMessages.pushToTalkOn, expect.anything());
-    expect(w.raw.setMuted).toHaveBeenLastCalledWith(true);
-    const relaunched = new ListeningModeStore(w.storage);
-    await relaunched.load();
-    expect(relaunched.get()).toBe('pushToTalk');
-
-    await w.toolCall('use_hands_free');
-    expect(w.listening.get()).toBe('handsFree');
-    expect(w.raw.say).toHaveBeenLastCalledWith(agentMessages.handsFreeOn, expect.anything());
-    expect(w.raw.setMuted).toHaveBeenLastCalledWith(false);
-    const again = new ListeningModeStore(w.storage);
-    await again.load();
-    expect(again.get()).toBe('handsFree');
-  });
-
-  it('stops the send when "undo" is said while holding during the five seconds', async () => {
+  it('needs a hold to answer the read-back, then keeps listening from the yes through the five seconds, so "undo" needs no hold', async () => {
     const w = world('pushToTalk');
-    await w.session.start();
-    const hold = () => w.ptt.talk()!;
-    let held = hold();
-    held.start();
-    w.userSays('post hello from my new app');
-    held.end(false);
-    await w.toolCall('draft_post', { text: 'Hello from my new app.' });
-    w.playsReadBack();
-    held = hold();
-    held.start();
-    w.userSays('post it');
-    held.end(false);
-    await w.toolCall('publish_draft', { draftId: draftIdOf(w.raw.addMessage) });
-    expect(w.raw.say).toHaveBeenLastCalledWith('Posting in five seconds. Say undo to stop it.', true);
-    w.emit({ type: 'speech-update', role: 'assistant', status: 'started' });
-    w.emit({ type: 'speech-update', role: 'assistant', status: 'stopped' });
-    await w.scheduler.advance(2000);
-    held = hold();
-    held.start();
+    await confirmed(w);
+    await w.scheduler.advance(OPEN_POLL_MS);
+    expect(w.muted()).toBe(false);
+    expect(w.logs.filter((line) => line.startsWith('mic')).slice(-2)).toEqual(['mic {"muted":true,"reason":"release"}', 'mic {"muted":false,"reason":"hold"}']);
     w.userSays('undo');
-    held.end(false);
     expect(w.raw.say).toHaveBeenLastCalledWith('Stopped. Nothing was sent.', true);
     await w.scheduler.advance(20_000);
     expect(w.provider.createPost).not.toHaveBeenCalled();
+    expect(w.muted()).toBe(true);
+  });
+
+  it('lets stray speech during the five seconds only hold the send, never publish', async () => {
+    const w = world('pushToTalk');
+    await confirmed(w);
+    await w.scheduler.advance(OPEN_POLL_MS);
+    w.userSays('what was that noise');
+    await w.scheduler.advance(20_000);
+    expect(w.provider.createPost).not.toHaveBeenCalled();
+    expect(w.muted()).toBe(true);
+  });
+
+  it('still sends after the five seconds when nobody speaks, and closes the microphone again', async () => {
+    const w = world('pushToTalk');
+    await confirmed(w);
+    await w.scheduler.advance(20_000);
+    expect(w.provider.createPost).toHaveBeenCalledTimes(1);
+    await w.scheduler.advance(OPEN_POLL_MS);
+    expect(w.muted()).toBe(true);
+  });
+
+  it('switches by voice, says how each mode works, applies it at once, and keeps the choice', async () => {
+    const w = world('pushToTalk');
+    await w.session.start();
+    w.saying('go hands-free');
+    await w.toolCall('use_hands_free');
+    expect(w.listening.get()).toBe('handsFree');
+    expect(w.raw.say).toHaveBeenLastCalledWith(agentMessages.handsFreeOn, expect.anything());
+    await w.scheduler.advance(RELEASE_TAIL_MS);
+    expect(w.muted()).toBe(false);
+    const relaunched = new ListeningModeStore(w.storage);
+    await relaunched.load();
+    expect(relaunched.get()).toBe('handsFree');
+
+    await w.toolCall('use_push_to_talk');
+    expect(w.listening.get()).toBe('pushToTalk');
+    expect(w.raw.say).toHaveBeenLastCalledWith(agentMessages.pushToTalkOn, expect.anything());
+    expect(w.muted()).toBe(true);
   });
 });
 
-describe('the hold that unmutes', () => {
+describe('the holds on the agent screen', () => {
   function tracker() {
     const timers: { at: number; run: () => void }[] = [];
     let clock = 0;
     const talk = { start: jest.fn(), end: jest.fn() };
+    const onLike = jest.fn();
     const press = new PressTracker(
-      { talk: () => talk, claim: () => undefined },
+      { talk: () => talk, onLike, claim: () => undefined },
       (run, ms) => {
         const timer = { at: clock + ms, run };
         timers.push(timer);
-        return () => timers.splice(timers.indexOf(timer), 1);
+        return () => void timers.splice(timers.indexOf(timer), 1);
       },
       () => clock,
     );
     const advance = (ms: number) => {
       clock += ms;
-      timers.filter((timer) => timer.at <= clock).forEach((timer) => {
-        timers.splice(timers.indexOf(timer), 1);
-        timer.run();
-      });
+      timers
+        .filter((timer) => timer.at <= clock)
+        .forEach((timer) => {
+          timers.splice(timers.indexOf(timer), 1);
+          timer.run();
+        });
     };
-    return { press, talk, advance };
+    return { press, talk, onLike, advance };
   }
 
-  it('is never started by a tap or a stroke, only by a finger held still', () => {
+  it('starts talking only for one finger held still: never for a tap or a stroke', () => {
     const tap = tracker();
     tap.press.down([{ id: 1, x: 100, y: 100 }]);
     tap.advance(PRESS.tapMaxMs - 100);
@@ -216,14 +269,34 @@ describe('the hold that unmutes', () => {
     held.press.up([{ id: 1, x: 100, y: 100 }]);
     expect(held.talk.end).toHaveBeenCalledWith(false);
   });
+
+  it('keeps the two-finger like apart from the talk hold', () => {
+    const like = tracker();
+    like.press.down([{ id: 1, x: 100, y: 100 }]);
+    like.advance(100);
+    like.press.down([{ id: 2, x: 200, y: 100 }]);
+    like.advance(PRESS.holdMs);
+    expect(like.onLike).toHaveBeenCalledTimes(1);
+    expect(like.talk.start).not.toHaveBeenCalled();
+
+    const talking = tracker();
+    talking.press.down([{ id: 1, x: 100, y: 100 }]);
+    talking.advance(PRESS.talkHoldMs);
+    talking.press.down([{ id: 2, x: 200, y: 100 }]);
+    talking.advance(PRESS.holdMs * 2);
+    expect(talking.talk.start).toHaveBeenCalledTimes(1);
+    expect(talking.onLike).not.toHaveBeenCalled();
+  });
 });
 
 describe('push to talk wrapper in hands-free', () => {
-  it('hands every message on unchanged and never touches the microphone or the agent voice', async () => {
+  it('hands every message on unchanged and never touches what the agent hears or says', async () => {
     const listening = new ListeningModeStore(createMemoryStore());
+    listening.set('handsFree');
     let inner: CallListener | null = null;
-    const raw = { start: jest.fn((_a: object, next: CallListener) => ((inner = next), Promise.resolve())), stop: jest.fn(), say: jest.fn(), addMessage: jest.fn(), setMuted: jest.fn(), muteAssistant: jest.fn() };
-    const ptt = withPushToTalk(raw, listening, { pressed: jest.fn(), released: jest.fn() });
+    const raw = { start: jest.fn((_a: object, next: CallListener) => ((inner = next), Promise.resolve())), stop: jest.fn(), say: jest.fn(), addMessage: jest.fn(), muteCustomer: jest.fn(), muteAssistant: jest.fn() };
+    const log = jest.fn();
+    const ptt = withPushToTalk(raw, listening, { cue: jest.fn(), openWhile: () => true, schedule: (run, ms) => ((t) => () => clearTimeout(t))(setTimeout(run, ms)), now: Date.now, log });
     const seen: VapiMessage[] = [];
     const outer = { onMessage: (message: VapiMessage) => seen.push(message), onEnd: jest.fn(), onError: jest.fn() };
     await ptt.call.start({ name: 'test' }, outer);
@@ -240,11 +313,12 @@ describe('push to talk wrapper in hands-free', () => {
     ptt.call.say('hi', true);
     ptt.call.addMessage('note', false);
     ptt.call.stop();
+    ptt.dispose();
     expect(raw.say).toHaveBeenCalledWith('hi', true);
     expect(raw.addMessage).toHaveBeenCalledWith('note', false);
     expect(raw.stop).toHaveBeenCalled();
-    expect(raw.setMuted).not.toHaveBeenCalled();
+    expect(raw.muteCustomer).not.toHaveBeenCalled();
     expect(raw.muteAssistant).not.toHaveBeenCalled();
+    expect(log).not.toHaveBeenCalled();
   });
 });
-

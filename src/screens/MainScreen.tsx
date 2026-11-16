@@ -423,7 +423,7 @@ export function MainScreen() {
         onTapBottom={onTapBottom}
         onCircle={onCircle}
         onSwipe={onSwipe}
-        onTwoFingerHold={pushToTalk ? undefined : like}
+        onTwoFingerHold={like}
         onTalkHold={pushToTalk ? talkHold : undefined}
         onTwoFingerHoldWarning={() => haptic('holdWarning')}
         onUnrecognizedStroke={onUnrecognizedStroke}
@@ -435,7 +435,7 @@ export function MainScreen() {
             ? 'Tap the bottom half or swipe right for the next post, the top half or swipe left for the previous post. Swipe up for replies. Hold two fingers on the screen to like. Draw a clockwise circle to wake the agent.'
             : view === 'comments'
               ? 'Tap the bottom half or swipe right for the next reply, the top half or swipe left for the previous reply. Hold two fingers on the screen to like. Swipe down to go back to posts.'
-              : 'Tap the top half to hear the instructions, the bottom half for account settings. Hold two fingers on the screen to like the post. Draw a counter-clockwise circle to go back to scrolling.'
+              : `${pushToTalk ? 'Hold one finger still on the screen while you talk. ' : ''}Tap the top half to hear the instructions, the bottom half for account settings. Hold two fingers on the screen to like the post. Draw a counter-clockwise circle to go back to scrolling.`
         }
         accessibilityValue={{ text: narration }}
         accessibilityActions={[
@@ -450,9 +450,9 @@ export function MainScreen() {
           {view === 'feed' ? '▲ Previous post' : view === 'comments' ? '▲ Previous reply' : '▲ Hear the instructions'}
         </Text>
         {!scrolling ? (
-          <View style={styles.agentBar}>
-            <Text style={[styles.agentTitle, { color: colors.agent }]} maxFontSizeMultiplier={type.maxScale}>
-              Agent: {AGENT_STATUS[agentStatus ?? 'starting']}
+          <View style={[styles.agentBar, agent.talking && styles.agentBarTalking]}>
+            <Text style={[styles.agentTitle, { color: agent.talking ? colors.focus : colors.agent }]} maxFontSizeMultiplier={type.maxScale}>
+              {agent.talking ? 'Listening: speak now' : pushToTalk && agentStatus === 'listening' ? 'Hold to talk' : `Agent: ${AGENT_STATUS[agentStatus ?? 'starting']}`}
             </Text>
           </View>
         ) : null}
@@ -489,6 +489,7 @@ const styles = StyleSheet.create({
   hint: { color: colors.muted, fontSize: type.label, fontWeight: '700', textAlign: 'center', paddingVertical: 6 },
   panel: { flex: 1, borderWidth: 6, borderColor: colors.focus, borderRadius: 24, backgroundColor: colors.surface, padding: 20, gap: 16, justifyContent: 'center' },
   agentBar: { borderWidth: 4, borderColor: colors.agent, borderRadius: 16, padding: 12 },
+  agentBarTalking: { borderColor: colors.focus, backgroundColor: colors.surface, paddingVertical: 48 },
   agentTitle: { fontSize: type.title, fontWeight: '800', textAlign: 'center' },
   statusText: { color: colors.text, fontSize: type.body, lineHeight: type.bodyLineHeight, fontWeight: '600' },
 });

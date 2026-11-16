@@ -37,8 +37,12 @@ const patterns: Record<HapticEvent, () => Promise<void>> = {
   },
   camera: () => Haptics.selectionAsync(),
   holdWarning: () => Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light),
-  talkStart: () => Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light),
-  talkEnd: () => Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Soft),
+  talkStart: async () => {
+    await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+    await pause(90);
+    await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+  },
+  talkEnd: () => Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy),
   likeFailed: async () => {
     await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Rigid);
     await pause(90);

@@ -23,8 +23,10 @@ const SOURCES: Record<SoundKind, number> = {
 
 // Length of each sound in milliseconds (see scripts/generate-earcons.py). Speech starts as the sound
 // ends, so a post with an earcon starts narrating at most about a quarter of a second later.
-export const EARCON_MS: Record<SoundKind, number> = { image: 160, video: 220, repost: 185, reply: 220, like: 170, unlike: 170, talkStart: 120, talkEnd: 120 };
+export const EARCON_MS: Record<SoundKind, number> = { image: 160, video: 220, repost: 185, reply: 220, like: 170, unlike: 170, talkStart: 200, talkEnd: 200 };
 const VOLUME = 0.6;
+// The push-to-talk tones play during a call, which ducks other sounds, so they play at full volume.
+const LOUD: SoundKind[] = ['talkStart', 'talkEnd'];
 
 export function createEarconPlayer(): EarconPlayer {
   const players = new Map<SoundKind, AudioPlayer>();
@@ -35,7 +37,7 @@ export function createEarconPlayer(): EarconPlayer {
     setAudioModeAsync({ playsInSilentMode: true, interruptionMode: 'mixWithOthers' }).catch(() => undefined);
     (Object.keys(SOURCES) as SoundKind[]).forEach((kind) => {
       const player = createAudioPlayer(SOURCES[kind]);
-      player.volume = VOLUME;
+      player.volume = LOUD.includes(kind) ? 1 : VOLUME;
       players.set(kind, player);
     });
   };

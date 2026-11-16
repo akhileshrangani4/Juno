@@ -6,6 +6,7 @@ import { createCameraTools, describePendingPhoto } from '@/camera/agentTools';
 import { move, type FeedState, type MoveOutcome } from '@/feed/feedState';
 import { haptic } from '@/feedback/haptics';
 import type { Narrator } from '@/narration/Narrator';
+import { cameraModule } from '@/camera/native';
 import { descriptionCache, earcons } from '@/narration/postNarration';
 import { useSession } from '@/session/SessionContext';
 import type { Post } from '@/social/types';
@@ -68,9 +69,10 @@ export function useVoiceAgent({
   feed: Feed;
   narrator: Narrator;
   onExit(reason: EndReason, message: string): void;
-}): { status: AgentStatus | null; say(text: string): boolean; notify(text: string, speak?: string): void; talk(): TalkHold | undefined } {
+}): { status: AgentStatus | null; say(text: string): boolean; notify(text: string, speak?: string): void; talk(): TalkHold | undefined; talking: boolean } {
   const { provider, account } = useSession();
   const [status, setStatus] = useState<AgentStatus | null>(null);
+  const [talking, setTalking] = useState(false);
   const latest = useRef({ post, feed, narrator, onExit, account });
   const session = useRef<AgentSession | null>(null);
   const talkHold = useRef<{ talk(): TalkHold | undefined } | null>(null);
@@ -94,14 +96,18 @@ export function useVoiceAgent({
     const memoryOffer = memory ? createMemoryOffer(secureStore, memory, () => latest.current.account) : null;
     const pushToTalk = publicKey
       ? withPushToTalk(createVoiceCall(publicKey), listeningMode, {
-          pressed: () => {
-            haptic('talkStart');
-            earcons.play('talkStart');
+          cue: (on) => {
+            // The call's audio session records, and iOS drops haptics while an app records unless it opts in.
+            const haptics = cameraModule?.allowHapticsDuringRecording(true) ?? null;
+            haptic(on ? 'talkStart' : 'talkEnd');
+            earcons.play(on ? 'talkStart' : 'talkEnd');
+            setTalking(on);
+            if (on) logLine(`[agent] haptics during recording=${String(haptics)}`);
           },
-          released: () => {
-            haptic('talkEnd');
-            earcons.play('talkEnd');
-          },
+          openWhile: () => handlers.publisher.busy,
+          schedule,
+          now: Date.now,
+          log: (event, detail) => logLine(`[agent] ${event}${detail ? ` ${JSON.stringify(detail)}` : ''}`),
         })
       : null;
     talkHold.current = pushToTalk;
@@ -181,6 +187,7 @@ export function useVoiceAgent({
       session.current = null;
       pushToTalk?.dispose();
       talkHold.current = null;
+      setTalking(false);
     };
   }, [active, provider]);
 
@@ -193,5 +200,6 @@ export function useVoiceAgent({
     say: (text) => session.current?.say(text) ?? false,
     notify: (text, speak) => session.current?.notify(text, speak),
     talk: () => talkHold.current?.talk(),
+    talking: active && talking,
   };
 }
