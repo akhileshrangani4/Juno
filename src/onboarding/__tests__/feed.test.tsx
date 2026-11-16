@@ -3,10 +3,11 @@ import type { ReactNode } from 'react';
 
 import type { Post } from '@/social/types';
 import { haptic } from '@/feedback/haptics';
-import { messages } from '@/narration/buildNarration';
+import { introInstructions, messages } from '@/narration/buildNarration';
 import { makePost } from '@/testing/fixtures';
 
 import { GESTURES } from '../gestures';
+import { secureStore } from '@/storage/keyValueStore';
 
 // Behaves like ExpoSpeechNarrator: append queues after what is playing, and done fires once the last part ends.
 const mockSpeech = {
@@ -217,5 +218,35 @@ describe('Gesture help in the rotor', () => {
     expect(mockNarrator.speak).toHaveBeenLastCalledWith(expect.stringContaining('Tap the bottom half'));
     await act(async () => mockSurface.onAccessibilityAction({ nativeEvent: { actionName: 'narrationMode' } }));
     expect(mockSurface.accessibilityActions.find((action: { name: string }) => action.name === 'narrationMode').label).toBe('Full narration');
+  });
+});
+
+describe('just-in-time tips on the feed', () => {
+  const tipUp = 'Tip: swipe up to hear the replies to a post.';
+  const withReplies = () => makePost({ uri: `at://post/${(posts += 1)}`, counts: { likes: 0, reposts: 0, replies: 2 } });
+
+  beforeEach(() => secureStore.remove('app.gestureDiscovery'));
+
+  it('offers swipe up on a post with replies and says it after the post, never over it', async () => {
+    mockFeed.post = withReplies();
+    await renderFeed();
+    await act(async () => jest.advanceTimersByTime(5_000));
+    expect(mockSpeech.log).not.toContain(tipUp);
+    await finishSpeech();
+    await act(async () => jest.advanceTimersByTime(5_000));
+    expect(mockSpeech.log.at(-1)).toBe(tipUp);
+    expect(mockSpeech.log.filter((text) => text === tipUp)).toHaveLength(1);
+  });
+
+  it('offers no tip on a post without replies', async () => {
+    await renderFeed();
+    await finishSpeech();
+    await act(async () => jest.advanceTimersByTime(30_000));
+    expect(mockSpeech.log.filter((text) => text.startsWith('Tip:'))).toEqual([]);
+  });
+
+  it('names only the launch gestures in the first-launch intro', () => {
+    expect(introInstructions(false)).toContain('Swiping right or left does the same.');
+    expect(introInstructions(false)).not.toMatch(/swipe up|two fingers/i);
   });
 });

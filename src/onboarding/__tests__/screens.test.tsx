@@ -3,8 +3,11 @@ import type { ReactNode } from 'react';
 import { StyleSheet, View } from 'react-native';
 
 import { DiscoverySurface } from '../DiscoverySurface';
-import { gestureHelp, GESTURES } from '../gestures';
+import { gestureHelp, GESTURES, introducedGestures } from '../gestures';
 import { PracticeScreen } from '../PracticeScreen';
+import { loadDiscoveryProgress } from '../progressStore';
+import { tipMessages } from '../tips';
+import { secureStore } from '@/storage/keyValueStore';
 
 const mockQuietListeners: (() => void)[] = [];
 const mockNarrator = {
@@ -182,10 +185,11 @@ describe('DiscoverySurface', () => {
     await act(async () => undefined);
     expect(mockSurface.props.accessibilityActions).toEqual([
       { name: 'activate', label: 'Next post' },
+      { name: 'noMoreTips', label: 'No more tips' },
       { name: 'gestureHelp', label: 'Gesture help' },
     ]);
     await act(async () => mockSurface.props.onAccessibilityAction({ nativeEvent: { actionName: 'gestureHelp' } }));
-    expect(mockNarrator.speak).toHaveBeenCalledWith(gestureHelp());
+    expect(mockNarrator.speak).toHaveBeenCalledWith(gestureHelp(introducedGestures([], false), false));
     await act(async () => mockSurface.props.onAccessibilityAction({ nativeEvent: { actionName: 'activate' } }));
     expect(feedAction).toHaveBeenCalledTimes(1);
   });
@@ -278,5 +282,133 @@ describe('DiscoverySurface', () => {
     await act(async () => undefined);
     await act(async () => mockSurface.props.onTapTop());
     expect(onTapTop).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('DiscoverySurface swipes, holds and tips', () => {
+  const tipUp = 'Tip: swipe up to hear the replies to a post.';
+  const tipLike = 'Tip: hold two fingers on the screen to like a post.';
+  type SurfaceProps = Partial<Parameters<typeof DiscoverySurface>[0]>;
+  const surface = (props: SurfaceProps = {}) => (
+    <DiscoverySurface discoveryMode="scroll" tapsEnabled signedIn onTapTop={jest.fn()} onTapBottom={jest.fn()} onCircle={jest.fn()} onSwipe={jest.fn()} onTwoFingerHold={jest.fn()} onTwoFingerHoldWarning={jest.fn()} accessibilityActions={[]} {...props}>
+      <View />
+    </DiscoverySurface>
+  );
+  const tick = (ms = 5_000) => act(async () => jest.advanceTimersByTime(ms));
+  const said = () => mockNarrator.speak.mock.calls.map(([text]) => text);
+  const tipsSaid = () => said().filter((text) => text.startsWith('Tip:'));
+  const actionNames = () => mockSurface.props.accessibilityActions.map((action: { name: string }) => action.name);
+  const action = (actionName: string) => act(async () => mockSurface.props.onAccessibilityAction({ nativeEvent: { actionName } }));
+
+  beforeEach(async () => {
+    await secureStore.remove('app.gestureDiscovery');
+    jest.useFakeTimers();
+    mockNarrator.speaking.mockReturnValue(false);
+  });
+  afterEach(() => {
+    jest.useRealTimers();
+    mockNarrator.speaking.mockReturnValue(false);
+  });
+
+  it('counts a swipe as a recognized gesture, so strokes before it are not added to a stuck hint', async () => {
+    const onSwipe = jest.fn();
+    await render(surface({ onSwipe }));
+    await act(async () => undefined);
+    await narrationEnds();
+    await act(async () => mockSurface.props.onUnrecognizedStroke(curve));
+    await act(async () => mockSurface.props.onUnrecognizedStroke(curve));
+    await act(async () => mockSurface.props.onSwipe('left'));
+    await act(async () => mockSurface.props.onUnrecognizedStroke(curve));
+    expect(onSwipe).toHaveBeenCalledWith('left');
+    expect(mockNarrator.speak).not.toHaveBeenCalled();
+  });
+
+  it('counts a two-finger hold as activity, so a hint never talks over what the hold set off', async () => {
+    await render(surface());
+    await act(async () => undefined);
+    await narrationEnds();
+    await act(async () => mockSurface.props.onUnrecognizedStroke(curve));
+    await act(async () => mockSurface.props.onUnrecognizedStroke(curve));
+    await act(async () => mockSurface.props.onTwoFingerHoldWarning());
+    await act(async () => mockSurface.props.onUnrecognizedStroke(curve));
+    expect(mockNarrator.speak).not.toHaveBeenCalled();
+    await narrationEnds();
+    expect(mockNarrator.speak).toHaveBeenCalledWith(GESTURES[2].hint);
+  });
+
+  it('plays a tip once, only when nothing is being said, and no second tip in the same session', async () => {
+    mockNarrator.speaking.mockReturnValue(true);
+    const { rerender } = await render(surface({ tipCandidates: ['swipeUp'], tipKey: 'feed:0' }));
+    await act(async () => undefined);
+    await tick();
+    expect(said()).toEqual([]);
+    mockNarrator.speaking.mockReturnValue(false);
+    await tick();
+    expect(said()).toEqual([tipUp]);
+    await rerender(surface({ tipCandidates: ['twoFingerHold'], tipKey: 'feed:12' }));
+    await tick(30_000);
+    expect(tipsSaid()).toEqual([tipUp]);
+    await action('gestureHelp');
+    expect(said().at(-1)).toContain('Swipe up to hear the replies');
+    await expect(loadDiscoveryProgress()).resolves.toMatchObject({ introduced: ['swipeUp'] });
+  });
+
+  it('drops a tip that finds no quiet moment soon, and offers it again on the next post', async () => {
+    mockNarrator.speaking.mockReturnValue(true);
+    const { rerender } = await render(surface({ tipCandidates: ['swipeUp'], tipKey: 'feed:0' }));
+    await act(async () => undefined);
+    await tick(20_000);
+    mockNarrator.speaking.mockReturnValue(false);
+    await tick();
+    expect(tipsSaid()).toEqual([]);
+    await rerender(surface({ tipCandidates: ['swipeUp'], tipKey: 'feed:1' }));
+    await tick();
+    expect(tipsSaid()).toEqual([tipUp]);
+  });
+
+  it('plays no tip while the agent is awake', async () => {
+    await render(surface({ discoveryMode: 'agent', tipCandidates: ['swipeUp'] }));
+    await act(async () => undefined);
+    await tick(30_000);
+    expect(tipsSaid()).toEqual([]);
+  });
+
+  it('never teaches the like to a signed-out user', async () => {
+    await render(surface({ signedIn: false, tipCandidates: ['twoFingerHold'] }));
+    await act(async () => undefined);
+    await tick(30_000);
+    expect(said()).not.toContain(tipLike);
+    await action('gestureHelp');
+    expect(said().at(-1)).not.toContain('two fingers');
+  });
+
+  it('does not teach a gesture the user has already found', async () => {
+    await render(surface({ tipCandidates: ['swipeUp'] }));
+    await act(async () => undefined);
+    await act(async () => mockSurface.props.onSwipe('up'));
+    await tick(30_000);
+    expect(tipsSaid()).toEqual([]);
+  });
+
+  it('turns tips off and back on from labeled actions, remembered across launches and kept through practice', async () => {
+    const { unmount } = await render(surface({ tipCandidates: ['swipeUp'] }));
+    await act(async () => undefined);
+    expect(actionNames()).toEqual(['noMoreTips', 'gestureHelp']);
+    await action('noMoreTips');
+    expect(said()).toEqual([tipMessages.off]);
+    await tick(30_000);
+    expect(tipsSaid()).toEqual([]);
+    await unmount();
+
+    await render(<PracticeScreen onDone={jest.fn()} />);
+    await act(async () => mockSurface.props.onAccessibilityAction({ nativeEvent: { actionName: 'skip' } }));
+    await render(surface({ tipCandidates: ['swipeUp'] }));
+    await act(async () => undefined);
+    expect(actionNames()).toEqual(['tipsAgain', 'gestureHelp']);
+    expect(mockSurface.props.accessibilityActions[0].label).toBe('Tell me the tips again');
+    mockNarrator.speak.mockClear();
+    await action('tipsAgain');
+    expect(said()).toEqual([tipMessages.again]);
+    expect(actionNames()).toEqual(['noMoreTips', 'gestureHelp']);
   });
 });

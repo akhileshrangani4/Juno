@@ -24,6 +24,7 @@ import { earcons, useNarrationPreferences, usePostNarrator } from '@/narration/p
 import { applyNarrationAction, isNarrationAction, narrationActions, replyScripts } from '@/narration/requests';
 import { useNarrator } from '@/narration/useNarrator';
 import { DiscoverySurface as GestureSurface } from '@/onboarding/DiscoverySurface';
+import type { GestureId } from '@/onboarding/gestures';
 import { useSession } from '@/session/SessionContext';
 import { colors, type } from '@/theme';
 
@@ -32,6 +33,7 @@ import { surfaceActions, type Mode, type SurfaceActionName } from './surfaceActi
 import { playUnrecognizedCue } from './unrecognizedCue';
 
 const STROKE_CUE_INTERVAL_MS = 2500;
+const LIKE_TIP_AFTER_POSTS = 10;
 const LOADING_ANNOUNCE_MS = 700;
 
 const DIRECT_TOUCH = 'allowsDirectInteraction' as unknown as AccessibilityRole;
@@ -392,11 +394,20 @@ export function MainScreen() {
   const scrolling = mode === 'scroll';
   const view = !scrolling ? 'agent' : thread ? 'comments' : 'feed';
   const likedMark = liked ? ' · Liked' : '';
+  const tipCandidates: GestureId[] =
+    view === 'comments'
+      ? ['swipeDown']
+      : view === 'feed'
+        ? [...(post && post.counts.replies > 0 ? (['swipeUp'] as const) : []), ...(account && state.index + 1 >= LIKE_TIP_AFTER_POSTS ? (['twoFingerHold'] as const) : [])]
+        : [];
   return (
     <SafeAreaView style={styles.screen}>
       <GestureSurface
         style={styles.surface}
-        discoveryMode={mode}
+        discoveryMode={view === 'feed' ? 'scroll' : view}
+        signedIn={!!account}
+        tipCandidates={tipCandidates}
+        tipKey={`${view}:${state.index}`}
         tapsEnabled
         onTapTop={onTapTop}
         onTapBottom={onTapBottom}
