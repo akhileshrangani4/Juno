@@ -148,7 +148,7 @@ export function DiscoverySurface({
   const recognized = (gesture: GestureId) => {
     dispatch({ type: 'recognized', gesture, at: Date.now() });
     const current = discovery.current;
-    const isTip = ALL_GESTURES.some((known) => known.id === gesture && known.stage === 'tip');
+    const isTip = ALL_GESTURES.some((known) => known.id === gesture && known.stage === 'tip' && known.modes.includes(discoveryMode));
     if (current && isTip && !current.tips.introduced.includes(gesture)) {
       const pending = current.tips.pending?.id === gesture ? null : current.tips.pending;
       updateTips({ ...current.tips, introduced: [...current.tips.introduced, gesture], pending });

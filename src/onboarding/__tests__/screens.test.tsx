@@ -390,6 +390,15 @@ describe('DiscoverySurface swipes, holds and tips', () => {
     expect(tipsSaid()).toEqual([]);
   });
 
+  it('does not count swipe down on the posts, which opens the camera, as having found swipe down in the replies', async () => {
+    const { rerender } = await render(surface());
+    await act(async () => undefined);
+    await act(async () => mockSurface.props.onSwipe('down'));
+    await rerender(surface({ discoveryMode: 'comments', tipCandidates: ['swipeDown'], tipKey: 'comments:0' }));
+    await tick();
+    expect(tipsSaid()).toEqual(['Tip: swipe down to go back to the posts.']);
+  });
+
   it('turns tips off and back on from labeled actions, remembered across launches and kept through practice', async () => {
     const { unmount } = await render(surface({ tipCandidates: ['swipeUp'] }));
     await act(async () => undefined);
