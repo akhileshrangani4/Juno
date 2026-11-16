@@ -4,7 +4,7 @@ import { Platform } from 'react-native';
 import type { EarconKind } from './buildNarration';
 
 // The post earcons, and the sounds that confirm a two-finger like or removed like at once, over any narration.
-export type SoundKind = EarconKind | 'like' | 'unlike';
+export type SoundKind = EarconKind | 'like' | 'unlike' | 'talkStart' | 'talkEnd';
 
 export interface EarconPlayer {
   play(kind: SoundKind): number;
@@ -17,11 +17,13 @@ const SOURCES: Record<SoundKind, number> = {
   reply: require('../../assets/sounds/earcon-reply.wav'),
   like: require('../../assets/sounds/earcon-like.wav'),
   unlike: require('../../assets/sounds/earcon-unlike.wav'),
+  talkStart: require('../../assets/sounds/earcon-talk-start.wav'),
+  talkEnd: require('../../assets/sounds/earcon-talk-end.wav'),
 };
 
 // Length of each sound in milliseconds (see scripts/generate-earcons.py). Speech starts as the sound
 // ends, so a post with an earcon starts narrating at most about a quarter of a second later.
-export const EARCON_MS: Record<SoundKind, number> = { image: 160, video: 220, repost: 185, reply: 220, like: 170, unlike: 170 };
+export const EARCON_MS: Record<SoundKind, number> = { image: 160, video: 220, repost: 185, reply: 220, like: 170, unlike: 170, talkStart: 120, talkEnd: 120 };
 const VOLUME = 0.6;
 
 export function createEarconPlayer(): EarconPlayer {
