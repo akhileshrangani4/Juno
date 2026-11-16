@@ -10,6 +10,10 @@ import { vapiTools } from './tools';
 
 export const SILENCE_TIMEOUT_SECONDS = 30;
 export const MAX_DURATION_SECONDS = 600;
+// In push to talk the microphone is muted between holds, so quiet is normal: the call waits five minutes, and the
+// "are you still there" prompt four, before ending on silence. The maximum call length is the same.
+export const PUSH_TO_TALK_SILENCE_SECONDS = 300;
+export const PUSH_TO_TALK_IDLE_SECONDS = 240;
 export const FIRST_MESSAGE = "I'm listening.";
 // When the call starts because a photo was kept or chosen, the agent opens by asking for the post's words.
 export const PHOTO_FIRST_MESSAGE = cameraMessages.photoReady;
@@ -26,7 +30,7 @@ export const AGENT_MODEL = 'gpt-5.6-sol';
 // assistant.speechStarted names who is speaking each turn (the app's say() or the model); see agentVoice.ts.
 export const clientMessages = ['tool-calls', 'transcript', 'status-update', 'speech-update', 'assistant.speechStarted'] as const;
 
-export function buildAssistant(context: PromptContext) {
+export function buildAssistant(context: PromptContext, pushToTalk = false) {
   return {
     name: `${APP_NAME} voice agent`,
     firstMessage: context.photo ? PHOTO_FIRST_MESSAGE : context.memoryOffer ? `${FIRST_MESSAGE} ${context.memoryOffer}` : FIRST_MESSAGE,
@@ -42,12 +46,12 @@ export function buildAssistant(context: PromptContext) {
     },
     voice: { provider: 'vapi' as const, voiceId: 'Elliot' },
     transcriber: { provider: 'deepgram' as const, model: 'nova-3', language: 'en' as const, keyterm: [...KEYTERMS] },
-    silenceTimeoutSeconds: SILENCE_TIMEOUT_SECONDS,
+    silenceTimeoutSeconds: pushToTalk ? PUSH_TO_TALK_SILENCE_SECONDS : SILENCE_TIMEOUT_SECONDS,
     maxDurationSeconds: MAX_DURATION_SECONDS,
     messagePlan: {
       idleMessages: ["Are you still there? I'll go to sleep soon if it stays quiet."],
       idleMessageMaxSpokenCount: 1,
-      idleTimeoutSeconds: 17,
+      idleTimeoutSeconds: pushToTalk ? PUSH_TO_TALK_IDLE_SECONDS : 17,
     },
     backgroundSound: 'off' as const,
     clientMessages: [...clientMessages],
