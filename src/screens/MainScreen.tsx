@@ -1,5 +1,5 @@
 import { router, useIsFocused } from 'expo-router';
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { Platform, StyleSheet, Text, View, type AccessibilityActionEvent, type AccessibilityRole } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
@@ -88,6 +88,7 @@ export function MainScreen() {
   };
   const agent = useVoiceAgent({ active: mode === 'agent', post, feed: { state, go }, narrator, onExit: onAgentExit });
   const wakeSetting = useSyncExternalStore(wakeOnOpen.subscribe, wakeOnOpen.get);
+  const signedIn = !!account;
   const agentStatus = agent.status;
 
   useEffect(() => onDevWake(() => changeMode('agent')), []);
@@ -121,7 +122,7 @@ export function MainScreen() {
       narrator.speak(`${prefix.current} ${text}`.trim());
       prefix.current = '';
     };
-    const launch = launchWake.decide({ setting: wakeSetting, signedIn: !!account, onFeed: !thread, feedReady: !!post, awake: mode === 'agent' });
+    const launch = launchWake.decide({ setting: wakeSetting, signedIn, onFeed: !thread, feedReady: !!post, awake: mode === 'agent' });
     if (mode === 'agent') narrator.stop();
     else if (launch === 'wait') return;
     else if (launch === 'wake') {
@@ -153,7 +154,7 @@ export function MainScreen() {
       postNarrator.stop();
       narrator.stop();
     };
-  }, [mode, post, status, narrator, postNarrator, thread, focused, wakeSetting, account]);
+  }, [mode, post, status, narrator, postNarrator, thread, focused, wakeSetting, signedIn]);
 
   useEffect(() => postNarrator.onScript(setNarration), [postNarrator]);
   useEffect(() => postNarrator.prefetch(state.posts.slice(state.index + 1)), [postNarrator, state.posts, state.index]);

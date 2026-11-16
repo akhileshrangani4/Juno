@@ -27,7 +27,7 @@ let mockAgentExit: ((reason: string, message: string) => void) | null = null;
 let mockActive = false;
 // These tests are about the feed while scrolling, so the launch wake is off unless a test turns it on.
 let mockWakeSetting: boolean | null = false;
-let mockLaunch: unknown = null;
+let mockLaunch: { decide(state: never): string } | null = null;
 let mockSurface: { onCircle(direction: string): void; onTwoFingerHold(): Promise<void>; onTwoFingerHoldWarning(): void; onTalkHold?: unknown } | null = null;
 
 jest.mock('@/narration/useNarrator', () => ({ useNarrator: () => mockNarrator }));
@@ -44,7 +44,7 @@ jest.mock('@/agent/wakeOnOpen', () => {
   return {
     ...actual,
     wakeOnOpen: { get: () => mockWakeSetting, subscribe: () => () => undefined },
-    launchWake: { decide: (state: unknown) => (mockLaunch as { decide(state: unknown): string }).decide(state) },
+    launchWake: { decide: (state: never) => mockLaunch!.decide(state) },
   };
 });
 jest.mock('@/session/SessionContext', () => ({ useSession: () => ({ provider: mockProvider, account: { id: 'did:plc:me', handle: 'me.bsky.social' } }) }));
