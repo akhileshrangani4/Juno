@@ -17,4 +17,8 @@ export interface VoiceCall {
   say(text: string, interrupt?: boolean): void;
   // Adds a system message to the conversation; triggerResponse asks the model to answer it.
   addMessage(content: string, triggerResponse: boolean): void;
+  // Push to talk only (listeningMode.ts). Stops or restarts the agent hearing the user; the phone's microphone stays on.
+  muteCustomer?(muted: boolean): void;
+  // Push to talk only. Silences or restores the agent's voice, for a press while it is speaking.
+  muteAssistant?(muted: boolean): void;
 }

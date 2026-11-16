@@ -8,6 +8,7 @@ import { languageCode, languageName } from '@/narration/language';
 import { changeTranslation, effectiveLanguages, type TranslationChange } from '@/narration/preferences';
 import type { Post, PostRef, RecordRef, ReplyParent, SocialAccount, SocialProvider } from '@/social/types';
 
+import type { ListeningMode } from './listeningMode';
 import { agentMessages } from './agentMessages';
 import { memoryRejection, MemorySignInNeededError, MemoryUnavailableError, type MemoryClient } from './memoryClient';
 import type { MemoryOffer } from './memoryOffer';
@@ -51,6 +52,8 @@ export type CameraTools = {
 };
 
 export type AgentDeps = {
+  // Push to talk or hands-free (listeningMode.ts), switched by voice.
+  listening?: { set(mode: ListeningMode): void };
   // Whether the agent wakes by itself when Juno opens (wakeOnOpen.ts), switched by voice.
   wakeOnOpen?: { set(on: boolean): void };
   provider: SocialProvider;
@@ -99,7 +102,7 @@ export const REPLIES_WAIT_MS = 2500;
 // How long a tool called right after a read-back waits for the user's words when it arrives before their transcript.
 export const TRANSCRIPT_WAIT_MS = 1500;
 // Tools that neither wait on the network nor touch the undo history, so they still run while a slow call finishes.
-const FREE_WHILE_SLOW = new Set<string>(['read_post', 'go_to_post', 'change_narration', 'gesture_help', 'stay_asleep_on_open', 'wake_on_open', 'open_sign_in', 'end_conversation']);
+const FREE_WHILE_SLOW = new Set<string>(['read_post', 'go_to_post', 'change_narration', 'gesture_help', 'use_push_to_talk', 'use_hands_free', 'stay_asleep_on_open', 'wake_on_open', 'open_sign_in', 'end_conversation']);
 
 const UNDO_WORDS = /\b(undo|stop|cancel|wait|don'?t|no)\b/i;
 
@@ -778,6 +781,12 @@ export function createToolHandlers(deps: AgentDeps) {
               : { respond: true, result: 'NO_REPLIES: Nobody has replied to this post yet. Tell the user.' },
           { respond: true, result: "LOADING: The replies are still loading. Tell the user in a few words you're fetching them. The app hands them to you when they arrive." },
         );
+      }
+      case 'use_push_to_talk':
+      case 'use_hands_free': {
+        const pushToTalk = tool === 'use_push_to_talk';
+        deps.listening?.set(pushToTalk ? 'pushToTalk' : 'handsFree');
+        return { speak: pushToTalk ? agentMessages.pushToTalkOn : agentMessages.handsFreeOn, respond: false, result: 'LISTENING_MODE_SET: The app told the user how it works now. Say nothing.' };
       }
       case 'stay_asleep_on_open':
       case 'wake_on_open': {

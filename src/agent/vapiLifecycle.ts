@@ -116,6 +116,8 @@ export function voiceCalls(deps: CallDeps): (publicKey: string) => VoiceCall {
         teardown = teardown.then(() => tearDown(current, inFlight));
       },
       say: (text, interrupt) => sdk?.say(text, interrupt),
+      muteCustomer: (muted) => sdk?.send({ type: 'control', control: muted ? 'mute-customer' : 'unmute-customer' }),
+      muteAssistant: (muted) => sdk?.send({ type: 'control', control: muted ? 'mute-assistant' : 'unmute-assistant' }),
       addMessage: (content, triggerResponse) => sdk?.send({ type: 'add-message', message: { role: 'system', content }, triggerResponseEnabled: triggerResponse }),
     };
   };

@@ -29,6 +29,9 @@ export type PressHandlers = {
   onLike?: () => void;
   // The talk hold's handler, if one is connected when the hold would start.
   talk?: () => TalkHold | undefined;
+  // How long a lone still finger waits before the talk hold starts, when not PRESS.talkHoldMs. Push to talk uses a
+  // shorter wait: a slow tap still down then becomes a hold, which does nothing if it ends at once.
+  talkHoldMs?: () => number | undefined;
   // A hold fired: the surface claims the touch so nothing else (a tap, a stroke) can fire for it.
   claim(): void;
 };
@@ -58,7 +61,7 @@ export class PressTracker {
     if (this.phase === 'idle') {
       this.phase = 'one';
       this.firstAt = this.now();
-      this.after(PRESS.talkHoldMs, () => {
+      this.after(this.handlers.talkHoldMs?.() ?? PRESS.talkHoldMs, () => {
         const talk = this.phase === 'one' ? this.handlers.talk?.() : undefined;
         if (!talk) return;
         this.phase = 'talking';

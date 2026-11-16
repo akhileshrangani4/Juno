@@ -40,6 +40,8 @@ jest.mock('@/gestures/GestureSurface', () => {
 });
 
 // eslint-disable-next-line import/first
+import { listeningMode } from '@/agent/listeningMode';
+// eslint-disable-next-line import/first
 import { haptic } from '@/feedback/haptics';
 // eslint-disable-next-line import/first
 import { messages } from '@/narration/buildNarration';
@@ -77,8 +79,9 @@ describe('narration hand-off between the feed and the agent', () => {
 
     await act(async () => mockSurface!.onTapTop());
     expect(mockAgentSay).toHaveBeenLastCalledWith(messages.gestures);
+    // A clockwise circle while awake switches between hold to talk and hands-free, said through the agent.
     await act(async () => mockSurface!.onCircle('clockwise'));
-    expect(mockAgentSay).toHaveBeenLastCalledWith(messages.alreadyAwake);
+    expect(mockAgentSay).toHaveBeenLastCalledWith(listeningMode.get() === 'handsFree' ? agentMessages.handsFreeOn : agentMessages.pushToTalkOn);
 
     mockAgentSay.mockReturnValueOnce(false);
     await act(async () => mockSurface!.onTapTop());
