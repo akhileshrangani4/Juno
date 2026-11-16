@@ -120,6 +120,8 @@ const definitions: { name: string; description: string; parameters: Schema; answ
     parameters: none,
   },
   { name: 'gesture_help', description: 'Repeat how the gestures work. The app speaks it itself.', parameters: none },
+  { name: 'stay_asleep_on_open', description: 'Stop waking up by yourself when the user opens Juno. Only for a request about opening the app, like "stay asleep when I open Juno" or "don\'t wake up when I open the app".', parameters: none },
+  { name: 'wake_on_open', description: 'Wake up by yourself again whenever the user opens Juno. Only for a request about opening the app, like "wake up when I open Juno".', parameters: none },
   {
     name: 'remember',
     description: 'Remember a lasting preference or fact the user stated about themselves, like "call me Sam". Never other people\'s posts, passwords or codes.',
@@ -181,6 +183,8 @@ export type ToolName =
   | 'read_comments'
   | 'summarize_comments'
   | 'gesture_help'
+  | 'stay_asleep_on_open'
+  | 'wake_on_open'
   | 'remember'
   | 'recall_memories'
   | 'forget_memory'
