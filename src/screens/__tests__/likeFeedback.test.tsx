@@ -24,6 +24,10 @@ const mockPlay = jest.fn((_kind: string) => 0);
 const mockAgentSay = jest.fn((_text: string) => true);
 let mockAgentStatus = 'listening';
 let mockAgentExit: ((reason: string, message: string) => void) | null = null;
+let mockActive = false;
+// These tests are about the feed while scrolling, so the launch wake is off unless a test turns it on.
+let mockWakeSetting: boolean | null = false;
+let mockLaunch: { decide(state: never): string } | null = null;
 let mockSurface: { onCircle(direction: string): void; onTwoFingerHold(): Promise<void>; onTwoFingerHoldWarning(): void; onTalkHold?: unknown } | null = null;
 
 jest.mock('@/narration/useNarrator', () => ({ useNarrator: () => mockNarrator }));
@@ -31,9 +35,18 @@ jest.mock('@/narration/earcons', () => ({ createEarconPlayer: () => ({ play: (ki
 jest.mock('@/agent/useVoiceAgent', () => ({
   useVoiceAgent: (args: { active: boolean; onExit(reason: string, message: string): void }) => {
     mockAgentExit = args.onExit;
+    mockActive = args.active;
     return { status: args.active ? mockAgentStatus : null, say: mockAgentSay };
   },
 }));
+jest.mock('@/agent/wakeOnOpen', () => {
+  const actual = jest.requireActual('@/agent/wakeOnOpen');
+  return {
+    ...actual,
+    wakeOnOpen: { get: () => mockWakeSetting, subscribe: () => () => undefined },
+    launchWake: { decide: (state: never) => mockLaunch!.decide(state) },
+  };
+});
 jest.mock('@/session/SessionContext', () => ({ useSession: () => ({ provider: mockProvider, account: { id: 'did:plc:me', handle: 'me.bsky.social' } }) }));
 jest.mock('@/feed/useFeed', () => ({
   useFeed: () => ({ state: { posts: [mockPost], index: 0, cursor: null, exhausted: true, loading: false, error: null }, post: mockPost, go: jest.fn() }),
@@ -63,6 +76,8 @@ import { commentMessages } from '@/narration/comments';
 // eslint-disable-next-line import/first
 import { MainScreen } from '@/screens/MainScreen';
 // eslint-disable-next-line import/first
+import { LaunchWake } from '@/agent/wakeOnOpen';
+// eslint-disable-next-line import/first
 import { clearViewerState } from '@/session/viewerState';
 // eslint-disable-next-line import/first
 import { OfflineError } from '@/social/types';
@@ -88,6 +103,29 @@ describe('two-finger hold to like', () => {
     mockNarrator.speaking.mockReturnValue(false);
     mockAgentSay.mockReturnValue(true);
     mockAgentStatus = 'listening';
+    mockWakeSetting = false;
+    mockLaunch = new LaunchWake();
+  });
+
+  it('wakes the agent once at launch when the setting is on, instead of reading the first post, and not again after it sleeps', async () => {
+    mockWakeSetting = true;
+    await render(<MainScreen />);
+    await act(async () => undefined);
+    expect(mockActive).toBe(true);
+    expect(haptic).toHaveBeenCalledWith('agentAwake');
+    expect(spoken()).toEqual([]);
+    await act(async () => mockAgentExit!('failed', "I couldn't connect."));
+    expect(mockActive).toBe(false);
+    await act(async () => undefined);
+    expect(mockActive).toBe(false);
+    expect(spoken()[0]).toMatch(/^I couldn't connect\./);
+  });
+
+  it('stays asleep at launch when the setting is off, and reads the first post', async () => {
+    await render(<MainScreen />);
+    await act(async () => undefined);
+    expect(mockActive).toBe(false);
+    expect(haptic).not.toHaveBeenCalledWith('agentAwake');
   });
 
   it('warns with a light haptic before the like fires, and leaves the one-finger hold unconnected', async () => {

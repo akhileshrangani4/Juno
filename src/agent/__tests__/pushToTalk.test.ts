@@ -220,13 +220,13 @@ describe('push to talk', () => {
 });
 
 describe('the holds on the agent screen', () => {
-  function tracker() {
+  function tracker(holdMs?: number) {
     const timers: { at: number; run: () => void }[] = [];
     let clock = 0;
     const talk = { start: jest.fn(), end: jest.fn() };
     const onLike = jest.fn();
     const press = new PressTracker(
-      { talk: () => talk, onLike, claim: () => undefined },
+      { talk: () => talk, onLike, claim: () => undefined, talkHoldMs: () => holdMs },
       (run, ms) => {
         const timer = { at: clock + ms, run };
         timers.push(timer);
@@ -320,5 +320,37 @@ describe('push to talk wrapper in hands-free', () => {
     expect(raw.muteCustomer).not.toHaveBeenCalled();
     expect(raw.muteAssistant).not.toHaveBeenCalled();
     expect(log).not.toHaveBeenCalled();
+  });
+});
+
+describe('the shorter push-to-talk hold', () => {
+  it('starts listening after 0.4 s of a still finger, while a stroke and a quick tap still never do', () => {
+    const run = (steps: (press: PressTracker, advance: (ms: number) => void) => void) => {
+      let clock = 0;
+      const timers: { at: number; run: () => void }[] = [];
+      const talk = { start: jest.fn(), end: jest.fn() };
+      const press = new PressTracker(
+        { talk: () => talk, claim: () => undefined, talkHoldMs: () => 400 },
+        (fn, ms) => {
+          const timer = { at: clock + ms, run: fn };
+          timers.push(timer);
+          return () => void timers.splice(timers.indexOf(timer), 1);
+        },
+        () => clock,
+      );
+      const advance = (ms: number) => {
+        clock += ms;
+        timers.filter((timer) => timer.at <= clock).forEach((timer) => {
+          timers.splice(timers.indexOf(timer), 1);
+          timer.run();
+        });
+      };
+      steps(press, advance);
+      return talk.start.mock.calls.length;
+    };
+    expect(run((press, advance) => { press.down([{ id: 1, x: 0, y: 0 }]); advance(399); })).toBe(0);
+    expect(run((press, advance) => { press.down([{ id: 1, x: 0, y: 0 }]); advance(400); })).toBe(1);
+    expect(run((press, advance) => { press.down([{ id: 1, x: 0, y: 0 }]); advance(250); press.up([{ id: 1, x: 0, y: 0 }]); advance(1000); })).toBe(0);
+    expect(run((press, advance) => { press.down([{ id: 1, x: 0, y: 0 }]); advance(150); press.move([{ id: 1, x: 40, y: 0 }]); advance(1000); })).toBe(0);
   });
 });

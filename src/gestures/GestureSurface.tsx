@@ -21,6 +21,8 @@ type Props = ViewProps & {
   // A one-finger press and hold, kept for talking to the agent: start once it has been held still past the tap window,
   // end when the finger lifts, or end(true) when the system takes the touch away.
   onTalkHold?: { start(): void; end(cancelled: boolean): void };
+  // The talk hold's wait, when not PRESS.talkHoldMs.
+  talkHoldMs?: number;
   onUnrecognizedStroke?: (points: Point[]) => void;
   onHold?: () => void;
   children: ReactNode;
@@ -34,7 +36,7 @@ export function useStrokeGesture(): StrokeGesture | null {
   return use(StrokeGestureContext);
 }
 
-export function GestureSurface({ tapsEnabled, onTapTop, onTapBottom, onCircle, onSwipe, onTwoFingerHold, onTwoFingerHoldWarning, onTalkHold, onUnrecognizedStroke, onHold, children, ...viewProps }: Props) {
+export function GestureSurface({ tapsEnabled, onTapTop, onTapBottom, onCircle, onSwipe, onTwoFingerHold, onTwoFingerHoldWarning, onTalkHold, talkHoldMs, onUnrecognizedStroke, onHold, children, ...viewProps }: Props) {
   const stroke = useRef<Point[]>([]);
   const startedAt = useRef(0);
   const scrolled = useRef(false);
@@ -71,9 +73,9 @@ export function GestureSurface({ tapsEnabled, onTapTop, onTapBottom, onCircle, o
     },
   });
 
-  const latest = useRef({ onTwoFingerHold, onTwoFingerHoldWarning, onTalkHold });
+  const latest = useRef({ onTwoFingerHold, onTwoFingerHoldWarning, onTalkHold, talkHoldMs });
   useEffect(() => {
-    latest.current = { onTwoFingerHold, onTwoFingerHoldWarning, onTalkHold };
+    latest.current = { onTwoFingerHold, onTwoFingerHoldWarning, onTalkHold, talkHoldMs };
   });
   const handlerTag = useRef(0);
   const claimed = useRef(false);
@@ -84,6 +86,7 @@ export function GestureSurface({ tapsEnabled, onTapTop, onTapBottom, onCircle, o
         onLikeWarning: () => latest.current.onTwoFingerHoldWarning?.(),
         onLike: () => latest.current.onTwoFingerHold?.(),
         talk: () => latest.current.onTalkHold,
+        talkHoldMs: () => latest.current.talkHoldMs,
         claim: () => {
           claimed.current = true;
           GestureStateManager.activate(handlerTag.current);

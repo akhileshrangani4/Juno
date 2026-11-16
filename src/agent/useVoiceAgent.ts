@@ -26,6 +26,7 @@ import { describeAccount, describeFocus, describeMemories, describeSettings } fr
 import { createToolHandlers } from './toolHandlers';
 import { listeningMode, withPushToTalk, type TalkHold } from './listeningMode';
 import { createVoiceCall } from './vapiCall';
+import { wakeOnOpen } from './wakeOnOpen';
 
 const MEMORY_TIMEOUT_MS = 2500;
 
@@ -113,6 +114,7 @@ export function useVoiceAgent({
     talkHold.current = pushToTalk;
     const handlers = createToolHandlers({
       listening: listeningMode,
+      wakeOnOpen,
       provider,
       account: () => latest.current.account,
       focused: () => latest.current.post,

@@ -54,6 +54,8 @@ export type CameraTools = {
 export type AgentDeps = {
   // Push to talk or hands-free (listeningMode.ts), switched by voice.
   listening?: { set(mode: ListeningMode): void };
+  // Whether the agent wakes by itself when Juno opens (wakeOnOpen.ts), switched by voice.
+  wakeOnOpen?: { set(on: boolean): void };
   provider: SocialProvider;
   camera?: CameraTools;
   account(): SocialAccount | null;
@@ -100,7 +102,7 @@ export const REPLIES_WAIT_MS = 2500;
 // How long a tool called right after a read-back waits for the user's words when it arrives before their transcript.
 export const TRANSCRIPT_WAIT_MS = 1500;
 // Tools that neither wait on the network nor touch the undo history, so they still run while a slow call finishes.
-const FREE_WHILE_SLOW = new Set<string>(['read_post', 'go_to_post', 'change_narration', 'gesture_help', 'use_push_to_talk', 'use_hands_free', 'open_sign_in', 'end_conversation']);
+const FREE_WHILE_SLOW = new Set<string>(['read_post', 'go_to_post', 'change_narration', 'gesture_help', 'use_push_to_talk', 'use_hands_free', 'stay_asleep_on_open', 'wake_on_open', 'open_sign_in', 'end_conversation']);
 
 const UNDO_WORDS = /\b(undo|stop|cancel|wait|don'?t|no)\b/i;
 
@@ -785,6 +787,12 @@ export function createToolHandlers(deps: AgentDeps) {
         const pushToTalk = tool === 'use_push_to_talk';
         deps.listening?.set(pushToTalk ? 'pushToTalk' : 'handsFree');
         return { speak: pushToTalk ? agentMessages.pushToTalkOn : agentMessages.handsFreeOn, respond: false, result: 'LISTENING_MODE_SET: The app told the user how it works now. Say nothing.' };
+      }
+      case 'stay_asleep_on_open':
+      case 'wake_on_open': {
+        const on = tool === 'wake_on_open';
+        deps.wakeOnOpen?.set(on);
+        return { speak: on ? agentMessages.wakeOnOpenOn : agentMessages.wakeOnOpenOff, respond: false, result: 'WAKE_ON_OPEN_SET: The app told the user. Say nothing.' };
       }
       case 'gesture_help':
         return { speak: messages.gestures, respond: false, result: "GESTURES_READ: The app read the gestures aloud. Don't repeat them." };

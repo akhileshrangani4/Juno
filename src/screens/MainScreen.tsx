@@ -10,6 +10,7 @@ import { agentMessages } from '@/agent/agentMessages';
 import { onDevWake } from '@/agent/devWake';
 import { listeningMode, type TalkHold } from '@/agent/listeningMode';
 import { useVoiceAgent } from '@/agent/useVoiceAgent';
+import { launchWake, wakeOnOpen } from '@/agent/wakeOnOpen';
 import { cameraMessages } from '@/camera/cameraMessages';
 import { openCamera, registerCameraHost, setPendingPhoto } from '@/camera/host';
 import { registerCommentsController } from '@/comments/commentsControl';
@@ -33,6 +34,8 @@ import { PostCard } from './PostCard';
 import { surfaceActions, type Mode, type SurfaceActionName } from './surfaceActions';
 import { playUnrecognizedCue } from './unrecognizedCue';
 
+// Push to talk starts listening after 0.4 s of a still finger: a stroke has moved by then, and a tap has lifted.
+const PUSH_TO_TALK_HOLD_MS = 400;
 const STROKE_CUE_INTERVAL_MS = 2500;
 const LOADING_ANNOUNCE_MS = 700;
 
@@ -102,6 +105,8 @@ export function MainScreen() {
     },
   };
   const pushToTalk = mode === 'agent' && listening === 'pushToTalk';
+  const wakeSetting = useSyncExternalStore(wakeOnOpen.subscribe, wakeOnOpen.get);
+  const signedIn = !!account;
   const agentStatus = agent.status;
 
   useEffect(() => onDevWake(() => changeMode('agent')), []);
@@ -135,8 +140,17 @@ export function MainScreen() {
       narrator.speak(`${prefix.current} ${text}`.trim());
       prefix.current = '';
     };
+    const launch = launchWake.decide({ setting: wakeSetting, signedIn, onFeed: !thread, feedReady: !!post, awake: mode === 'agent' });
     if (mode === 'agent') narrator.stop();
-    else if (thread?.status === 'loading') loadingTimer = setTimeout(() => say(commentMessages.loading), LOADING_ANNOUNCE_MS);
+    else if (launch === 'wait') return;
+    else if (launch === 'wake') {
+      // The launch wake goes the way a clockwise circle does, and the first post waits until the agent sleeps.
+      queueMicrotask(() => {
+        haptic('agentAwake');
+        modeNow.current = 'agent';
+        setMode('agent');
+      });
+    } else if (thread?.status === 'loading') loadingTimer = setTimeout(() => say(commentMessages.loading), LOADING_ANNOUNCE_MS);
     else if (thread) {
       const entry = entering.current ? commentsEntry(thread.replies.length) : null;
       entering.current = false;
@@ -158,7 +172,7 @@ export function MainScreen() {
       postNarrator.stop();
       narrator.stop();
     };
-  }, [mode, post, status, narrator, postNarrator, thread, focused]);
+  }, [mode, post, status, narrator, postNarrator, thread, focused, wakeSetting, signedIn]);
 
   useEffect(() => postNarrator.onScript(setNarration), [postNarrator]);
   useEffect(() => postNarrator.prefetch(state.posts.slice(state.index + 1)), [postNarrator, state.posts, state.index]);
@@ -355,7 +369,14 @@ export function MainScreen() {
 
   const onTapTop = () => (mode === 'scroll' ? page('previous') : tellInAgentMode(messages.gestures));
   const onTapBottom = () => (mode === 'scroll' ? page('next') : onAgentExit('signIn', 'Opening the sign-in screen.'));
-  const onCircle = (direction: CircleDirection) => switchMode(direction === 'clockwise' ? 'agent' : 'scroll');
+  // A clockwise circle while the agent is awake switches between hold to talk and hands-free: a way out by touch alone.
+  const toggleListening = () => {
+    const next = listening === 'pushToTalk' ? 'handsFree' : 'pushToTalk';
+    haptic('edge');
+    listeningMode.set(next);
+    tellInAgentMode(next === 'pushToTalk' ? agentMessages.pushToTalkOn : agentMessages.handsFreeOn);
+  };
+  const onCircle = (direction: CircleDirection) => (direction === 'clockwise' && mode === 'agent' ? toggleListening() : switchMode(direction === 'clockwise' ? 'agent' : 'scroll'));
   const onUnrecognizedStroke = () =>
     playUnrecognizedCue({
       narrator,
@@ -425,6 +446,7 @@ export function MainScreen() {
         onSwipe={onSwipe}
         onTwoFingerHold={like}
         onTalkHold={pushToTalk ? talkHold : undefined}
+        talkHoldMs={pushToTalk ? PUSH_TO_TALK_HOLD_MS : undefined}
         onTwoFingerHoldWarning={() => haptic('holdWarning')}
         onUnrecognizedStroke={onUnrecognizedStroke}
         accessible
