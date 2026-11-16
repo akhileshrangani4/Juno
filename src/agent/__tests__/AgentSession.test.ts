@@ -106,6 +106,21 @@ describe('AgentSession', () => {
     expect(logs.some((line) => line.startsWith('connect failed'))).toBe(false);
   });
 
+  it('reports a draft in play from its read-back through the countdown, and reading it changes nothing', async () => {
+    const { session, handlers, userSays, toolCall, playsReadBack } = setup();
+    await session.start();
+    expect(session.draftInPlay).toBe(false);
+    userSays('Post, hello there.');
+    await toolCall('draft_post', { text: 'Hello there.' });
+    const draft = handlers.publisher.currentDraft;
+    expect(session.draftInPlay).toBe(true);
+    expect(handlers.publisher.currentDraft).toBe(draft);
+    playsReadBack();
+    userSays('Post it.');
+    expect(handlers.publisher.busy).toBe(true);
+    expect(session.draftInPlay).toBe(true);
+  });
+
   it('explains a denied microphone and never starts a call', async () => {
     const { session, call, exits } = setup({ microphone: 'denied' });
     await session.start();

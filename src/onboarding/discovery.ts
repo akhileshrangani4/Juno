@@ -1,4 +1,4 @@
-import { GESTURES, type Cue, type FeedMode, type GestureId, type TaughtGesture } from './gestures';
+import { GESTURES, type Cue, type FeedMode, type Gesture, type GestureId } from './gestures';
 import type { StrokeKind } from './strokes';
 
 export type DiscoveryProgress = { sessions: number; learned: GestureId[] };
@@ -18,15 +18,15 @@ export type DiscoveryEvent =
   | { type: 'tick'; mode: FeedMode; narrating: boolean; at: number }
   | { type: 'scrolling'; at: number }
   | { type: 'activity'; at: number };
-export type DiscoveryResult = { state: DiscoveryState; hint: TaughtGesture | null };
+export type DiscoveryResult = { state: DiscoveryState; hint: Gesture | null };
 
 export const FIRST_SESSIONS = 5;
 export const STROKES_BEFORE_HINT = 3;
 export const IDLE_MS = 20_000;
 
-const allLearned = (learned: GestureId[], gestures: TaughtGesture[]) => gestures.every((gesture) => learned.includes(gesture.id));
+const allLearned = (learned: GestureId[], gestures: Gesture[]) => gestures.every((gesture) => learned.includes(gesture.id));
 
-export function startDiscovery(progress: DiscoveryProgress, gestures: TaughtGesture[] = GESTURES): DiscoveryState {
+export function startDiscovery(progress: DiscoveryProgress, gestures: Gesture[] = GESTURES): DiscoveryState {
   return {
     active: progress.sessions <= FIRST_SESSIONS && !allLearned(progress.learned, gestures),
     learned: progress.learned,
@@ -38,7 +38,7 @@ export function startDiscovery(progress: DiscoveryProgress, gestures: TaughtGest
   };
 }
 
-export function likelyGesture(cue: Cue, mode: FeedMode, learned: GestureId[], gestures: TaughtGesture[] = GESTURES): TaughtGesture | null {
+export function likelyGesture(cue: Cue, mode: FeedMode, learned: GestureId[], gestures: Gesture[] = GESTURES): Gesture | null {
   const available = gestures.filter((gesture) => gesture.modes.includes(mode));
   if (cue === 'idle') {
     const unlearned = available.filter((gesture) => !learned.includes(gesture.id));
@@ -60,7 +60,7 @@ function mostFrequent(ids: GestureId[]): GestureId {
   return best;
 }
 
-export function discoveryReducer(state: DiscoveryState, event: DiscoveryEvent, gestures: TaughtGesture[] = GESTURES): DiscoveryResult {
+export function discoveryReducer(state: DiscoveryState, event: DiscoveryEvent, gestures: Gesture[] = GESTURES): DiscoveryResult {
   const none = (next: DiscoveryState): DiscoveryResult => ({ state: next, hint: null });
   const find = (id: GestureId) => gestures.find((gesture) => gesture.id === id) ?? null;
   switch (event.type) {

@@ -182,6 +182,18 @@ describe('push to talk', () => {
     expect(w.muted()).toBe(true);
   });
 
+  it('keeps the draft in play (so a swipe down does nothing) while the microphone is open for the five seconds', async () => {
+    const w = world('pushToTalk');
+    await confirmed(w);
+    await w.scheduler.advance(OPEN_POLL_MS);
+    expect(w.muted()).toBe(false);
+    expect(w.session.draftInPlay).toBe(true);
+    w.userSays('undo');
+    await w.scheduler.advance(OPEN_POLL_MS);
+    expect(w.session.draftInPlay).toBe(false);
+    expect(w.muted()).toBe(true);
+  });
+
   it('lets stray speech during the five seconds only hold the send, never publish', async () => {
     const w = world('pushToTalk');
     await confirmed(w);

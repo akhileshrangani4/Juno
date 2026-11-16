@@ -525,13 +525,16 @@ export function lateDescription(post: Post, parts: DescriptionParts): string | n
   return pieces.length ? pieces.join(' ') : null;
 }
 
+const LAUNCH_GESTURES =
+  'Tap the bottom half of the screen for the next post. Tap the top half for the previous post. Swiping right or left does the same. Draw a circle clockwise anywhere on the screen to wake the voice agent after it sleeps. Draw a circle counter-clockwise to put it to sleep and go back to scrolling.';
+
 const GESTURES =
-  'Tap the bottom half of the screen for the next post. Tap the top half for the previous post. Swiping right or left does the same. Swipe up to hear the replies, and swipe down to come back. Hold two fingers on the screen to like a post. Draw a circle clockwise anywhere on the screen to wake the voice agent. Draw a circle counter-clockwise to put it to sleep and go back to scrolling.';
+  'Tap the bottom half of the screen for the next post. Tap the top half for the previous post. Swiping right or left does the same. Swipe up to hear the replies, and swipe down to come back. Swipe down on a post to open the camera. Hold two fingers on the screen through the buzz until the like sound to like a post. Draw a circle clockwise anywhere on the screen to wake the voice agent after it sleeps. Draw a circle counter-clockwise to put it to sleep and go back to scrolling.';
 
 export const INTRO_SUMMARY = `Welcome to ${APP_NAME}. It reads your social feed aloud, one post at a time.`;
 
 export function introInstructions(screenReader: boolean): string {
-  return `${GESTURES} ${screenReader ? 'Double tap to continue.' : 'Tap anywhere to continue.'}`;
+  return `${LAUNCH_GESTURES} ${screenReader ? 'Double tap to continue.' : 'Tap anywhere to continue.'}`;
 }
 
 const times = (rate: number) => `${Number(rate.toFixed(2))} times normal`;

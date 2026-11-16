@@ -1,8 +1,9 @@
 import { router, useIsFocused } from 'expo-router';
 import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
-import { Platform, StyleSheet, Text, View, type AccessibilityActionEvent, type AccessibilityRole } from 'react-native';
+import { Platform, StyleSheet, View, type AccessibilityActionEvent, type AccessibilityRole } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
+import { Text } from '@/accessibility/ScaledText';
 import { useScreenReader } from '@/accessibility/useScreenReader';
 import { actionHistory } from '@/actions/history';
 import type { AgentStatus, EndReason } from '@/agent/AgentSession';
@@ -27,6 +28,7 @@ import { earcons, useNarrationPreferences, usePostNarrator } from '@/narration/p
 import { applyNarrationAction, isNarrationAction, narrationActions, replyScripts } from '@/narration/requests';
 import { useNarrator } from '@/narration/useNarrator';
 import { DiscoverySurface as GestureSurface } from '@/onboarding/DiscoverySurface';
+import type { GestureId } from '@/onboarding/gestures';
 import { useSession } from '@/session/SessionContext';
 import { colors, type } from '@/theme';
 
@@ -37,6 +39,8 @@ import { playUnrecognizedCue } from './unrecognizedCue';
 // Push to talk starts listening after 0.4 s of a still finger: a stroke has moved by then, and a tap has lifted.
 const PUSH_TO_TALK_HOLD_MS = 400;
 const STROKE_CUE_INTERVAL_MS = 2500;
+const CAMERA_TIP_AFTER_POSTS = 5;
+const LIKE_TIP_AFTER_POSTS = 10;
 const LOADING_ANNOUNCE_MS = 700;
 
 const DIRECT_TOUCH = 'allowsDirectInteraction' as unknown as AccessibilityRole;
@@ -350,7 +354,12 @@ export function MainScreen() {
   );
 
   const onSwipe = (direction: SwipeDirection) => {
-    if (mode === 'agent') return haptic('edge');
+    if (mode === 'agent') {
+      // Awake, a swipe down opens the camera the way the agent's camera tool does, but never over a draft or a send.
+      if (direction !== 'down' || agentStatus !== 'listening' || agent.draftInPlay()) return haptic('edge');
+      haptic('camera');
+      return void openCamera();
+    }
     switch (direction) {
       case 'left':
         return page('previous');
@@ -434,11 +443,24 @@ export function MainScreen() {
   const scrolling = mode === 'scroll';
   const view = !scrolling ? 'agent' : thread ? 'comments' : 'feed';
   const likedMark = liked ? ' · Liked' : '';
+  const tipCandidates: GestureId[] =
+    view === 'comments'
+      ? ['swipeDown']
+      : view === 'feed'
+        ? [
+            ...(post && post.counts.replies > 0 ? (['swipeUp'] as const) : []),
+            ...(state.index + 1 >= CAMERA_TIP_AFTER_POSTS ? (['swipeDownCamera'] as const) : []),
+            ...(account && state.index + 1 >= LIKE_TIP_AFTER_POSTS ? (['twoFingerHold'] as const) : []),
+          ]
+        : [];
   return (
     <SafeAreaView style={styles.screen}>
       <GestureSurface
         style={styles.surface}
-        discoveryMode={mode}
+        discoveryMode={view === 'feed' ? 'scroll' : view}
+        signedIn={!!account}
+        tipCandidates={tipCandidates}
+        tipKey={`${view}:${state.index}`}
         tapsEnabled
         onTapTop={onTapTop}
         onTapBottom={onTapBottom}
@@ -454,10 +476,10 @@ export function MainScreen() {
         accessibilityLabel={view === 'feed' ? 'Feed' : view === 'comments' ? 'Replies' : `Voice agent, ${AGENT_STATUS[agentStatus ?? 'starting'].toLowerCase()}`}
         accessibilityHint={
           view === 'feed'
-            ? 'Tap the bottom half or swipe right for the next post, the top half or swipe left for the previous post. Swipe up for replies. Hold two fingers on the screen to like. Draw a clockwise circle to wake the agent.'
+            ? 'Tap the bottom half or swipe right for the next post, the top half or swipe left for the previous post. Swipe up for replies, swipe down for the camera. Hold two fingers through the buzz until the like sound to like. Draw a clockwise circle to wake the agent.'
             : view === 'comments'
-              ? 'Tap the bottom half or swipe right for the next reply, the top half or swipe left for the previous reply. Hold two fingers on the screen to like. Swipe down to go back to posts.'
-              : `${pushToTalk ? 'Hold one finger still on the screen while you talk. ' : ''}Tap the top half to hear the instructions, the bottom half for account settings. Hold two fingers on the screen to like the post. Draw a counter-clockwise circle to go back to scrolling.`
+              ? 'Tap the bottom half or swipe right for the next reply, the top half or swipe left for the previous reply. Hold two fingers through the buzz until the like sound to like. Swipe down to go back to posts.'
+              : `${pushToTalk ? 'Hold one finger still on the screen while you talk. ' : ''}Tap the top half to hear the instructions, the bottom half for account settings. Hold two fingers through the buzz until the like sound to like the post. Draw a counter-clockwise circle to go back to scrolling.`
         }
         accessibilityValue={{ text: narration }}
         accessibilityActions={[

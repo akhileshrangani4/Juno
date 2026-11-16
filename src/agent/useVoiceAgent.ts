@@ -70,7 +70,7 @@ export function useVoiceAgent({
   feed: Feed;
   narrator: Narrator;
   onExit(reason: EndReason, message: string): void;
-}): { status: AgentStatus | null; say(text: string): boolean; notify(text: string, speak?: string): void; talk(): TalkHold | undefined; talking: boolean } {
+}): { status: AgentStatus | null; say(text: string): boolean; notify(text: string, speak?: string): void; draftInPlay(): boolean; talk(): TalkHold | undefined; talking: boolean } {
   const { provider, account } = useSession();
   const [status, setStatus] = useState<AgentStatus | null>(null);
   const [talking, setTalking] = useState(false);
@@ -203,5 +203,6 @@ export function useVoiceAgent({
     notify: (text, speak) => session.current?.notify(text, speak),
     talk: () => talkHold.current?.talk(),
     talking: active && talking,
+    draftInPlay: () => session.current?.draftInPlay ?? false,
   };
 }

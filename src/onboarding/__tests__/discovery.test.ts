@@ -10,22 +10,22 @@ import {
   type DiscoveryEvent,
   type DiscoveryState,
 } from '../discovery';
-import { GESTURES, type GestureId } from '../gestures';
+import { GESTURES, introducedGestures, type Gesture, type GestureId } from '../gestures';
 import { classifyStroke, type StrokeKind } from '../strokes';
 
 const fresh = (learned: GestureId[] = [], sessions = 1) => startDiscovery({ sessions, learned });
 
-function apply(state: DiscoveryState, events: DiscoveryEvent[]) {
+function apply(state: DiscoveryState, events: DiscoveryEvent[], gestures?: Gesture[]) {
   const hints: (string | null)[] = [];
   for (const event of events) {
-    const result = discoveryReducer(state, event);
+    const result = discoveryReducer(state, event, gestures);
     state = result.state;
     hints.push(result.hint?.id ?? null);
   }
   return { state, hints };
 }
 
-const strokes = (kinds: StrokeKind[], mode: 'scroll' | 'agent' = 'scroll', narrating = false): DiscoveryEvent[] =>
+const strokes = (kinds: StrokeKind[], mode: 'scroll' | 'comments' | 'agent' = 'scroll', narrating = false): DiscoveryEvent[] =>
   kinds.map((stroke, i) => ({ type: 'unrecognized', stroke, mode, narrating, at: i * 1000 }));
 
 describe('startDiscovery', () => {
@@ -47,11 +47,19 @@ describe('stuck hint after unrecognized strokes', () => {
     expect(state.streak).toHaveLength(1);
   });
 
-  it('names the gesture the strokes most likely aimed for', () => {
-    expect(apply(listening(), strokes(['swipeUp', 'swipeLeft', 'curve'])).hints[2]).toBe('tapBottom');
-    expect(apply(listening(), strokes(['swipeDown', 'swipeDown', 'swipeRight'])).hints[2]).toBe('tapTop');
-    expect(apply(listening(), strokes(['curve', 'curve', 'swipeUp'])).hints[2]).toBe('circleClockwise');
-    expect(apply(listening(), strokes(['swipeUp', 'curve', 'swipeDown'])).hints[2]).toBe('tapTop');
+  it('names the gesture the strokes most likely aimed for, a failed swipe pointing at that swipe and never at a tap', () => {
+    const launch = introducedGestures([], true);
+    expect(apply(listening(), strokes(['swipeLeft', 'swipeRight', 'swipeLeft']), launch).hints[2]).toBe('swipeLeft');
+    expect(apply(listening(), strokes(['curve', 'curve', 'swipeRight']), launch).hints[2]).toBe('circleClockwise');
+    expect(apply(listening(), strokes(['swipeUp', 'swipeDown', 'swipeUp', 'swipeDown']), launch).hints).toEqual([null, null, null, null]);
+    expect(apply(listening(), strokes(['swipeUp', 'swipeUp', 'swipeUp']), introducedGestures(['swipeUp'], true)).hints[2]).toBe('swipeUp');
+  });
+
+  it('names swipe down only in the replies, where it goes back, and only once it has been introduced', () => {
+    const inComments = (gestures: Gesture[]) => apply(discoveryReducer(fresh(), { type: 'quiet', mode: 'comments', at: 0 }, gestures).state, strokes(['swipeDown', 'swipeDown', 'swipeDown'], 'comments'), gestures);
+    expect(inComments(introducedGestures([], true)).hints[2]).toBeNull();
+    expect(inComments(introducedGestures(['swipeDown'], true)).hints[2]).toBe('swipeDown');
+    expect(apply(listening(), strokes(['swipeDown', 'swipeDown', 'swipeDown']), introducedGestures(['swipeDown'], true)).hints[2]).toBeNull();
   });
 
   it('never turns small strokes, which are usually slipped taps, into a circle hint', () => {
