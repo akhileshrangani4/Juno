@@ -27,8 +27,6 @@ export type VapiSdk = {
   start(assistant: object): Promise<unknown>;
   stop(): void;
   say(text: string, interrupt?: boolean): void;
-  // Push to talk: mutes or unmutes the phone's microphone in the call.
-  setMuted?(muted: boolean): void;
   send(message: object): void;
   // The Daily call object this client made, if any.
   callObject(): CallObject | null;
@@ -118,8 +116,6 @@ export function voiceCalls(deps: CallDeps): (publicKey: string) => VoiceCall {
         teardown = teardown.then(() => tearDown(current, inFlight));
       },
       say: (text, interrupt) => sdk?.say(text, interrupt),
-      setMuted: (muted) => sdk?.setMuted?.(muted),
-      muteAssistant: (muted) => sdk?.send({ type: 'control', control: muted ? 'mute-assistant' : 'unmute-assistant' }),
       addMessage: (content, triggerResponse) => sdk?.send({ type: 'add-message', message: { role: 'system', content }, triggerResponseEnabled: triggerResponse }),
     };
   };
