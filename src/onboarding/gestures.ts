@@ -4,7 +4,7 @@ import type { CircleDirection } from '@/gestures/circle';
 import type { StrokeKind } from './strokes';
 
 export type PracticedGestureId = 'tapTop' | 'tapBottom' | 'circleClockwise' | 'circleCounterclockwise';
-export type GestureId = PracticedGestureId | 'swipeLeft' | 'swipeRight' | 'swipeUp' | 'swipeDown' | 'twoFingerHold';
+export type GestureId = PracticedGestureId | 'swipeLeft' | 'swipeRight' | 'swipeUp' | 'swipeDown' | 'swipeDownCamera' | 'twoFingerHold';
 // The feed in focus: posts, a post's replies, or the agent.
 export type FeedMode = 'scroll' | 'comments' | 'agent';
 export type Cue = StrokeKind | 'idle';
@@ -45,7 +45,7 @@ export const GESTURES: TaughtGesture[] = [
     kind: 'tap',
     title: 'Tap the top half',
     name: 'a tap on the top half',
-    action: 'go back to the previous post',
+    action: 'go to the previous post',
     instruction: 'Tap once anywhere on the top half of the screen, then lift your finger.',
     retry: 'Tap higher up, above the middle of the screen, and lift your finger straight away.',
     tip: TAP_TIP,
@@ -79,12 +79,12 @@ export const GESTURES: TaughtGesture[] = [
     kind: 'stroke',
     title: 'Draw a circle clockwise',
     name: 'a clockwise circle',
-    action: 'wake the voice agent',
+    action: 'wake the agent after it sleeps',
     instruction:
       "Draw a big circle clockwise, the way a clock's hands move, anywhere on the screen. Keep your finger down until you have gone all the way round, then lift.",
     retry: 'Go clockwise: across the top from left to right, then down and round. Make it about the size of your palm, and go all the way round before you lift.',
     tip: CIRCLE_TIP,
-    hint: 'To wake the voice agent, draw a big circle clockwise anywhere on the screen.',
+    hint: 'To wake the voice agent after it sleeps, draw a big circle clockwise anywhere on the screen.',
     haptic: 'agentAwake',
     symbol: '↻',
     modes: ['scroll', 'comments'],
@@ -96,7 +96,7 @@ export const GESTURES: TaughtGesture[] = [
     kind: 'stroke',
     title: 'Draw a circle counter-clockwise',
     name: 'a counter-clockwise circle',
-    action: 'put the agent back to sleep',
+    action: 'put it back to sleep',
     instruction: 'Draw a big circle counter-clockwise, the other way round: across the top from right to left, then down and round.',
     retry: 'Go counter-clockwise: across the top from right to left, then down and round. Make it about the size of your palm, and go all the way round before you lift.',
     tip: CIRCLE_TIP,
@@ -109,7 +109,7 @@ export const GESTURES: TaughtGesture[] = [
 ];
 
 // Gestures the feed knows beyond the four practiced on first launch. Swiping left and right is named once on first
-// launch; the rest are introduced just in time (see tips.ts). Swipe down on the feed is the camera, not on main yet.
+// launch; the rest are introduced just in time (see tips.ts).
 export const EXTRA_GESTURES: Gesture[] = [
   {
     id: 'swipeLeft',
@@ -150,12 +150,22 @@ export const EXTRA_GESTURES: Gesture[] = [
     cues: ['swipeDown'],
   },
   {
+    id: 'swipeDownCamera',
+    stage: 'tip',
+    title: 'Swipe down on a post',
+    action: 'open the camera',
+    hint: 'To open the camera, swipe down on a post in a quick straight line.',
+    intro: 'Tip: swipe down on a post to open the camera.',
+    modes: ['scroll'],
+    cues: ['swipeDown'],
+  },
+  {
     id: 'twoFingerHold',
     stage: 'tip',
-    title: 'Hold two fingers on the screen',
+    title: 'Hold two fingers on the screen, through the buzz until the like sound,',
     action: 'like a post, or remove your like',
-    hint: 'To like a post, hold two fingers on the screen until it buzzes.',
-    intro: 'Tip: hold two fingers on the screen to like a post.',
+    hint: 'To like a post, hold two fingers on the screen through the buzz until you hear the like sound.',
+    intro: 'Tip: to like a post, hold two fingers until the like sound.',
     signedInOnly: true,
     modes: ['scroll', 'comments'],
     cues: [],

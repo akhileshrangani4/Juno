@@ -180,7 +180,7 @@ export function DiscoverySurface({
       onSwipe={
         onSwipe &&
         ((direction) => {
-          recognized(SWIPES[direction]);
+          recognized(direction === 'down' && discoveryMode === 'scroll' ? 'swipeDownCamera' : SWIPES[direction]);
           onSwipe(direction);
         })
       }

@@ -34,6 +34,7 @@ import { surfaceActions, type Mode, type SurfaceActionName } from './surfaceActi
 import { playUnrecognizedCue } from './unrecognizedCue';
 
 const STROKE_CUE_INTERVAL_MS = 2500;
+const CAMERA_TIP_AFTER_POSTS = 5;
 const LIKE_TIP_AFTER_POSTS = 10;
 const LOADING_ANNOUNCE_MS = 700;
 
@@ -410,7 +411,11 @@ export function MainScreen() {
     view === 'comments'
       ? ['swipeDown']
       : view === 'feed'
-        ? [...(post && post.counts.replies > 0 ? (['swipeUp'] as const) : []), ...(account && state.index + 1 >= LIKE_TIP_AFTER_POSTS ? (['twoFingerHold'] as const) : [])]
+        ? [
+            ...(post && post.counts.replies > 0 ? (['swipeUp'] as const) : []),
+            ...(state.index + 1 >= CAMERA_TIP_AFTER_POSTS ? (['swipeDownCamera'] as const) : []),
+            ...(account && state.index + 1 >= LIKE_TIP_AFTER_POSTS ? (['twoFingerHold'] as const) : []),
+          ]
         : [];
   return (
     <SafeAreaView style={styles.screen}>
@@ -433,10 +438,10 @@ export function MainScreen() {
         accessibilityLabel={view === 'feed' ? 'Feed' : view === 'comments' ? 'Replies' : `Voice agent, ${AGENT_STATUS[agentStatus ?? 'starting'].toLowerCase()}`}
         accessibilityHint={
           view === 'feed'
-            ? 'Tap the bottom half or swipe right for the next post, the top half or swipe left for the previous post. Swipe up for replies. Hold two fingers on the screen to like. Draw a clockwise circle to wake the agent.'
+            ? 'Tap the bottom half or swipe right for the next post, the top half or swipe left for the previous post. Swipe up for replies, swipe down for the camera. Hold two fingers through the buzz until the like sound to like. Draw a clockwise circle to wake the agent.'
             : view === 'comments'
-              ? 'Tap the bottom half or swipe right for the next reply, the top half or swipe left for the previous reply. Hold two fingers on the screen to like. Swipe down to go back to posts.'
-              : 'Tap the top half to hear the instructions, the bottom half for account settings. Hold two fingers on the screen to like the post. Draw a counter-clockwise circle to go back to scrolling.'
+              ? 'Tap the bottom half or swipe right for the next reply, the top half or swipe left for the previous reply. Hold two fingers through the buzz until the like sound to like. Swipe down to go back to posts.'
+              : 'Tap the top half to hear the instructions, the bottom half for account settings. Hold two fingers through the buzz until the like sound to like the post. Draw a counter-clockwise circle to go back to scrolling.'
         }
         accessibilityValue={{ text: narration }}
         accessibilityActions={[...surfaceActions(view, Platform.OS, liked), ...(scrolling ? narrationActions(narrationPrefs, screenReader) : [])]}

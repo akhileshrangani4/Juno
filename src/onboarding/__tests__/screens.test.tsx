@@ -26,7 +26,8 @@ jest.mock('@/narration/useNarrator', () => ({ useNarrator: () => mockNarrator })
 jest.mock('@/narration/postNarration', () => ({ postNarratorFor: () => ({ speaking: () => mockNarrator.speaking() }) }));
 jest.mock('@/accessibility/useScreenReader', () => ({ useScreenReader: () => false }));
 jest.mock('@/feedback/haptics', () => ({ haptic: jest.fn() }));
-jest.mock('expo-router', () => ({ useIsFocused: () => true }));
+const mockFocus = { focused: true };
+jest.mock('expo-router', () => ({ useIsFocused: () => mockFocus.focused }));
 jest.mock('@/storage/keyValueStore', () => {
   const actual = jest.requireActual('@/storage/keyValueStore');
   return { ...actual, secureStore: actual.createMemoryStore() };
@@ -308,6 +309,7 @@ describe('DiscoverySurface swipes, holds and tips', () => {
   afterEach(() => {
     jest.useRealTimers();
     mockNarrator.speaking.mockReturnValue(false);
+    mockFocus.focused = true;
   });
 
   it('counts a swipe as a recognized gesture, so strokes before it are not added to a stuck hint', async () => {
@@ -397,6 +399,29 @@ describe('DiscoverySurface swipes, holds and tips', () => {
     await rerender(surface({ discoveryMode: 'comments', tipCandidates: ['swipeDown'], tipKey: 'comments:0' }));
     await tick();
     expect(tipsSaid()).toEqual(['Tip: swipe down to go back to the posts.']);
+  });
+
+  it('offers the camera tip on the posts, and counts a swipe down there as having found the camera', async () => {
+    const { unmount } = await render(surface({ tipCandidates: ['swipeDownCamera'] }));
+    await act(async () => undefined);
+    await tick();
+    expect(tipsSaid()).toEqual(['Tip: swipe down on a post to open the camera.']);
+    await unmount();
+    await secureStore.remove('app.gestureDiscovery');
+    mockNarrator.speak.mockClear();
+    await render(surface({ tipCandidates: ['swipeDownCamera'] }));
+    await act(async () => undefined);
+    await act(async () => mockSurface.props.onSwipe('down'));
+    await tick(30_000);
+    expect(tipsSaid()).toEqual([]);
+  });
+
+  it('plays no tip while the feed is covered, such as by the camera', async () => {
+    mockFocus.focused = false;
+    await render(surface({ tipCandidates: ['swipeUp'] }));
+    await act(async () => undefined);
+    await tick(30_000);
+    expect(tipsSaid()).toEqual([]);
   });
 
   it('turns tips off and back on from labeled actions, remembered across launches and kept through practice', async () => {

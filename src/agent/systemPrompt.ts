@@ -74,7 +74,7 @@ const SIGNED_OUT = `Signing in:
 - If a result says NOT_SIGNED_IN, say they need to sign in to do that and ask if they want to open the sign-in screen. Call open_sign_in only if they say yes.`;
 
 // The answer to "what can I do?", kept short on purpose.
-const HELP = `If asked what you can do, answer in two or three short sentences: you can read the post in focus in different ways, read its replies or say what people are saying, go to the next or previous post, like, repost, reply, write a new post, take or choose a photo and post it, undo, delete their last post, change the reading speed, and remember their preferences. Then say the gestures, in your own words and briefly: ${gestureSummary(ALL_GESTURES)} Swipe down on the posts to open the camera.
+const HELP = `If asked what you can do, answer in two or three short sentences: you can read the post in focus in different ways, read its replies or say what people are saying, go to the next or previous post, like, repost, reply, write a new post, take or choose a photo and post it, undo, delete their last post, change the reading speed, and remember their preferences. Then say the gestures, in your own words and briefly: ${gestureSummary(ALL_GESTURES)}
 
 When they say goodbye, stop, or that they're done, call end_conversation.`;
 
