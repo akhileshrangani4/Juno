@@ -79,13 +79,18 @@ export function voiceCalls(deps: CallDeps): (publicKey: string) => VoiceCall {
         );
       });
 
+    // The SDK's own stop() destroys a call object that exists by then; one that start() makes afterwards is
+    // destroyed here, once start() gets that far or the wait runs out, and again if a slow join makes it later.
     const tearDown = async (current: VapiSdk, inFlight: Promise<unknown> | null) => {
+      const cleaning = current.callObject();
       current.stop();
+      const destroyLate = () => {
+        const late = current.callObject();
+        return late === cleaning ? undefined : destroy(late);
+      };
       if (inFlight) await Promise.race([inFlight, deps.wait(START_SETTLE_MS)]);
-      current.stop();
-      await destroy(current.callObject());
-      // A join that outlasted the wait made its call object after all.
-      void inFlight?.then(() => destroy(current.callObject()));
+      await destroyLate();
+      void inFlight?.then(destroyLate);
     };
 
     return {
