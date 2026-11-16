@@ -1,7 +1,11 @@
+import { act, fireEvent, render, screen } from '@testing-library/react-native';
+import { createElement } from 'react';
+
 import type { Narrator } from '@/narration/Narrator';
 import { createMemoryStore } from '@/storage/keyValueStore';
 
 import { CameraController, messages, type ControllerDeps, type Consent, type FrameSource, type KeptPhoto } from '../CameraController';
+import { CONSENT_ARM_MS, ConsentButtons } from '../ConsentButtons';
 import type { Analysis, Box } from '../guidance';
 import { DescriptionStore, LibraryWalk, type LibrarySource } from '../library';
 import type { LookClient } from '../lookClient';
@@ -187,6 +191,29 @@ describe('consent and the entry line', () => {
     await settle(env, started);
     expect(env.consentStore.set).toHaveBeenCalledWith('yes');
     expect(env.controller.snapshot).toMatchObject({ phase: 'aiming', descriptionsOn: true });
+  });
+
+  it('without VoiceOver: a tap on the surface only repeats the question, a tap on the Allow descriptions button answers it, and the answer is remembered', async () => {
+    const env = setup({ consent: null });
+    const started = env.controller.start();
+    await settle(env, Promise.resolve());
+    await render(createElement(ConsentButtons, { onAnswer: (answer: 'yes' | 'no') => env.controller.answerConsent(answer) }));
+    env.controller.tapTop();
+    env.controller.tapBottom();
+    await fireEvent.press(screen.getByRole('button', { name: 'Allow descriptions' }));
+    expect(env.consentStore.set).not.toHaveBeenCalled();
+    expect(env.controller.snapshot.phase).toBe('consent');
+    await act(async () => {
+      await jest.advanceTimersByTimeAsync(CONSENT_ARM_MS);
+    });
+    await fireEvent.press(screen.getByRole('button', { name: 'Allow descriptions' }));
+    await settle(env, started);
+    expect(env.consentStore.set).toHaveBeenCalledWith('yes');
+    expect(env.controller.snapshot).toMatchObject({ phase: 'aiming', descriptionsOn: true });
+    const again = setup({ consent: await env.consentStore.get() });
+    await settle(again, again.controller.start());
+    expect(again.controller.snapshot.phase).toBe('aiming');
+    expect(again.spoken).not.toContain(messages.consent);
   });
 
   it('names OpenAI, how long it may keep pictures, and no training, in the question', () => {
