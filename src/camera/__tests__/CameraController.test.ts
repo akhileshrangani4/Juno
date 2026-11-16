@@ -1,7 +1,11 @@
+import { act, fireEvent, render, screen } from '@testing-library/react-native';
+import { createElement } from 'react';
+
 import type { Narrator } from '@/narration/Narrator';
 import { createMemoryStore } from '@/storage/keyValueStore';
 
 import { CameraController, messages, type ControllerDeps, type Consent, type FrameSource, type KeptPhoto } from '../CameraController';
+import { CONSENT_ARM_MS, ConsentButtons } from '../ConsentButtons';
 import type { Analysis, Box } from '../guidance';
 import { DescriptionStore, LibraryWalk, type LibrarySource } from '../library';
 import type { LookClient } from '../lookClient';
@@ -189,6 +193,29 @@ describe('consent and the entry line', () => {
     expect(env.controller.snapshot).toMatchObject({ phase: 'aiming', descriptionsOn: true });
   });
 
+  it('without VoiceOver: a tap on the surface only repeats the question, a tap on the Allow descriptions button answers it, and the answer is remembered', async () => {
+    const env = setup({ consent: null });
+    const started = env.controller.start();
+    await settle(env, Promise.resolve());
+    await render(createElement(ConsentButtons, { onAnswer: (answer: 'yes' | 'no') => env.controller.answerConsent(answer) }));
+    env.controller.tapTop();
+    env.controller.tapBottom();
+    await fireEvent.press(screen.getByRole('button', { name: 'Allow descriptions' }));
+    expect(env.consentStore.set).not.toHaveBeenCalled();
+    expect(env.controller.snapshot.phase).toBe('consent');
+    await act(async () => {
+      await jest.advanceTimersByTimeAsync(CONSENT_ARM_MS);
+    });
+    await fireEvent.press(screen.getByRole('button', { name: 'Allow descriptions' }));
+    await settle(env, started);
+    expect(env.consentStore.set).toHaveBeenCalledWith('yes');
+    expect(env.controller.snapshot).toMatchObject({ phase: 'aiming', descriptionsOn: true });
+    const again = setup({ consent: await env.consentStore.get() });
+    await settle(again, again.controller.start());
+    expect(again.controller.snapshot.phase).toBe('aiming');
+    expect(again.spoken).not.toContain(messages.consent);
+  });
+
   it('names OpenAI, how long it may keep pictures, and no training, in the question', () => {
     expect(messages.consent).toMatch(/OpenAI.*30 days.*train/);
     expect(messages.consentInCall).toMatch(/OpenAI.*30 days.*train/);
@@ -262,7 +289,78 @@ describe('aiming', () => {
     await env.feed(frame(), 30_000);
     expect(env.look.describe).toHaveBeenCalledTimes(1);
     expect(env.look.describe).toHaveBeenCalledWith('base64-frame', 'view');
-    expect(env.spoken).toContain('A desk with a red mug in the middle.');
+    expect(env.spoken).toContain('I see a desk with a red mug in the middle.');
+  });
+
+  it('says the looks it takes by itself short, the first of each opening as "I see …", and the full description only when asked', async () => {
+    const env = setup();
+    env.look.describe.mockImplementation(async () => ({
+      description: 'A wooden desk with a red mug, a laptop and a notebook in soft afternoon light near a big window with plants on the sill. Behind it is a bookshelf.',
+      altText: '',
+      visibleText: [],
+      latencyMs: 900,
+      costUsd: 0.0002,
+    }));
+    await settle(env, env.controller.start());
+    await env.feed(frame(), 3000);
+    expect(env.spoken).toContain('I see a wooden desk with a red mug, a laptop and a notebook in soft afternoon.');
+    await env.feed(frame({ signature: flat(0.9) }), 12_000);
+    expect(env.look.describe).toHaveBeenCalledTimes(2);
+    expect(env.spoken.filter((line) => line.startsWith('I see'))).toHaveLength(1);
+    expect(env.spoken).toContain('A wooden desk with a red mug, a laptop and a notebook in soft afternoon.');
+    env.controller.askWhatIsInView();
+    await settle(env, Promise.resolve());
+    expect(env.spoken.at(-1)).toMatch(/^A wooden desk .* Behind it is a bookshelf\.$/);
+    env.controller.close();
+    await settle(env, env.controller.start());
+    await env.feed(frame(), 3000);
+    expect(env.spoken.filter((line) => line.startsWith('I see'))).toHaveLength(2);
+  });
+
+  it('drops a look it took by itself when the view moved before the answer came back, and looks again', async () => {
+    const env = setup();
+    let answer: (value: Awaited<ReturnType<LookClient['describe']>>) => void = () => undefined;
+    env.look.describe.mockImplementationOnce(() => new Promise((resolve) => (answer = resolve)));
+    await settle(env, env.controller.start());
+    await env.feed(frame(), 1500);
+    expect(env.look.describe).toHaveBeenCalledTimes(1);
+    env.controller.onAnalysis(frame({ signature: flat(0.9) }));
+    answer({ description: 'A person at a desk.', altText: '', visibleText: [], latencyMs: 900, costUsd: 0.0002 });
+    await settle(env, Promise.resolve());
+    expect(env.spoken.some((line) => line.includes('person at a desk'))).toBe(false);
+    await env.feed(frame({ signature: flat(0.9) }), 10_000);
+    expect(env.look.describe).toHaveBeenCalledTimes(2);
+    expect(env.spoken).toContain('I see a desk with a red mug in the middle.');
+  });
+
+  it('never looks by itself before descriptions are allowed, or after they were declined', async () => {
+    const asking = setup({ consent: null });
+    void asking.controller.start();
+    await settle(asking, Promise.resolve());
+    await asking.feed(frame(), 3000);
+    expect(asking.controller.snapshot.phase).toBe('consent');
+    expect(asking.look.describe).not.toHaveBeenCalled();
+    const declined = setup({ consent: 'no' });
+    await settle(declined, declined.controller.start());
+    await declined.feed(frame(), 3000);
+    expect(declined.look.describe).not.toHaveBeenCalled();
+  });
+
+  it('drops the first look silently if the shutter is tapped or the camera is left first, and says nothing when it fails', async () => {
+    for (const before of ['shutter', 'close', 'fail'] as const) {
+      const env = setup();
+      let answer: (value: Awaited<ReturnType<LookClient['describe']>>) => void = () => undefined;
+      env.look.describe.mockImplementationOnce(() => (before === 'fail' ? Promise.resolve(null) : new Promise((resolve) => (answer = resolve))));
+      await settle(env, env.controller.start());
+      await env.feed(frame(), 1500);
+      expect(env.look.describe).toHaveBeenCalledWith('base64-frame', 'view');
+      if (before === 'shutter') void env.controller.shutter();
+      if (before === 'close') env.controller.close();
+      answer({ description: 'A person at a desk.', altText: '', visibleText: [], latencyMs: 900, costUsd: 0.0002 });
+      await settle(env, Promise.resolve());
+      expect(env.spoken.some((line) => line.startsWith('I see'))).toBe(false);
+      expect(env.spoken).not.toContain(messages.noDescription);
+    }
   });
 
   it('describes when asked, whatever the gate says', async () => {

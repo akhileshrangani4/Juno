@@ -12,6 +12,7 @@ import { colors, type } from '@/theme';
 
 import { cameraActions, cameraHalves, cameraHint, type CameraActionName } from './actions';
 import { CameraController, type FrameSource, type Phase } from './CameraController';
+import { ConsentButtons } from './ConsentButtons';
 import { DEV_FRAME_MS, devFramesEnabled, loadDevFrames, type DevFrame } from './devFrames';
 import { cacheFileStore } from './cacheFileStore';
 import { cameraFeedback, consentStore, mediaLibrary, permissions } from './device';
@@ -281,6 +282,7 @@ export function CameraScreen({ start }: { start: 'camera' | 'library' }) {
           {halves ? `▼ ${capitalized(halves.bottom)}` : ' '}
         </Text>
       </GestureSurface>
+      {state.phase === 'consent' ? <ConsentButtons onAnswer={(answer) => controller.answerConsent(answer)} /> : null}
     </SafeAreaView>
   );
 }

@@ -51,6 +51,8 @@ export type CameraTools = {
 };
 
 export type AgentDeps = {
+  // Whether the agent wakes by itself when Juno opens (wakeOnOpen.ts), switched by voice.
+  wakeOnOpen?: { set(on: boolean): void };
   provider: SocialProvider;
   camera?: CameraTools;
   account(): SocialAccount | null;
@@ -97,7 +99,7 @@ export const REPLIES_WAIT_MS = 2500;
 // How long a tool called right after a read-back waits for the user's words when it arrives before their transcript.
 export const TRANSCRIPT_WAIT_MS = 1500;
 // Tools that neither wait on the network nor touch the undo history, so they still run while a slow call finishes.
-const FREE_WHILE_SLOW = new Set<string>(['read_post', 'go_to_post', 'change_narration', 'gesture_help', 'open_sign_in', 'end_conversation']);
+const FREE_WHILE_SLOW = new Set<string>(['read_post', 'go_to_post', 'change_narration', 'gesture_help', 'stay_asleep_on_open', 'wake_on_open', 'open_sign_in', 'end_conversation']);
 
 const UNDO_WORDS = /\b(undo|stop|cancel|wait|don'?t|no)\b/i;
 
@@ -776,6 +778,12 @@ export function createToolHandlers(deps: AgentDeps) {
               : { respond: true, result: 'NO_REPLIES: Nobody has replied to this post yet. Tell the user.' },
           { respond: true, result: "LOADING: The replies are still loading. Tell the user in a few words you're fetching them. The app hands them to you when they arrive." },
         );
+      }
+      case 'stay_asleep_on_open':
+      case 'wake_on_open': {
+        const on = tool === 'wake_on_open';
+        deps.wakeOnOpen?.set(on);
+        return { speak: on ? agentMessages.wakeOnOpenOn : agentMessages.wakeOnOpenOff, respond: false, result: 'WAKE_ON_OPEN_SET: The app told the user. Say nothing.' };
       }
       case 'gesture_help':
         return { speak: messages.gestures, respond: false, result: "GESTURES_READ: The app read the gestures aloud. Don't repeat them." };
