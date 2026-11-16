@@ -1,5 +1,5 @@
 import { router, useIsFocused } from 'expo-router';
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { Platform, StyleSheet, Text, View, type AccessibilityActionEvent, type AccessibilityRole } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
@@ -8,6 +8,7 @@ import { actionHistory } from '@/actions/history';
 import type { AgentStatus, EndReason } from '@/agent/AgentSession';
 import { onDevWake } from '@/agent/devWake';
 import { useVoiceAgent } from '@/agent/useVoiceAgent';
+import { launchWake, wakeOnOpen } from '@/agent/wakeOnOpen';
 import { cameraMessages } from '@/camera/cameraMessages';
 import { openCamera, registerCameraHost, setPendingPhoto } from '@/camera/host';
 import { registerCommentsController } from '@/comments/commentsControl';
@@ -86,6 +87,8 @@ export function MainScreen() {
     if (reason === 'signIn') router.push('/sign-in');
   };
   const agent = useVoiceAgent({ active: mode === 'agent', post, feed: { state, go }, narrator, onExit: onAgentExit });
+  const wakeSetting = useSyncExternalStore(wakeOnOpen.subscribe, wakeOnOpen.get);
+  const signedIn = !!account;
   const agentStatus = agent.status;
 
   useEffect(() => onDevWake(() => changeMode('agent')), []);
@@ -119,8 +122,17 @@ export function MainScreen() {
       narrator.speak(`${prefix.current} ${text}`.trim());
       prefix.current = '';
     };
+    const launch = launchWake.decide({ setting: wakeSetting, signedIn, onFeed: !thread, feedReady: !!post, awake: mode === 'agent' });
     if (mode === 'agent') narrator.stop();
-    else if (thread?.status === 'loading') loadingTimer = setTimeout(() => say(commentMessages.loading), LOADING_ANNOUNCE_MS);
+    else if (launch === 'wait') return;
+    else if (launch === 'wake') {
+      // The launch wake goes the way a clockwise circle does, and the first post waits until the agent sleeps.
+      queueMicrotask(() => {
+        haptic('agentAwake');
+        modeNow.current = 'agent';
+        setMode('agent');
+      });
+    } else if (thread?.status === 'loading') loadingTimer = setTimeout(() => say(commentMessages.loading), LOADING_ANNOUNCE_MS);
     else if (thread) {
       const entry = entering.current ? commentsEntry(thread.replies.length) : null;
       entering.current = false;
@@ -142,7 +154,7 @@ export function MainScreen() {
       postNarrator.stop();
       narrator.stop();
     };
-  }, [mode, post, status, narrator, postNarrator, thread, focused]);
+  }, [mode, post, status, narrator, postNarrator, thread, focused, wakeSetting, signedIn]);
 
   useEffect(() => postNarrator.onScript(setNarration), [postNarrator]);
   useEffect(() => postNarrator.prefetch(state.posts.slice(state.index + 1)), [postNarrator, state.posts, state.index]);

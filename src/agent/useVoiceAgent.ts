@@ -24,6 +24,7 @@ import { narrationSettings } from './narrationSettings';
 import { describeAccount, describeFocus, describeMemories, describeSettings } from './postContext';
 import { createToolHandlers } from './toolHandlers';
 import { createVoiceCall } from './vapiCall';
+import { wakeOnOpen } from './wakeOnOpen';
 
 const MEMORY_TIMEOUT_MS = 2500;
 
@@ -91,6 +92,7 @@ export function useVoiceAgent({
     const memory = createConvexMemory(access, secureStore);
     const memoryOffer = memory ? createMemoryOffer(secureStore, memory, () => latest.current.account) : null;
     const handlers = createToolHandlers({
+      wakeOnOpen,
       provider,
       account: () => latest.current.account,
       focused: () => latest.current.post,
