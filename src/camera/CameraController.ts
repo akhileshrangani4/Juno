@@ -107,6 +107,10 @@ const devLog = process.env.EXPO_PUBLIC_DEV_FRAME_SOURCE === '1';
 // With no frame for this long while aiming, the camera has stopped (a phone call, Siri, an error): the ticks stop.
 export const FRAME_STALL_MS = 1500;
 
+// After the iOS permission alert closes, speech started at once can be cut off as the app becomes active again (and
+// VoiceOver re-reads the screen), so the next line waits this long.
+export const AFTER_PROMPT_MS = 1000;
+
 type Review = { photo: Photo; description: string | null; altText: string; pending: Promise<void> | null };
 
 type Question = { subject: string; until: number; lastSaid: string | null };
@@ -524,6 +528,7 @@ export class CameraController {
       this.set({ phase: 'permission' });
       await this.deps.voice.speak(messages.cameraWhy, 'status');
       status = (await this.deps.permissions.requestCamera()) ? 'granted' : 'denied';
+      await new Promise<void>((resolve) => this.deps.schedule(resolve, AFTER_PROMPT_MS));
     }
     if (status === 'granted') return true;
     const detail = status === 'unavailable' ? messages.cameraUnavailable : messages.cameraDenied;

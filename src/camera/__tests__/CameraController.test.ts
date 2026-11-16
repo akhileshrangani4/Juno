@@ -4,7 +4,7 @@ import { createElement } from 'react';
 import type { Narrator } from '@/narration/Narrator';
 import { createMemoryStore } from '@/storage/keyValueStore';
 
-import { CameraController, messages, type ControllerDeps, type Consent, type FrameSource, type KeptPhoto } from '../CameraController';
+import { AFTER_PROMPT_MS, CameraController, messages, type ControllerDeps, type Consent, type FrameSource, type KeptPhoto } from '../CameraController';
 import { CONSENT_ARM_MS, ConsentButtons } from '../ConsentButtons';
 import type { Analysis, Box } from '../guidance';
 import { DescriptionStore, LibraryWalk, type LibrarySource } from '../library';
@@ -146,6 +146,25 @@ describe('entering the camera', () => {
     expect(env.order.indexOf(`say: ${messages.cameraWhy}`)).toBeLessThan(env.order.indexOf('camera prompt'));
     expect(env.spoken).toContain(messages.cameraDenied);
     expect(env.controller.snapshot.phase).toBe('unavailable');
+  });
+
+  it('on the first run, asks about descriptions only after the iOS camera alert has closed, so the question is heard', async () => {
+    const env = setup({ camera: 'undetermined', consent: null });
+    let grant: (granted: boolean) => void = () => undefined;
+    (env.deps.permissions.requestCamera as jest.Mock).mockImplementation(() => new Promise<boolean>((resolve) => (grant = resolve)));
+    const started = env.controller.start();
+    await settle(env, Promise.resolve());
+    expect(env.controller.snapshot.phase).toBe('permission');
+    expect(env.spoken).not.toContain(messages.consent);
+    grant(true);
+    await env.advance(AFTER_PROMPT_MS - 100);
+    expect(env.spoken).not.toContain(messages.consent);
+    await env.advance(200);
+    expect(env.controller.snapshot.phase).toBe('consent');
+    expect(env.spoken.at(-1)).toBe(messages.consent);
+    env.controller.answerConsent('yes');
+    await settle(env, started);
+    expect(env.controller.snapshot.phase).toBe('aiming');
   });
 
   it('asks once before any picture leaves the phone, and keeps the answer', async () => {
