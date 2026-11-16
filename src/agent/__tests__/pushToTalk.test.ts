@@ -203,7 +203,7 @@ describe('push to talk', () => {
     expect(w.muted()).toBe(false);
     expect(w.session.draftInPlay).toBe(true);
     w.userSays('undo');
-    await w.scheduler.advance(OPEN_POLL_MS);
+    await w.scheduler.advance(RELEASE_TAIL_MS);
     expect(w.session.draftInPlay).toBe(false);
     expect(w.muted()).toBe(true);
   });
