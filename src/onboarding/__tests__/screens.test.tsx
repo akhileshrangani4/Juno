@@ -29,10 +29,7 @@ jest.mock('@/storage/keyValueStore', () => {
   return { ...actual, secureStore: actual.createMemoryStore() };
 });
 const mockWindow = { fontScale: 1 };
-jest.mock('react-native/Libraries/Utilities/useWindowDimensions', () => ({
-  __esModule: true,
-  default: () => ({ width: 393, height: 852, scale: 3, fontScale: mockWindow.fontScale }),
-}));
+jest.mock('@/accessibility/fontScale', () => ({ useFontScale: () => mockWindow.fontScale }));
 jest.mock('react-native-gesture-handler', () => ({ ScrollView: jest.requireActual('react-native').ScrollView }));
 jest.mock('@/gestures/GestureSurface', () => ({
   useStrokeGesture: () => null,
@@ -112,7 +109,6 @@ describe('PracticeScreen', () => {
     const text = screen.getByText(/^Let's practice 4 gestures/);
     expect(text.props.numberOfLines).toBeUndefined();
     expect(text.props.adjustsFontSizeToFit).toBeUndefined();
-    expect(text.props.allowFontScaling).not.toBe(false);
   });
 
   it('stops its own speech on the way out, and not on unmount, so the screen it returns to can announce itself', async () => {
@@ -144,7 +140,11 @@ describe('PracticeScreen', () => {
     const title = screen.getByText(`${GESTURES[0].symbol} ${GESTURES[0].title}`);
     expect(title.props.adjustsFontSizeToFit).toBeUndefined();
     expect(title.props.numberOfLines).toBeUndefined();
-    expect(title.props.allowFontScaling).not.toBe(false);
+    const titleSize = StyleSheet.flatten(title.props.style).fontSize;
+    mockWindow.fontScale = 3.1;
+    await render(<PracticeScreen onDone={jest.fn()} />);
+    expect(StyleSheet.flatten(screen.getAllByText(`${GESTURES[0].symbol} ${GESTURES[0].title}`).at(-1)!.props.style).fontSize).toBeCloseTo(titleSize * 1.6);
+    mockWindow.fontScale = 1;
     for (const id of ['practice-step', 'practice-caption']) {
       const half = screen.getByTestId(id);
       expect(half.type).toBe('RCTScrollView');

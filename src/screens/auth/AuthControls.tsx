@@ -1,7 +1,8 @@
 import { useEffect, useRef, type ComponentRef, type ReactNode } from 'react';
-import { AccessibilityInfo, Pressable, ScrollView, StyleSheet, Text, TextInput, type TextInputProps } from 'react-native';
+import { AccessibilityInfo, Pressable, ScrollView, StyleSheet, type TextInputProps } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
+import { Text, TextInput } from '@/accessibility/ScaledText';
 import { useScreenReader } from '@/accessibility/useScreenReader';
 import type { Narrator } from '@/narration/Narrator';
 import { useNarrator } from '@/narration/useNarrator';

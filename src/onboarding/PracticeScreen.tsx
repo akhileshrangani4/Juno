@@ -1,8 +1,10 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
-import { Platform, Pressable, StyleSheet, Text, useWindowDimensions, View, type AccessibilityActionEvent, type AccessibilityRole } from 'react-native';
+import { Platform, Pressable, StyleSheet, View, type AccessibilityActionEvent, type AccessibilityRole } from 'react-native';
 import { ScrollView } from 'react-native-gesture-handler';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
+import { useFontScale } from '@/accessibility/fontScale';
+import { Text } from '@/accessibility/ScaledText';
 import { useScreenReader } from '@/accessibility/useScreenReader';
 import { haptic } from '@/feedback/haptics';
 import { GestureSurface, useStrokeGesture } from '@/gestures/GestureSurface';
@@ -20,7 +22,7 @@ const STACK_BUTTONS_AT_FONT_SCALE = 1.2;
 export function PracticeScreen({ onDone }: { onDone(): void }) {
   const narrator = useNarrator();
   const screenReader = useScreenReader();
-  const stacked = useWindowDimensions().fontScale >= STACK_BUTTONS_AT_FONT_SCALE;
+  const stacked = useFontScale() >= STACK_BUTTONS_AT_FONT_SCALE;
   const [practice, setPractice] = useState(() => startPractice(Date.now()));
   const latest = useRef(practice);
 

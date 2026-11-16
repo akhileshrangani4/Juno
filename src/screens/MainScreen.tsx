@@ -1,8 +1,9 @@
 import { router, useIsFocused } from 'expo-router';
 import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
-import { Platform, StyleSheet, Text, View, type AccessibilityActionEvent, type AccessibilityRole } from 'react-native';
+import { Platform, StyleSheet, View, type AccessibilityActionEvent, type AccessibilityRole } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
+import { Text } from '@/accessibility/ScaledText';
 import { useScreenReader } from '@/accessibility/useScreenReader';
 import { actionHistory } from '@/actions/history';
 import type { AgentStatus, EndReason } from '@/agent/AgentSession';

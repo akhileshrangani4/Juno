@@ -1,7 +1,8 @@
 import * as Speech from 'expo-speech';
 import { useEffect } from 'react';
-import { AccessibilityInfo, StyleSheet, Text, View } from 'react-native';
+import { AccessibilityInfo, StyleSheet, View } from 'react-native';
 
+import { Text } from '@/accessibility/ScaledText';
 import { colors, type } from '@/theme';
 
 const ANNOUNCE_AFTER_MS = 700;

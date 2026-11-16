@@ -1,7 +1,8 @@
 import { Image } from 'expo-image';
-import { StyleSheet, Text, View } from 'react-native';
+import { StyleSheet, View } from 'react-native';
 import { ScrollView } from 'react-native-gesture-handler';
 
+import { Text } from '@/accessibility/ScaledText';
 import { useScreenReader } from '@/accessibility/useScreenReader';
 import { useStrokeGesture } from '@/gestures/GestureSurface';
 import { authorName, formatAge } from '@/narration/buildNarration';
