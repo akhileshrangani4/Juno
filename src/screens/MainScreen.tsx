@@ -1,5 +1,5 @@
-import { router } from 'expo-router';
-import { useEffect, useRef, useState } from 'react';
+import { router, useIsFocused } from 'expo-router';
+import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { Platform, StyleSheet, View, type AccessibilityActionEvent, type AccessibilityRole } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
@@ -9,6 +9,9 @@ import { actionHistory } from '@/actions/history';
 import type { AgentStatus, EndReason } from '@/agent/AgentSession';
 import { onDevWake } from '@/agent/devWake';
 import { useVoiceAgent } from '@/agent/useVoiceAgent';
+import { launchWake, wakeOnOpen } from '@/agent/wakeOnOpen';
+import { cameraMessages } from '@/camera/cameraMessages';
+import { openCamera, registerCameraHost, setPendingPhoto } from '@/camera/host';
 import { registerCommentsController } from '@/comments/commentsControl';
 import { useComments } from '@/comments/useComments';
 import { haptic } from '@/feedback/haptics';
@@ -65,6 +68,9 @@ export function MainScreen() {
   const [allowStrokeCue] = useState(() => createRateLimiter(STROKE_CUE_INTERVAL_MS));
   const [strokeCue, setStrokeCue] = useState(false);
   const strokeCueTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
+  const focused = useIsFocused();
+  // True while the camera is open over the feed: the feed says nothing behind it.
+  const covered = useRef(false);
   useLikeLedger();
 
   useEffect(() => () => clearTimeout(strokeCueTimer.current), []);
@@ -76,11 +82,14 @@ export function MainScreen() {
   const takeHeld = () => heldForAgent.current.splice(0).join(' ');
 
   const onAgentExit = (reason: EndReason, message: string) => {
-    prefix.current = [message, takeHeld()].filter(Boolean).join(' ');
+    if (covered.current) narrator.speak([message, takeHeld()].filter(Boolean).join(' '));
+    else prefix.current = [message, takeHeld()].filter(Boolean).join(' ');
     changeMode('scroll');
     if (reason === 'signIn') router.push('/sign-in');
   };
   const agent = useVoiceAgent({ active: mode === 'agent', post, feed: { state, go }, narrator, onExit: onAgentExit });
+  const wakeSetting = useSyncExternalStore(wakeOnOpen.subscribe, wakeOnOpen.get);
+  const signedIn = !!account;
   const agentStatus = agent.status;
 
   useEffect(() => onDevWake(() => changeMode('agent')), []);
@@ -102,6 +111,7 @@ export function MainScreen() {
   }, []);
 
   useEffect(() => {
+    if (!focused || covered.current) return;
     let cancelled = false;
     let loadingTimer: ReturnType<typeof setTimeout> | undefined;
     const show = (text: string) => {
@@ -113,8 +123,17 @@ export function MainScreen() {
       narrator.speak(`${prefix.current} ${text}`.trim());
       prefix.current = '';
     };
+    const launch = launchWake.decide({ setting: wakeSetting, signedIn, onFeed: !thread, feedReady: !!post, awake: mode === 'agent' });
     if (mode === 'agent') narrator.stop();
-    else if (thread?.status === 'loading') loadingTimer = setTimeout(() => say(commentMessages.loading), LOADING_ANNOUNCE_MS);
+    else if (launch === 'wait') return;
+    else if (launch === 'wake') {
+      // The launch wake goes the way a clockwise circle does, and the first post waits until the agent sleeps.
+      queueMicrotask(() => {
+        haptic('agentAwake');
+        modeNow.current = 'agent';
+        setMode('agent');
+      });
+    } else if (thread?.status === 'loading') loadingTimer = setTimeout(() => say(commentMessages.loading), LOADING_ANNOUNCE_MS);
     else if (thread) {
       const entry = entering.current ? commentsEntry(thread.replies.length) : null;
       entering.current = false;
@@ -132,10 +151,11 @@ export function MainScreen() {
     return () => {
       cancelled = true;
       clearTimeout(loadingTimer);
+      if (covered.current) return;
       postNarrator.stop();
       narrator.stop();
     };
-  }, [mode, post, status, narrator, postNarrator, thread]);
+  }, [mode, post, status, narrator, postNarrator, thread, focused, wakeSetting, signedIn]);
 
   useEffect(() => postNarrator.onScript(setNarration), [postNarrator]);
   useEffect(() => postNarrator.prefetch(state.posts.slice(state.index + 1)), [postNarrator, state.posts, state.index]);
@@ -198,6 +218,51 @@ export function MainScreen() {
     else comments.close();
     changeMode(next);
   };
+
+  const agentLive = agentStatus === 'listening';
+  const latest = useRef({ agentLive, agent, switchMode, mode });
+  useEffect(() => {
+    latest.current = { agentLive, agent, switchMode, mode };
+  });
+
+  // The camera opens over the feed as its own screen. Leaving it, the feed reads the same post again; keeping a
+  // photo hands it to the voice agent's publishing flow, waking the agent if it is asleep.
+  useEffect(
+    () =>
+      registerCameraHost({
+        cover: () => {
+          covered.current = true;
+          postNarrator.stop();
+        },
+        agentLive: () => latest.current.agentLive,
+        say: (text) => latest.current.agentLive && latest.current.agent.say(text),
+        wakeAgent: () => latest.current.switchMode('agent'),
+        sleepAgent: () => latest.current.switchMode('scroll'),
+        keep: (photo) => {
+          setPendingPhoto(photo);
+          covered.current = false;
+          router.back();
+          const { agentLive: live, agent: current, switchMode: switchTo, mode: currentMode } = latest.current;
+          if (live) return current.notify(cameraMessages.photoReadyForModel, cameraMessages.photoReady);
+          prefix.current = '';
+          if (currentMode !== 'agent') switchTo('agent');
+        },
+        closed: () => {
+          covered.current = false;
+          const { agentLive: live, agent: current } = latest.current;
+          if (live) current.say(cameraMessages.backToFeed);
+          else prefix.current = cameraMessages.backToFeed;
+          router.back();
+        },
+        left: () => {
+          covered.current = false;
+          const { agentLive: live, agent: current } = latest.current;
+          if (live) current.say(cameraMessages.backToFeed);
+          else prefix.current = cameraMessages.backToFeed;
+        },
+      }),
+    [postNarrator],
+  );
 
   const target = thread ? reply : post;
   const liked = target ? !!likeUriOf(target) : false;
@@ -281,7 +346,7 @@ export function MainScreen() {
       case 'down':
         if (thread) return closeComments();
         haptic('camera');
-        return confirm(commentMessages.camera);
+        return void openCamera();
     }
   };
 
@@ -325,6 +390,8 @@ export function MainScreen() {
         return tell(messages.gestures);
       case 'account':
         return mode === 'scroll' ? router.push('/sign-in') : onTapBottom();
+      case 'camera':
+        return void openCamera();
     }
     if (isNarrationAction(nativeEvent.actionName)) {
       const message = applyNarrationAction(nativeEvent.actionName, screenReader);

@@ -1,40 +1,25 @@
 import 'react-native-get-random-values';
 
+import Daily from '@daily-co/react-native-daily-js';
 import Vapi from '@vapi-ai/react-native';
 
-import type { CallListener, VoiceCall } from './voiceCall';
+import { voiceCalls, type CallObject } from './vapiLifecycle';
 
-export function createVoiceCall(publicKey: string): VoiceCall {
-  const vapi = new Vapi(publicKey);
-  let listener: CallListener | null = null;
-  vapi.on('message', (message) => listener?.onMessage(message));
-  vapi.on('call-end', () => listener?.onEnd());
-  vapi.on('error', (error) => listener?.onError(error));
-
-  return {
-    start: (assistant, next) =>
-      new Promise<void>((resolve, reject) => {
-        listener = next;
-        const joined = () => {
-          vapi.removeListener('call-start', joined);
-          resolve();
-        };
-        vapi.on('call-start', joined);
-        vapi.start(assistant as Parameters<Vapi['start']>[0]).then(
-          (call) => {
-            if (call) return;
-            vapi.removeListener('call-start', joined);
-            reject(new Error('Vapi did not start the call'));
-          },
-          (error: unknown) => {
-            vapi.removeListener('call-start', joined);
-            reject(error);
-          },
-        );
-      }),
-    stop: () => vapi.stop(),
-    say: (text, interrupt) => vapi.say(text, false, true, interrupt),
-    addMessage: (content, triggerResponse) =>
-      vapi.send({ type: 'add-message', message: { role: 'system', content }, triggerResponseEnabled: triggerResponse } as Parameters<Vapi['send']>[0]),
-  };
-}
+export const createVoiceCall = voiceCalls({
+  newSdk: (publicKey, events) => {
+    const vapi = new Vapi(publicKey);
+    vapi.on('message', events.message);
+    vapi.on('call-end', events.end);
+    vapi.on('error', events.error);
+    vapi.on('call-start', events.joined);
+    return {
+      start: (assistant) => vapi.start(assistant as Parameters<Vapi['start']>[0]),
+      stop: () => vapi.stop(),
+      say: (text, interrupt) => vapi.say(text, false, true, interrupt),
+      send: (message) => vapi.send(message as Parameters<Vapi['send']>[0]),
+      callObject: () => (vapi as unknown as { call: CallObject | null }).call,
+    };
+  },
+  existingCallObject: () => Daily.getCallInstance() ?? null,
+  wait: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+});

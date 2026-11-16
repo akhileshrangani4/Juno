@@ -123,7 +123,6 @@ export class AgentSession {
     } catch (error) {
       if (this.finished) return;
       deps.log('connect failed', { error: error instanceof Error ? error.message : String(error) });
-      deps.call.stop();
       return this.finish('failed');
     }
     this.abandonConnect = null;
@@ -135,8 +134,6 @@ export class AgentSession {
   }
 
   stop(reason: EndReason = 'user'): void {
-    if (this.finished) return;
-    this.deps.call?.stop();
     this.finish(reason);
   }
 
@@ -282,6 +279,8 @@ export class AgentSession {
     if (this.finished) return;
     this.finished = true;
     this.live = false;
+    // Leaving at any point, even mid-connect, tears the call down so the next wake starts cleanly.
+    this.deps.call?.stop();
     this.abandonConnect?.();
     this.abandonConnect = null;
     this.countdownArmed?.();

@@ -3,6 +3,7 @@ import { APP_NAME } from '@/appName';
 // Everything the app itself says around a call, in one place.
 export const agentMessages = {
   connecting: 'Waking the agent.',
+  photoReplaced: 'You kept a new photo, so I threw away the earlier draft. Nothing was posted. What should the new post say?',
   micExplain:
     'To talk with the agent, the app needs your microphone. It listens only while the agent is awake. Your iPhone will now ask for permission. Choose Allow.',
   micDenied:
@@ -10,6 +11,8 @@ export const agentMessages = {
   couldNotConnect: "I couldn't connect. Check your internet and try again.",
   notConfigured: "The voice agent isn't set up in this version of the app. Back to scrolling.",
   asleep: 'Agent is asleep. Back to scrolling.',
+  wakeOnOpenOn: "Okay. I'll wake up whenever you open Juno.",
+  wakeOnOpenOff: "Okay. I'll stay asleep when you open Juno. Draw a clockwise circle to wake me.",
   silence: 'The agent went to sleep after 30 seconds of quiet. Back to scrolling.',
   maxDuration: 'The conversation reached its 10 minute limit, so the agent went to sleep. Back to scrolling.',
   dropped: 'The agent disconnected. Back to scrolling.',

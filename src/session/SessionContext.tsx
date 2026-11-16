@@ -1,6 +1,7 @@
 import { createContext, use, useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 
 import { recordUser } from '@/backend/convex';
+import { forgetLibraryDescriptions } from '@/camera/cacheFileStore';
 import { createSocialProvider, type RestoreResult, type SignInResult, type SocialAccount, type SocialProvider } from '@/social';
 import { secureStore } from '@/storage/keyValueStore';
 
@@ -129,7 +130,7 @@ export function SessionProvider({ children, provider: injected }: { children: Re
       return account;
     },
     signOut: async () => {
-      await signOut(provider, secureStore);
+      await signOut(provider, secureStore, forgetLibraryDescriptions);
       clearViewerState();
       setState((current) => ({ ...current, account: null, expiredAccount: null, guest: false }));
     },

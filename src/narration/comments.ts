@@ -27,7 +27,6 @@ export const commentMessages = {
   atEnd: 'That was the last reply. Swipe down to go back.',
   alreadyOpen: 'You are already in the replies. Swipe down to go back.',
   noPost: 'There is no post to open.',
-  camera: 'The camera is coming soon.',
   liked: 'Liked.',
   unliked: 'Like removed.',
   signInToLike: 'You need to sign in to like posts. Draw a clockwise circle, then tap the bottom half for account settings.',
